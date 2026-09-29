@@ -1,0 +1,51 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The hooks run under whatever `python3` the user has, on Linux and macOS.
+        os: [ubuntu-latest]
+        python: ["3.10", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the suite
+        run: python -m pytest tests/ -q -rs | tee pytest.txt; exit ${PIPESTATUS[0]}
+        shell: bash
+
+      # A green run that collected nothing, or silently skipped cases, proves nothing.
+      - name: No empty run, no skips
+        shell: bash
+        run: |
+          summary=$(tail -3 pytest.txt)
+          echo "$summary"
+          if ! printf '%s' "$summary" | grep -Eq '[0-9]+ passed'; then
+            echo "No test passed - the suite collected nothing."
+            exit 1
+          fi
+          if printf '%s' "$summary" | grep -q 'skipped'; then
+            echo "Skipped cases are cases nobody measures:"
+            grep '^SKIPPED' pytest.txt || true
+            exit 1
+          fi

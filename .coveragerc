@@ -1,0 +1,6 @@
+[run]
+source = hooks, tools
+patch = subprocess
+
+[report]
+show_missing = true
