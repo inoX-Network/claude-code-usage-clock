@@ -207,11 +207,11 @@ def test_the_log_fields_with_values_are_named_with_their_length_limit():
     import _hookio
     with open(os.path.join(ROOT, 'hooks', '_hookio.py'), encoding='utf-8') as f:
         valued = set(re.findall(r"'(\w+)': _short_text\(", f.read()))
-    assert valued == {'tool_name', 'agent_id', 'agent_type', 'subagent_type', 'model_in_call'}
+    assert valued == {'tool_name', 'agent_id', 'agent_type', 'permission_mode', 'subagent_type', 'model_in_call'}
     assert _hookio._short_text('x' * 500) == 'x' * 100
     readme = section(readme_text(), '### From shadow to enforce')
     architecture = section(architecture_text(), '## Log')
-    for name in ('agent_type', 'subagent_type', 'model_in_call'):
+    for name in ('agent_type', 'permission_mode', 'subagent_type', 'model_in_call'):
         assert f'`{name}`' in readme and f'`{name}`' in architecture, name
     assert all(f'`{name}`' in architecture for name in valued)
     assert 'at most 100 characters' in flat(readme) and '*names* of the input fields' in flat(readme)

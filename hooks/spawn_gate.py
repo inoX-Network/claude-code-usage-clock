@@ -169,7 +169,7 @@ def main() -> int:
     if decision == 'deny':
         _hookio.emit_deny(EVENT, reason)
     elif decision == 'ask':
-        _hookio.emit_ask(EVENT, reason, 'Spawn gate: the user was asked to approve this start. ' + reason)
+        _hookio.emit_ask(EVENT, reason)
     elif decision == 'warn':
         _hookio.emit_context(EVENT, 'Spawn gate: ' + reason)
     return 0

@@ -198,15 +198,16 @@ def read_log(tmp_path, name='log.jsonl'):
 
 
 def test_log_line_has_keys_and_decision_but_never_values(tmp_path):
-    hook_input = {'tool_name': 'Agent', 'agent_id': 'a-1', 'cwd': '/secret/cwd',
+    hook_input = {'tool_name': 'Agent', 'agent_id': 'a-1', 'cwd': '/secret/cwd', 'permission_mode': 'bypassPermissions',
                   'tool_input': {'prompt': 'SECRET TASK TEXT', 'description': 'x', 'subagent_type': 'worker',
                                  'model': 'haiku'}}
     _hookio.log_decision('spawn_gate', 'shadow', hook_input, 'deny', 'no definition', usage_state='ok')
     (line,) = read_log(tmp_path)
     assert line['decision'] == 'deny' and line['mode'] == 'shadow' and line['hook'] == 'spawn_gate'
     assert line['tool_input_keys'] == ['description', 'model', 'prompt', 'subagent_type']
-    assert line['input_keys'] == ['agent_id', 'cwd', 'tool_input', 'tool_name']
+    assert line['input_keys'] == ['agent_id', 'cwd', 'permission_mode', 'tool_input', 'tool_name']
     assert line['tool_name'] == 'Agent' and line['agent_id'] == 'a-1'
+    assert line['permission_mode'] == 'bypassPermissions'
     assert line['subagent_type'] == 'worker' and line['model_in_call'] == 'haiku' and line['usage_state'] == 'ok'
     raw = (tmp_path / 'log' / 'log.jsonl').read_text(encoding='utf-8')
     assert 'SECRET TASK TEXT' not in raw and '/secret/cwd' not in raw
@@ -214,13 +215,13 @@ def test_log_line_has_keys_and_decision_but_never_values(tmp_path):
 
 
 def test_log_survives_odd_inputs_and_caps_texts(tmp_path):
-    _hookio.log_decision('h', 'enforce', {'tool_input': 'not a dict', 'agent_id': {'x': 1}, 'tool_name': 5},
-                         'allow', 'r' * 1000)
+    _hookio.log_decision('h', 'enforce', {'tool_input': 'not a dict', 'agent_id': {'x': 1}, 'tool_name': 5,
+                                          'permission_mode': ['SECRET']}, 'allow', 'r' * 1000)
     _hookio.log_decision('h', 'enforce', {'tool_input': {'subagent_type': ['SECRET'], 'model': {'k': 'SECRET'}},
                                           'agent_type': 'y' * 500}, 'allow', '')
     first, second = read_log(tmp_path)
     assert len(first['reason']) == 300 and first['tool_input_keys'] == [] and first['agent_id'] is None
-    assert first['tool_name'] is None
+    assert first['tool_name'] is None and first['permission_mode'] is None
     assert second['subagent_type'] is None and second['model_in_call'] is None and len(second['agent_type']) == 100
     assert 'SECRET' not in (tmp_path / 'log' / 'log.jsonl').read_text(encoding='utf-8')
 
