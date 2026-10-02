@@ -122,11 +122,11 @@ def emit_deny(event: str, reason: str) -> None:
                                              'permissionDecisionReason': reason}}, ensure_ascii=False))
 
 
-def emit_ask(event: str, reason: str, context: str) -> None:
-    """Claude Code shows its permission prompt; the reason goes to the user, the context to the model."""
+def emit_ask(event: str, reason: str) -> None:
+    """Claude Code shows its permission prompt with the reason to the user. No additionalContext: the model reads
+    it next to the tool result and took an approved start for a block."""
     print(json.dumps({'hookSpecificOutput': {'hookEventName': event, 'permissionDecision': 'ask',
-                                             'permissionDecisionReason': reason, 'additionalContext': context}},
-                     ensure_ascii=False))
+                                             'permissionDecisionReason': reason}}, ensure_ascii=False))
 
 
 def emit_context(event: str, text: str) -> None:
@@ -184,6 +184,7 @@ def log_decision(hook: str, mode: str, hook_input: dict, decision: str, reason: 
         'decision': decision, 'reason': mask_quoted(reason)[:300],
         'tool_name': _short_text(hook_input.get('tool_name')), 'agent_id': _short_text(hook_input.get('agent_id')),
         'agent_type': _short_text(hook_input.get('agent_type')),
+        'permission_mode': _short_text(hook_input.get('permission_mode')),
         'input_keys': sorted(hook_input.keys()), 'tool_input_keys': sorted(tool_input.keys()),
         'subagent_type': _short_text(tool_input.get('subagent_type')),
         'model_in_call': _short_text(tool_input.get('model')), **extra,

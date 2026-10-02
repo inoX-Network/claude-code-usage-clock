@@ -860,15 +860,16 @@ def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
     env = config(tmp_path, env, thresholds={'week_action': 'ask'})
     out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
     assert out is not None and list(out) == ['hookSpecificOutput']
-    assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason',
-                                              'additionalContext'}
+    # No additionalContext: the model reads it next to the tool result and took an approved start for a block
+    assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason'}
     assert out['hookSpecificOutput']['permissionDecision'] == 'ask'
     assert reason(out) == '7-day window at 85 %: above the weekly threshold. Allow this start?'
-    assert context(out).startswith('Spawn gate: the user was asked to approve this start. 7-day window')
     assert is_deny(run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce'))
     assert is_deny(run(agent('full-def'), env, '--mode=enforce'))                     # no mode in the input
     assert run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow') is None
-    assert [line['decision'] for line in gate_log(tmp_path)] == ['ask', 'deny', 'deny', 'ask']
+    lines = gate_log(tmp_path)
+    assert [line['decision'] for line in lines] == ['ask', 'deny', 'deny', 'ask']
+    assert [line['permission_mode'] for line in lines] == ['default', 'bypassPermissions', None, 'default']
 
 
 def test_the_default_week_action_warns(tmp_path, env):

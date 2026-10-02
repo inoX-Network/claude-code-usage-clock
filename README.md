@@ -164,7 +164,7 @@ your installation (`~/.claude/hooks/usage-clock/config.json`), else the default 
 
 The log (`~/.cache/claude-usage-clock/log.jsonl`) records, per decision: the time, the hook, the decision and
 its mode, and a reason. Values from the input appear only as short strings of at most 100 characters: the tool
-name, the agent id, the agent type (`agent_type`), and of an Agent call the subagent type (`subagent_type`) and
+name, the agent id, the agent type (`agent_type`), the permission mode (`permission_mode`), and of an Agent call the subagent type (`subagent_type`) and
 the model in the call (`model_in_call`). Everything else from the input appears only as the
 *names* of the input fields, never with its values. In the reason every quoted value (between `"…"`, `'…'`,
 `„…“` or backticks) is replaced by `…`, so it says what was wrong, for example

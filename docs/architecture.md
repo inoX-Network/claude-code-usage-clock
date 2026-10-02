@@ -93,7 +93,7 @@ value, not a fixed number.
 
 1. Usage: 5h at or above `start_block_5h` → deny new agents/workflows. Week at or above `start_block_week`
    → warn if `--week-ok-until` is today or later, else `week_action`: `warn`, `deny`, or `ask`
-   (`permissionDecision: "ask"`, reason for the user, `additionalContext` for the model). `ask` only where the
+   (`permissionDecision: "ask"`, reason for the user, no `additionalContext`: the model took an approved start for a block). `ask` only where the
    prompt is shown for sure (`permission_mode` default, acceptEdits, plan); any other or a missing mode denies
    unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.
@@ -151,7 +151,7 @@ arguments must not contain `$`, backticks or `\`.
 
 `<log_dir>/log.jsonl`, rotated to `log.jsonl.1` above 5 MB. One line per decision: UTC time, hook, mode,
 decision, reason (max 300 chars). Values from the input only as short strings, cut to at most 100 characters
-(`_short_text`): `tool_name`, `agent_id`, `agent_type`, `subagent_type` and `model_in_call` (the `model` of an
+(`_short_text`): `tool_name`, `agent_id`, `agent_type`, `permission_mode`, `subagent_type` and `model_in_call` (the `model` of an
 Agent call). Everything else from the input only as field names (`input_keys`, `tool_input_keys`), never its
 values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` carries quoted values masked:
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
