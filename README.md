@@ -114,6 +114,8 @@ find later when something happened. Turn either part off in `config.json` (`disp
   anything the gate cannot check statically counts as a finding.
 - `spawn_rules.model_effort_action` decides what a finding does: `warn` (default) starts the agent and tells the
   model what is missing, `deny` refuses the start, `off` skips the model rule and keeps only the usage part.
+  The level covers the whole model rule: with `warn`, `skill_fork_missing_agent` and `model_override_in_call`
+  set to `deny` also only warn.
   [`docs/agents.md`](docs/agents.md) explains how to give your agents a model and an effort.
 - It fails closed: if the gate itself breaks, starts are denied (in `enforce` mode).
 
