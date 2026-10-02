@@ -11,7 +11,7 @@ overnight run happily spends the whole window. This repo closes that gap with a 
 |---|---|---|---|
 | **Status line** | Shows model, 5h and weekly usage in colour. Several sessions merge into one shared usage file, so every session and every hook sees the same, current numbers. | stable | on |
 | **Usage clock** (`UserPromptSubmit`) | Adds one line of context to every prompt: usage, reset times, and the local date and time. Both parts switch independently. | stable | on |
-| **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and requires every agent to have a determinable model and effort. | available | log only |
+| **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
 
 "Log only" (`shadow` mode) means the gates decide and write their decision to a log, but block nothing. Run
@@ -107,12 +107,16 @@ find later when something happened. Turn either part off in `config.json` (`disp
 - 5h usage at or above `start_block_5h` (75 %): no new block until the window resets.
 - Weekly usage at or above `start_block_week` (75 %): no new block unless `--week-ok-until` covers today.
 - Unknown or stale usage: a single agent may start (with a warning), a larger block may not.
-- Every agent needs `model:` and `effort:` in its definition's frontmatter. Built-in types without a definition
-  file, such as `general-purpose`, are therefore denied; define your own agents instead, or list types in
-  `spawn_rules.exceptions`. In workflow scripts each `agent(...)` call needs literal `model` and `effort`
+- Model rule: every agent should have `model:` and `effort:` in its definition's frontmatter. Built-in types
+  without a definition file, such as `general-purpose`, never do; define your own agents instead, or list types
+  in `spawn_rules.exceptions`. In workflow scripts each `agent(...)` call needs literal `model` and `effort`
   options, or an `agentType` with a complete definition; `cond ? 'a' : 'b'` with two literals is fine,
-  anything the gate cannot check statically is denied.
-- Turn the model rule off with `spawn_rules.require_model_and_effort: false` if you only want the usage part.
+  anything the gate cannot check statically counts as a finding.
+- `spawn_rules.model_effort_action` decides what a finding does: `warn` (default) starts the agent and tells the
+  model what is missing, `deny` refuses the start, `off` skips the model rule and keeps only the usage part.
+  The level covers the whole model rule: with `warn`, `skill_fork_missing_agent` and `model_override_in_call`
+  set to `deny` also only warn.
+  [`docs/agents.md`](docs/agents.md) explains how to give your agents a model and an effort.
 - It fails closed: if the gate itself breaks, starts are denied (in `enforce` mode).
 
 **Soft stop** (every tool call of a subagent):
@@ -137,8 +141,12 @@ their checkpoint file is. Unknown usage never blocks here.
 ```sh
 python3 tools/log_summary.py                 # what the gates decided, and what they would have denied
 python3 tools/log_summary.py --since=2026-01-14T00:00
+python3 tools/check_agents.py                # which agents the model rule would report or deny
 python3 tools/install.py --mode enforce      # when the log looks right
 ```
+
+With `model_effort_action: deny`, `enforce` refuses every agent without `model:` and `effort:`, including
+built-in types such as `general-purpose` and `Explore`. Run `tools/check_agents.py` first; it changes nothing.
 
 `log_summary.py` finds the log the way the hooks do: `CCUC_LOG_DIR`, else `log_dir` from the `config.json` of
 your installation (`~/.claude/hooks/usage-clock/config.json`), else the default folder. `--config PATH` takes
@@ -172,10 +180,10 @@ that key and writes one line to the log.
 | `thresholds.calls_without_checkpoint` | `15` | Soft stop checkpoint rhythm. |
 | `thresholds.unknown_usage_max_agents` | `1` | Block size allowed while usage is unknown. |
 | `checkpoint_dir_suffix` | `/agent-checkpoints` | What counts as a checkpoint directory. |
-| `spawn_rules.require_model_and_effort` | `true` | The model rule of the spawn gate; `false` keeps only the usage part. |
+| `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `deny` refuses the start, `off` keeps only the usage part. |
 | `spawn_rules.model_pattern` | `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+` | Which `model` values are accepted, see below. |
 | `spawn_rules.effort_values` | `["low", "medium", "high", "xhigh", "max"]` | Which `effort` values are accepted, see below. |
-| `spawn_rules.suggested_agents` | `[]` | Agents named in the deny message as alternatives. Empty: a general hint. |
+| `spawn_rules.suggested_agents` | `[]` | Agents named in the message of the model rule as alternatives. Empty: a general hint. |
 | `spawn_rules.exceptions` | `["claude-code-guide", "statusline-setup"]` | Agent types that start without the model rule, see below. |
 | `spawn_rules.apply_to_main_session` | `true` | `false`: calls of the main session are not checked at all. |
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
@@ -202,7 +210,7 @@ line to the log.
 
 `spawn_rules.exceptions` lists agent types that start without the model rule. The defaults are
 `claude-code-guide` and `statusline-setup`: they are built-in agent types of Claude Code without a definition
-file you could add `model:` and `effort:` to, so the model rule would deny them every time. Exceptions apply to the Agent tool and to skill forks, not to `agent(...)` calls inside a workflow script.
+file you could add `model:` and `effort:` to, so the model rule would report or deny them every time. Exceptions apply to the Agent tool and to skill forks, not to `agent(...)` calls inside a workflow script.
 Setting `exceptions` replaces the default list, so include the two defaults if you still want them.
 
 ## Recipe: wake up when the window resets
@@ -225,7 +233,7 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
   from the model (for example with a guard hook), it cannot switch the gates off; if you do not, these tools
   are a seatbelt, not a lock.
 - Agent discovery covers project agents (`.claude/agents`) and user agents (`~/.claude/agents`), not plugin or
-  managed agents; those are denied unless listed in `spawn_rules.exceptions`.
+  managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
 
 ## Development

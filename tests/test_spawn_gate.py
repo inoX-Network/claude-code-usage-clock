@@ -32,7 +32,10 @@ def env(tmp_path):
         (agents / name).mkdir(parents=True)
         (agents / name / 'SKILL.md').write_text(f'---\nname: {name}\ndescription: Test\n{head}\n---\nText\n',
                                                 encoding='utf-8')
-    return dict(os.environ, CCUC_AGENT_DIRS=str(agents))
+    # Most tests check the strict level; the default level `warn` has its own tests.
+    strict = tmp_path / 'strict-config.json'
+    strict.write_text(json.dumps({'spawn_rules': {'model_effort_action': 'deny'}}), encoding='utf-8')
+    return dict(os.environ, CCUC_AGENT_DIRS=str(agents), CCUC_CONFIG=str(strict))
 
 
 def usage(tmp_path, five, week=20, age_min=1):
@@ -45,7 +48,8 @@ def usage(tmp_path, five, week=20, age_min=1):
 
 def config(tmp_path, env, spawn_rules=None, **sections):
     path = tmp_path / 'config.json'
-    path.write_text(json.dumps({'spawn_rules': spawn_rules or {}, **sections}), encoding='utf-8')
+    path.write_text(json.dumps({'spawn_rules': {'model_effort_action': 'deny', **(spawn_rules or {})}, **sections}),
+                    encoding='utf-8')
     return dict(env, CCUC_CONFIG=str(path))
 
 
@@ -418,9 +422,56 @@ def test_main_session_can_be_left_out_by_configuration(tmp_path, env):
     assert is_deny(run({'tool_name': 5}, env, '--mode=enforce'))       # broken input still denies
 
 
+def test_the_default_level_warns_instead_of_denying(tmp_path, env):
+    usage(tmp_path, 10)
+    env = dict(env, CCUC_CONFIG=str(tmp_path / 'no-config.json'))
+    out = run(agent(), env, '--mode=enforce')
+    assert is_warning(out) and 'Agent "general-purpose": no definition' in context(out)
+    assert run(agent('full-def'), env, '--mode=enforce') is None
+
+
+def test_warn_level_reports_every_model_finding_and_starts(tmp_path, env):
+    usage(tmp_path, 10)
+    env = setup_skills(tmp_path, env, personal={'bare': 'name: bare\ncontext: fork'})
+    env = config(tmp_path, env, {'model_effort_action': 'warn', 'skill_fork_missing_agent': 'deny',
+                                 'model_override_in_call': 'deny'})
+    out = run(agent('half-def'), env, '--mode=enforce')
+    assert is_warning(out) and 'definition without model: and/or effort:' in context(out)
+    out = run(agent('full-def', model='haiku'), env, '--mode=enforce')
+    assert is_warning(out) and 'not allowed here (model_override_in_call)' in context(out)
+    out = run(workflow("await agent('a', {model: 'opus'})\n", tmp_path), env, '--mode=enforce')
+    assert is_warning(out) and 'agent call 1' in context(out)
+    out = run(skill('bare', tmp_path), env, '--mode=enforce')
+    assert is_warning(out) and 'Skill "bare" (context: fork)' in context(out)
+    assert [line['decision'] for line in gate_log(tmp_path)] == ['warn'] * 4
+
+
+def test_warn_level_keeps_the_usage_thresholds(tmp_path, env):
+    env = config(tmp_path, env, {'model_effort_action': 'warn'})
+    usage(tmp_path, 80)
+    out = run(agent(), env, '--mode=enforce')
+    assert is_deny(out) and 'no new block' in reason(out)
+    usage(tmp_path, 10)
+    script = "await agent('a', {model: 'opus'}); await agent('b', {model: 'opus'})\n"
+    assert is_warning(run(workflow(script, tmp_path), env, '--mode=enforce'))
+    usage(tmp_path, 10, age_min=60)                      # stale: two agents are more than one may start
+    assert is_deny(run(workflow(script, tmp_path), env, '--mode=enforce'))
+
+
+def test_warn_level_counts_an_unanalysable_script_as_unknown(tmp_path, env):
+    env = config(tmp_path, env, {'model_effort_action': 'warn'})
+    script = "const a = agent; await a('x')\n"
+    usage(tmp_path, 10)
+    out = run(workflow(script, tmp_path), env, '--mode=enforce')
+    assert is_warning(out) and 'only agent(...) can be checked' in context(out)
+    usage(tmp_path, 10, age_min=60)                      # an unknown number of agents must not count as zero
+    out = run(workflow(script, tmp_path), env, '--mode=enforce')
+    assert is_deny(out) and 'an unknown number of agents' in reason(out)
+
+
 def test_model_check_off_keeps_the_usage_thresholds(tmp_path, env):
     usage(tmp_path, 10)
-    env = config(tmp_path, env, {'require_model_and_effort': False})
+    env = config(tmp_path, env, {'model_effort_action': 'off'})
     assert run(agent(), env, '--mode=enforce') is None
     assert run(workflow("await agent('a')\n", tmp_path), env, '--mode=enforce') is None
     usage(tmp_path, 80)
@@ -668,7 +719,7 @@ def test_skill_with_arguments_is_recognised_by_the_first_word(tmp_path, env):
 def test_fork_skill_with_model_check_off_counts_without_notes(tmp_path, env):
     usage(tmp_path, 10)
     env = setup_skills(tmp_path, env, personal={'old': 'name: old\ncontext: fork'})
-    env = config(tmp_path, env, {'require_model_and_effort': False})
+    env = config(tmp_path, env, {'model_effort_action': 'off'})
     assert run(skill('old', tmp_path), env, '--mode=enforce') is None
     usage(tmp_path, 80)
     assert is_deny(run(skill('old', tmp_path), env, '--mode=enforce'))
@@ -717,7 +768,7 @@ def test_decide_uses_the_given_clock_and_date(tmp_path, monkeypatch):
         'five_hour': {'used_percentage': 10, 'resets_at': measured.timestamp() + 3600},
         'seven_day': {'used_percentage': 90, 'resets_at': measured.timestamp() + 86400},
         'measured_at': '2026-01-14T10:00:00Z'}), encoding='utf-8')
-    cfg = dict(_config.load(), spawn_rules=dict(_config.DEFAULTS['spawn_rules'], require_model_and_effort=False))
+    cfg = dict(_config.load(), spawn_rules=dict(_config.DEFAULTS['spawn_rules'], model_effort_action='off'))
     now = measured + timedelta(minutes=5)
     assert spawn_gate.decide(agent(), cfg, DAY, DAY, now)[0] == 'warn'
     assert spawn_gate.decide(agent(), cfg, DAY, DAY + timedelta(days=1), now)[0] == 'deny'

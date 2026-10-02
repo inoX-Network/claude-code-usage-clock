@@ -4,7 +4,8 @@
 Applies to spawns of the main session too (no agent_id filter) unless `apply_to_main_session` is off. That is
 intended: otherwise nobody would be slowed down. The main session's other tool calls are never blocked.
 
-Model part fails closed: without a determinable model and effort the start is denied. Every internal error,
+Model part (`model_effort_action`): `deny` fails closed, without a determinable model and effort the start is
+denied; `warn` starts and reports the same finding as a warning; `off` does not judge, it only counts agents. Every internal error,
 including a failed import, also denies via deny JSON with exit 0, because a hook error with exit 1 does NOT
 block. Empty or broken input or a missing tool_name → deny, because the hook is only registered for
 Agent|Workflow|Skill.
@@ -105,7 +106,9 @@ def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today
         if check is None:
             return 'not_responsible', ''
     if not check.allowed:
-        return 'deny', check.reason
+        if rules.model_effort_action == 'deny':
+            return 'deny', check.reason
+        check = Check(True, notes=[check.reason] + check.notes, agent_count=check.agent_count)
     usage = _usage.read_usage(None, now, cfg['thresholds']['max_age_min'])
     action, text = decide_start(usage, check.agent_count, cfg['thresholds'], week_ok_until, today)
     if action == 'deny':

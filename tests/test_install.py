@@ -345,7 +345,8 @@ def test_a_relative_target_becomes_absolute_in_the_commands(tmp_path):
 
 
 def test_the_installed_commands_work_as_written(tmp_path):
-    """Wiring: the commands from settings.json start the copied hooks, the gate denies an unknown agent in enforce."""
+    """Wiring: the commands from settings.json start the copied hooks; with the example config (model_effort_action
+    `warn`) the gate reports an unknown agent in enforce instead of denying it."""
     settings = write_settings(tmp_path)
     assert run('--settings', settings, '--target', tmp_path / 'target', '--mode', 'enforce').returncode == 0
     new = read(settings)
@@ -356,7 +357,8 @@ def test_the_installed_commands_work_as_written(tmp_path):
     payload = {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'nobody-defined-this', 'prompt': 'x'}}
     done = subprocess.run(['/bin/sh', '-c', gate], input=json.dumps(payload), capture_output=True, text=True, timeout=30)
     assert done.returncode == 0
-    assert json.loads(done.stdout)['hookSpecificOutput']['permissionDecision'] == 'deny'
+    output = json.loads(done.stdout)['hookSpecificOutput']
+    assert 'permissionDecision' not in output and 'nobody-defined-this' in output['additionalContext']
 
 
 def test_vanished_hook_files_never_block_except_the_spawn_gate(tmp_path):

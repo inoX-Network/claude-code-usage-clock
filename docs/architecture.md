@@ -17,6 +17,8 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
   log_summary.py          summarises the JSONL log
+  check_agents.py         lists which agent definitions the model rule would report or deny (read only)
+docs/agents.md            how to give agents model and effort, for users and for the model
 tests/                    pytest, synthetic data only
 config.example.json       every key with its default
 ```
@@ -92,11 +94,11 @@ value, not a fixed number.
 1. Usage: 5h at or above `start_block_5h` → deny new agents/workflows. Week at or above `start_block_week`
    → deny unless `--week-ok-until` is today or later. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.
-2. Model rules (if `require_model_and_effort`): the agent type must resolve to a definition with `model:`
+2. Model rules (unless `model_effort_action` is `off`): the agent type must resolve to a definition with `model:`
    and `effort:` in its frontmatter (project `.claude/agents` before user `~/.claude/agents`, matched by the
    frontmatter `name`). Workflow scripts: every `agent(...)` call needs literal `model` and `effort` options
    or an `agentType` with a complete definition; a value may be `'x'` or `cond ? 'x' : 'y'` with two literals.
-   Anything not statically checkable is denied. Skill forks (`context: fork`) are checked like agents;
+   Anything not statically checkable is a finding, and its agents count as unknown. Skill forks (`context: fork`) are checked like agents;
    a missing agent definition only warns (`skill_fork_missing_agent`).
    The frontmatter is read without a YAML library, as far as Claude Code reads it: up to the first `---`
    after the opening line, even in the middle of a value (`description: a---b` ends it after `a`). Lines
@@ -105,21 +107,24 @@ value, not a fixed number.
    frontmatter that ends while a quote or a list is open is not determinable (deny). For the fork check of a
    skill the part up to the first line that starts with `---` counts, so `context: fork` behind an inner `---`
    is still treated as a fork (checked rather than missed).
+   `_spawn_check.py` only judges; `spawn_gate.py` applies `model_effort_action`: `deny` refuses the start with
+   the finding, `warn` (default) starts and passes the same finding to the model as a warning. The usage part
+   then still counts the agents, an unanalysable script as an unknown number.
 3. `exceptions` start without the model check (Agent tool and Skill forks), with a short note. They do not
    apply to `agent(...)` calls inside workflow scripts.
 
-Config switches (defaults reproduce the behaviour above):
+Config switches:
 
 | Key | Effect |
 |---|---|
-| `require_model_and_effort: false` | No model check. Agent and Skill fork count as one agent; workflow scripts are only counted for the usage part. |
+| `model_effort_action` | `warn` (default): findings of the model rule are warnings. `deny`: they refuse the start. `off`: no model check; Agent and Skill fork count as one agent, workflow scripts are only counted for the usage part. |
 | `apply_to_main_session: false` | Calls without `agent_id` are not checked at all (neither model nor usage) and not logged. |
 | `model_override_in_call` | `model` in an Agent call overrides the frontmatter: `allow`, `warn` (default) or `deny`. |
 | `skill_fork_missing_agent` | Fork without a complete agent definition: `warn` (default) or `deny`. |
-| `suggested_agents` | Only used in the deny message, as agents to use instead. Empty: a general hint. |
+| `suggested_agents` | Only used in the message of the model rule, as agents to use instead. Empty: a general hint. |
 | `model_pattern` | Regular expression, matched against the whole value (`fullmatch`), for the literal `model` of `agent(...)` calls in workflow scripts. Default `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+`. Agent definitions only need a non-empty `model:`. Invalid or empty: default, one log line. |
 | `effort_values` | Accepted `effort` values, for agent definitions (frontmatter) and workflow calls. Default `low`, `medium`, `high`, `xhigh`, `max`. Empty: default, one log line. |
-| `exceptions` | Agent types without the model check. Default `claude-code-guide`, `statusline-setup`: built-in types without a definition file, which the model rule would deny every time. Setting the key replaces the default list. |
+| `exceptions` | Agent types without the model check. Default `claude-code-guide`, `statusline-setup`: built-in types without a definition file, which the model rule would report or deny every time. Setting the key replaces the default list. |
 
 ### soft_stop.py
 
