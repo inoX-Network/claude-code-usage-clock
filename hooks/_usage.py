@@ -10,6 +10,7 @@ seeing "unknown". The merge rules below prevent that:
 - `measured_at` is renewed only if this session contributed a valid five-hour block that did not lose.
   An idle session can therefore never make old data look fresh.
 - Writing happens under an exclusive flock, atomically via a temporary file, and only when something changed.
+  Lock and temporary file are opened without following links, so a planted link never redirects the write.
 
 File format: {"five_hour": {"used_percentage", "resets_at"}, "seven_day": {...}, "measured_at": "<UTC ISO>"}.
 A file in any other format counts as empty.
@@ -25,6 +26,7 @@ from datetime import datetime, timezone
 
 import _config
 
+NO_FOLLOW = getattr(os, 'O_NOFOLLOW', 0)
 SAME_WINDOW_S = 60
 MIN_AGE_MIN = -1.0  # a timestamp from the future counts as stale, not as permanently fresh
 
@@ -83,14 +85,20 @@ def update_file(path: str, status_input: dict, now: float) -> dict:
     Raises OSError if the file cannot be locked or written: the caller then shows its own values.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path + '.lock', 'a') as lock:
+    lock_fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT | NO_FOLLOW, 0o600)
+    with os.fdopen(lock_fd, 'r+b') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = _read_dict(path)
         merged = merge(old, status_input, now)
         if merged != {key: old.get(key) for key in merged}:
             tmp = f'{path}.tmp.{os.getpid()}'
             try:
-                with open(tmp, 'w', encoding='utf-8') as f:
+                try:
+                    os.unlink(tmp)  # a leftover, possibly a planted link: remove it, never write through it
+                except FileNotFoundError:
+                    pass
+                descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NO_FOLLOW, 0o600)
+                with os.fdopen(descriptor, 'w', encoding='utf-8') as f:
                     json.dump(merged, f, separators=(',', ':'))
                 os.replace(tmp, path)
             except OSError:

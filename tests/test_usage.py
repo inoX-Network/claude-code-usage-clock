@@ -136,6 +136,27 @@ def test_update_file_raises_oserror_if_the_folder_is_not_writable(tmp_path):
         locked.chmod(0o700)
 
 
+def test_update_file_never_writes_through_a_planted_temporary_link(tmp_path):
+    path = str(tmp_path / 'usage.json')
+    victim = tmp_path / 'victim.txt'
+    victim.write_text('keep me', encoding='utf-8')
+    os.symlink(victim, f'{path}.tmp.{os.getpid()}')
+    _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+    assert victim.read_text(encoding='utf-8') == 'keep me'
+    assert not os.path.islink(path) and json.load(open(path, encoding='utf-8'))['five_hour'] == b(10, WINDOW_5H)
+    assert sorted(os.listdir(tmp_path)) == ['usage.json', 'usage.json.lock', 'victim.txt']
+
+
+def test_update_file_refuses_a_planted_lock_link(tmp_path):
+    path = str(tmp_path / 'usage.json')
+    target = tmp_path / 'elsewhere' / 'created-by-link'
+    target.parent.mkdir()
+    os.symlink(target, f'{path}.lock')
+    with pytest.raises(OSError):
+        _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+    assert not target.exists() and not os.path.exists(path)
+
+
 @pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"text"', '', json.dumps({'five_hour': 'x'}),
                                      json.dumps({'fuenf': b(90, WINDOW_5H), 'measured': 'old format'})])
 def test_file_in_another_format_counts_as_empty(tmp_path, content):
