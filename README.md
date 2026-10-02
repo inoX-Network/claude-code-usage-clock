@@ -1,11 +1,12 @@
 # claude-code-usage-clock
 
-Let Claude Code see its own usage and the time with every prompt, and keep subagents from burning through the
-five-hour window.
+Claude Code shows you your usage. This makes the model see it too, and lets two gates decide from those numbers
+whether new agents may start and running ones keep working.
 
 Claude Code knows your plan limits, but the model working for you does not. It cannot tell whether starting
 ten agents at 80 % of the five-hour window is a good idea, it does not know that it is 3 a.m., and an
-overnight run happily spends the whole window. This repo closes that gap with a status line and three hooks:
+overnight run happily spends the whole window. This repo closes that gap with a status line and three hooks
+(four parts):
 
 | Part | What it does | Maturity | Default |
 |---|---|---|---|
@@ -124,6 +125,10 @@ find later when something happened. Turn either part off in `config.json` (`disp
   [`docs/agents.md`](docs/agents.md) explains how to give your agents a model and an effort.
 - It fails closed: if the gate itself breaks, starts are denied (in `enforce` mode).
 
+Why the model rule exists: two audit runs started agents without a model set, so most of them ran on the most
+expensive model, simple counting jobs included. Together the two runs used about a third of the weekly limit
+(34 %, measured from the session transcripts). The spawn gate makes sure that does not happen silently again.
+
 **Soft stop** (every tool call of a subagent):
 
 | 5h usage | Effect |
@@ -234,14 +239,33 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
 ## Limits and threat model
 
 - `rate_limits` is what Claude Code currently passes to the status line. It is documented, but it is not a
-  versioned API; if it changes, the tools report `unknown` rather than wrong numbers.
-- The usage file and the counters are ordinary files. A model that can write them can fake them. The mode and
-  the weekly approval sit in `settings.json` and the thresholds next to the hooks: if you protect those paths
-  from the model (for example with a guard hook), it cannot switch the gates off; if you do not, these tools
-  are a seatbelt, not a lock.
+  versioned API, and it has been reported missing in some Claude Code versions
+  ([#40094](https://github.com/anthropics/claude-code/issues/40094),
+  [#45133](https://github.com/anthropics/claude-code/issues/45133)). In all these cases the tools report
+  `unknown` rather than wrong numbers.
+- The usage file and the counters are ordinary files. A model that can write them can fake them, and a model
+  that can edit `settings.json` or the config can switch the gates off. On their own these tools are a
+  seatbelt, not a lock. See [Working with a guard hook](#working-with-a-guard-hook).
 - Agent discovery covers project agents (`.claude/agents`) and user agents (`~/.claude/agents`), not plugin or
   managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
+
+### Working with a guard hook
+
+The two jobs fit together. A guard hook such as
+[claude-code-safety-guard](https://github.com/inoX-Network/claude-code-safety-guard) keeps the model from
+damaging your system by accident. This repo keeps long runs from breaking off hard near the limit, so their
+work is not lost. Neither depends on the other.
+
+To make the gates a lock rather than a seatbelt, let your guard block the model from writing these paths
+(the status line itself runs outside the model and keeps writing the usage file):
+
+| Path | Why |
+|---|---|
+| `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
+| `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
+| `~/.claude/rate-limit.json*` (with `.lock` and `.tmp.*`) | The shared usage numbers. |
+| `~/.cache/claude-usage-clock/` | Log and per-agent checkpoint counters. |
 
 ## Development
 
@@ -251,6 +275,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 ```
 
 [`docs/architecture.md`](docs/architecture.md) is the contract between the parts.
+
+## Maintenance
+
+Maintained on a best-effort basis. Issues welcome, no guaranteed response time.
 
 ## License
 
