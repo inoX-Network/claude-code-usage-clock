@@ -156,6 +156,23 @@ def test_choice_keys_with_other_values_fall_back_and_log(tmp_path, key, value):
     assert len(lines) == 1 and f'spawn_rules.{key}' in lines[0]['reason'] and 'must be one of' in lines[0]['reason']
 
 
+def test_week_action_accepts_its_values_and_falls_back_on_others(tmp_path):
+    for value in ('warn', 'ask', 'deny'):
+        write_config(tmp_path, {'thresholds': {'week_action': value}})
+        assert _config.load()['thresholds']['week_action'] == value
+    assert log_lines(tmp_path) == []
+    write_config(tmp_path, {'thresholds': {'week_action': 'block', 'start_block_week': 80}})
+    cfg = _config.load()
+    assert cfg['thresholds']['week_action'] == 'warn' and cfg['thresholds']['start_block_week'] == 80
+    assert 'thresholds.week_action: must be one of warn|ask|deny' in log_lines(tmp_path)[0]['reason']
+
+
+def test_ask_verified_in_bypass_must_be_a_boolean(tmp_path):
+    write_config(tmp_path, {'thresholds': {'ask_verified_in_bypass': 'yes'}})
+    assert _config.load()['thresholds']['ask_verified_in_bypass'] is False
+    assert 'thresholds.ask_verified_in_bypass: wrong type' in log_lines(tmp_path)[0]['reason']
+
+
 def test_the_removed_require_key_is_ignored_and_logged(tmp_path):
     write_config(tmp_path, {'spawn_rules': {'require_model_and_effort': True}})
     assert _config.load()['spawn_rules']['model_effort_action'] == 'warn'

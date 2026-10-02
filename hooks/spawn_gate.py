@@ -16,7 +16,9 @@ every skill, including plain knowledge skills).
 Usage part fails open: at `start_block_5h` (5h) or `start_block_week` (week) no new start; with an unknown or
 stale measurement only a warning, unless the block has more than `unknown_usage_max_agents` agents. Approval
 for the week: --week-ok-until=YYYY-MM-DD (up to and including that day only a warning; it lives in the hook
-command in settings.json, where the model cannot set it if settings.json is protected).
+command in settings.json, where the model cannot set it if settings.json is protected). Without it
+`thresholds.week_action` decides: warn, ask (Claude Code's permission prompt, which only a human can answer;
+denied in permission modes that may skip the prompt, see ASK_SHOWN) or deny.
 In shadow mode everything is only logged.
 """
 import json
@@ -27,6 +29,9 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 EVENT = 'PreToolUse'
+# Permission modes in which Claude Code shows the prompt a hook asks for. Every other mode, and a missing one,
+# may answer the prompt without a human; there `ask` denies unless `thresholds.ask_verified_in_bypass` is set.
+ASK_SHOWN = ('default', 'acceptEdits', 'plan')
 
 
 def _mode(argv: list[str]) -> str:
@@ -45,12 +50,13 @@ def _deny_without_hookio(reason: str) -> None:
 
 
 def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until: date | None = None,
-                 today: date | None = None) -> tuple[str, str]:
-    """Usage part: ('allow' | 'warn' | 'deny', reason).
+                 today: date | None = None, permission_mode: str | None = None) -> tuple[str, str]:
+    """Usage part: ('allow' | 'warn' | 'ask' | 'deny', reason).
 
     agent_count: agents in the block (Agent tool and Skill fork = 1, Workflow = counted agent() calls,
     None = could not be counted). week_ok_until: approval for the 7-day window, valid up to and including
-    that day (only a warning then).
+    that day (only a warning then). Without it `thresholds.week_action` decides above the weekly threshold:
+    warn, ask (the user confirms in Claude Code's permission prompt) or deny. The 5h block beats an ask.
     """
     if usage.state != 'ok':
         limit = thresholds['unknown_usage_max_agents']
@@ -59,21 +65,35 @@ def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until
             return 'deny', (f'Usage {usage.state} and {agents} agents in the block: fresh measurement first, then the '
                             f'block. Up to {limit} agent(s) may start while the usage is {usage.state}.')
         return 'warn', f'Usage {usage.state}: start allowed (fail open), keep blocks small.'
-    note = ''
+    note = question = ''
     if usage.week is not None and usage.week >= thresholds['start_block_week']:
         today = today or date.today()
-        if week_ok_until is None or today > week_ok_until:
-            return 'deny', (f'7-day window at {usage.week:.0f} %: no new start without approval '
+        week = f'7-day window at {usage.week:.0f} %'
+        action = thresholds['week_action']
+        if week_ok_until is not None and today <= week_ok_until:
+            note = f'{week}: start approved until {week_ok_until.isoformat()}.'
+        elif action == 'warn':
+            note = f'{week}: above the weekly threshold, start allowed (week_action warn); keep blocks small.'
+        elif action == 'ask' and (permission_mode in ASK_SHOWN or thresholds['ask_verified_in_bypass']):
+            question = f'{week}: above the weekly threshold. Allow this start?'
+        elif action == 'ask':
+            return 'deny', (f'{week}: the user has to approve this start, but in permission mode '
+                            f'"{permission_mode or "unknown"}" the prompt may be answered without them '
+                            '(thresholds.ask_verified_in_bypass is false); no new start. Approval: '
+                            '--week-ok-until=YYYY-MM-DD on the spawn gate command in settings.json.')
+        else:
+            return 'deny', (f'{week}: no new start without approval '
                             '(--week-ok-until=YYYY-MM-DD on the spawn gate command in settings.json).')
-        note = f'7-day window at {usage.week:.0f} %: start approved until {week_ok_until.isoformat()}.'
     if usage.five_hour is not None and usage.five_hour >= thresholds['start_block_5h']:
         return 'deny', f'5h window at {usage.five_hour:.0f} %: no new block until the window resets.'
+    if question:
+        return 'ask', question
     return ('warn', note) if note else ('allow', '')
 
 
 def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today: date | None = None,
            now=None) -> tuple[str, str]:
-    """('allow' | 'warn' | 'deny' | 'not_responsible', reason) for one hook input."""
+    """('allow' | 'warn' | 'ask' | 'deny' | 'not_responsible', reason) for one hook input."""
     import _hookio
     import _usage
     from _spawn_check import Check, Rules, check_agent, check_skill, check_workflow
@@ -110,9 +130,11 @@ def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today
             return 'deny', check.reason
         check = Check(True, notes=[check.reason] + check.notes, agent_count=check.agent_count)
     usage = _usage.read_usage(None, now, cfg['thresholds']['max_age_min'])
-    action, text = decide_start(usage, check.agent_count, cfg['thresholds'], week_ok_until, today)
-    if action == 'deny':
-        return 'deny', ' '.join([text] + check.notes)
+    mode = hook_input.get('permission_mode')
+    action, text = decide_start(usage, check.agent_count, cfg['thresholds'], week_ok_until, today,
+                                mode if isinstance(mode, str) else None)
+    if action in ('deny', 'ask'):
+        return action, ' '.join([text] + check.notes)
     notes = check.notes + ([text] if action == 'warn' else [])
     return ('warn', ' '.join(notes)) if notes else ('allow', '')
 
@@ -146,6 +168,8 @@ def main() -> int:
         return 0
     if decision == 'deny':
         _hookio.emit_deny(EVENT, reason)
+    elif decision == 'ask':
+        _hookio.emit_ask(EVENT, reason, 'Spawn gate: the user was asked to approve this start. ' + reason)
     elif decision == 'warn':
         _hookio.emit_context(EVENT, 'Spawn gate: ' + reason)
     return 0

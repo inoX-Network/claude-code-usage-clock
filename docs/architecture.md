@@ -92,7 +92,10 @@ value, not a fixed number.
 ### spawn_gate.py
 
 1. Usage: 5h at or above `start_block_5h` → deny new agents/workflows. Week at or above `start_block_week`
-   → deny unless `--week-ok-until` is today or later. Unknown/stale usage → warn for a single agent,
+   → warn if `--week-ok-until` is today or later, else `week_action`: `warn`, `deny`, or `ask`
+   (`permissionDecision: "ask"`, reason for the user, `additionalContext` for the model). `ask` only where the
+   prompt is shown for sure (`permission_mode` default, acceptEdits, plan); any other or a missing mode denies
+   unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.
 2. Model rules (unless `model_effort_action` is `off`): the agent type must resolve to a definition with `model:`
    and `effort:` in its frontmatter (project `.claude/agents` before user `~/.claude/agents`, matched by the

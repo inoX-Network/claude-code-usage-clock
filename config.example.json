@@ -18,7 +18,9 @@
     "deny": 95,
     "max_age_min": 15,
     "calls_without_checkpoint": 15,
-    "unknown_usage_max_agents": 1
+    "unknown_usage_max_agents": 1,
+    "week_action": "warn",
+    "ask_verified_in_bypass": false
   },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
