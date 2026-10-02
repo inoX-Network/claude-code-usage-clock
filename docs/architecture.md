@@ -17,6 +17,8 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
   log_summary.py          summarises the JSONL log
+  check_agents.py         lists which agent definitions the model rule would report or deny (read only)
+docs/agents.md            how to give agents model and effort, for users and for the model
 tests/                    pytest, synthetic data only
 config.example.json       every key with its default
 ```
