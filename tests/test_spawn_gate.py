@@ -20,7 +20,7 @@ import spawn_gate
 from conftest import HOOKS
 
 SCRIPT = os.path.join(HOOKS, 'spawn_gate.py')
-THRESHOLDS = _config.DEFAULTS['thresholds']
+THRESHOLDS = dict(_config.DEFAULTS['thresholds'], week_action='deny')   # the strict level; warn and ask have own tests
 DAY = date(2026, 1, 14)
 
 
@@ -34,7 +34,8 @@ def env(tmp_path):
                                                 encoding='utf-8')
     # Most tests check the strict level; the default level `warn` has its own tests.
     strict = tmp_path / 'strict-config.json'
-    strict.write_text(json.dumps({'spawn_rules': {'model_effort_action': 'deny'}}), encoding='utf-8')
+    strict.write_text(json.dumps({'spawn_rules': {'model_effort_action': 'deny'}, 'thresholds': {'week_action': 'deny'}}),
+                      encoding='utf-8')
     return dict(os.environ, CCUC_AGENT_DIRS=str(agents), CCUC_CONFIG=str(strict))
 
 
@@ -48,6 +49,7 @@ def usage(tmp_path, five, week=20, age_min=1):
 
 def config(tmp_path, env, spawn_rules=None, **sections):
     path = tmp_path / 'config.json'
+    sections['thresholds'] = {'week_action': 'deny', **sections.get('thresholds', {})}
     path.write_text(json.dumps({'spawn_rules': {'model_effort_action': 'deny', **(spawn_rules or {})}, **sections}),
                     encoding='utf-8')
     return dict(env, CCUC_CONFIG=str(path))
@@ -768,7 +770,8 @@ def test_decide_uses_the_given_clock_and_date(tmp_path, monkeypatch):
         'five_hour': {'used_percentage': 10, 'resets_at': measured.timestamp() + 3600},
         'seven_day': {'used_percentage': 90, 'resets_at': measured.timestamp() + 86400},
         'measured_at': '2026-01-14T10:00:00Z'}), encoding='utf-8')
-    cfg = dict(_config.load(), spawn_rules=dict(_config.DEFAULTS['spawn_rules'], model_effort_action='off'))
+    cfg = dict(_config.load(), spawn_rules=dict(_config.DEFAULTS['spawn_rules'], model_effort_action='off'),
+               thresholds=THRESHOLDS)
     now = measured + timedelta(minutes=5)
     assert spawn_gate.decide(agent(), cfg, DAY, DAY, now)[0] == 'warn'
     assert spawn_gate.decide(agent(), cfg, DAY, DAY + timedelta(days=1), now)[0] == 'deny'
@@ -817,6 +820,62 @@ def test_week_ok_until_up_to_and_including_the_day_only_warns():
     assert spawn_gate.decide_start(measured(10, week=85), 1, THRESHOLDS, ok, date(2026, 1, 16))[0] == 'deny'
     assert spawn_gate.decide_start(measured(80, week=85), 1, THRESHOLDS, ok, DAY)[0] == 'deny'  # 5h stays
     assert 'week-ok-until' in spawn_gate.decide_start(measured(10, week=85), 1, THRESHOLDS)[1]
+
+
+MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto', 'somethingNew', None]
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('verified', [False, True])
+@pytest.mark.parametrize('week_action', ['warn', 'ask', 'deny'])
+def test_week_action_for_every_permission_mode(week_action, verified, mode):
+    limits = dict(THRESHOLDS, week_action=week_action, ask_verified_in_bypass=verified)
+    action, text = spawn_gate.decide_start(measured(10, week=85), 1, limits, None, DAY, mode)
+    if week_action == 'ask':
+        shown = mode in ('default', 'acceptEdits', 'plan') or verified
+        expected = 'ask' if shown else 'deny'
+    else:
+        expected = week_action
+    assert action == expected and '7-day window at 85 %' in text
+    if expected == 'deny' and week_action == 'ask':
+        assert f'permission mode "{mode or "unknown"}"' in text and 'ask_verified_in_bypass is false' in text
+
+
+@pytest.mark.parametrize('week_action', ['warn', 'ask', 'deny'])
+def test_week_action_below_the_threshold_and_with_approval_does_not_apply(week_action):
+    limits = dict(THRESHOLDS, week_action=week_action)
+    assert spawn_gate.decide_start(measured(10, week=74), 1, limits, None, DAY, 'default') == ('allow', '')
+    action, text = spawn_gate.decide_start(measured(10, week=85), 1, limits, DAY, DAY, 'bypassPermissions')
+    assert action == 'warn' and 'start approved until 2026-01-14' in text
+
+
+def test_the_5h_block_beats_a_weekly_ask_and_unknown_usage_never_asks():
+    limits = dict(THRESHOLDS, week_action='ask')
+    assert spawn_gate.decide_start(measured(80, week=85), 1, limits, None, DAY, 'default')[0] == 'deny'
+    assert spawn_gate.decide_start(_usage.Usage(None, None, None), 1, limits, None, DAY, 'default')[0] == 'warn'
+
+
+def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
+    usage(tmp_path, 10, week=85)
+    env = config(tmp_path, env, thresholds={'week_action': 'ask'})
+    out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
+    assert out is not None and list(out) == ['hookSpecificOutput']
+    assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason',
+                                              'additionalContext'}
+    assert out['hookSpecificOutput']['permissionDecision'] == 'ask'
+    assert reason(out) == '7-day window at 85 %: above the weekly threshold. Allow this start?'
+    assert context(out).startswith('Spawn gate: the user was asked to approve this start. 7-day window')
+    assert is_deny(run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce'))
+    assert is_deny(run(agent('full-def'), env, '--mode=enforce'))                     # no mode in the input
+    assert run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow') is None
+    assert [line['decision'] for line in gate_log(tmp_path)] == ['ask', 'deny', 'deny', 'ask']
+
+
+def test_the_default_week_action_warns(tmp_path, env):
+    usage(tmp_path, 10, week=85)
+    env = dict(env, CCUC_CONFIG=str(tmp_path / 'no-config.json'))
+    out = run(agent('full-def'), env, '--mode=enforce')
+    assert is_warning(out) and 'above the weekly threshold, start allowed (week_action warn)' in context(out)
 
 
 def test_thresholds_come_from_the_configuration():

@@ -31,6 +31,8 @@ DEFAULTS: dict = {
         'max_age_min': 15,
         'calls_without_checkpoint': 15,
         'unknown_usage_max_agents': 1,
+        'week_action': 'warn',
+        'ask_verified_in_bypass': False,
     },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
@@ -50,11 +52,12 @@ _MISSING = object()  # no file at all, as opposed to a file that contains `null`
 # Keys whose value is a filesystem path: "~" is expanded in the loaded result (not in DEFAULTS).
 _PATH_KEYS = ('usage_file', 'log_dir')
 
-# spawn_rules keys with a fixed set of values. Any other string falls back to the default.
+# Keys with a fixed set of values, as (section, key). Any other string falls back to the default.
 _CHOICES = {
-    'model_effort_action': ('off', 'warn', 'deny'),
-    'skill_fork_missing_agent': ('warn', 'deny'),
-    'model_override_in_call': ('allow', 'warn', 'deny'),
+    ('thresholds', 'week_action'): ('warn', 'ask', 'deny'),
+    ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
+    ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
+    ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
 }
 
 
@@ -138,10 +141,10 @@ def load(log_problems: bool = True) -> dict:
     if not cfg['checkpoint_dir_suffix'].strip().strip('/'):
         problems.append('checkpoint_dir_suffix: must not be empty or only "/", using default')
         cfg['checkpoint_dir_suffix'] = DEFAULTS['checkpoint_dir_suffix']
-    for key, allowed in _CHOICES.items():
-        if cfg['spawn_rules'][key] not in allowed:
-            problems.append(f'spawn_rules.{key}: must be one of {"|".join(allowed)}, using default')
-            cfg['spawn_rules'][key] = DEFAULTS['spawn_rules'][key]
+    for (section, key), allowed in _CHOICES.items():
+        if cfg[section][key] not in allowed:
+            problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')
+            cfg[section][key] = DEFAULTS[section][key]
     for key in _PATH_KEYS:
         cfg[key] = os.path.expanduser(cfg[key])
     if problems and log_problems:

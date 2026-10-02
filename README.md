@@ -105,7 +105,12 @@ find later when something happened. Turn either part off in `config.json` (`disp
 **Spawn gate** (Agent, Workflow and forked Skill starts, in the main session and in subagents):
 
 - 5h usage at or above `start_block_5h` (75 %): no new block until the window resets.
-- Weekly usage at or above `start_block_week` (75 %): no new block unless `--week-ok-until` covers today.
+- Weekly usage at or above `start_block_week` (75 %): `thresholds.week_action` decides, unless `--week-ok-until`
+  covers today (then it only warns). `warn` (default) starts with a warning, `deny` refuses, and `ask` shows
+  Claude Code's permission prompt, so you confirm each start yourself; only a person can answer it, the model
+  cannot fake a yes. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
+  no mode in the hook input) `ask` refuses instead, until you have seen the prompt appear in your setup and set
+  `thresholds.ask_verified_in_bypass: true`.
 - Unknown or stale usage: a single agent may start (with a warning), a larger block may not.
 - Model rule: every agent should have `model:` and `effort:` in its definition's frontmatter. Built-in types
   without a definition file, such as `general-purpose`, never do; define your own agents instead, or list types
@@ -179,6 +184,8 @@ that key and writes one line to the log.
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |
 | `thresholds.calls_without_checkpoint` | `15` | Soft stop checkpoint rhythm. |
 | `thresholds.unknown_usage_max_agents` | `1` | Block size allowed while usage is unknown. |
+| `thresholds.week_action` | `warn` | Above `start_block_week`: `warn`, `ask` (permission prompt) or `deny`. |
+| `thresholds.ask_verified_in_bypass` | `false` | `true` lets `ask` prompt in modes such as `bypassPermissions`; set it only after you saw the prompt there. |
 | `checkpoint_dir_suffix` | `/agent-checkpoints` | What counts as a checkpoint directory. |
 | `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `deny` refuses the start, `off` keeps only the usage part. |
 | `spawn_rules.model_pattern` | `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+` | Which `model` values are accepted, see below. |

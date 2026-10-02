@@ -122,6 +122,13 @@ def emit_deny(event: str, reason: str) -> None:
                                              'permissionDecisionReason': reason}}, ensure_ascii=False))
 
 
+def emit_ask(event: str, reason: str, context: str) -> None:
+    """Claude Code shows its permission prompt; the reason goes to the user, the context to the model."""
+    print(json.dumps({'hookSpecificOutput': {'hookEventName': event, 'permissionDecision': 'ask',
+                                             'permissionDecisionReason': reason, 'additionalContext': context}},
+                     ensure_ascii=False))
+
+
 def emit_context(event: str, text: str) -> None:
     """A warning without denial: reaches the model as a system reminder (additionalContext)."""
     print(json.dumps({'hookSpecificOutput': {'hookEventName': event, 'additionalContext': text}}, ensure_ascii=False))
