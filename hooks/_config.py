@@ -34,7 +34,7 @@ DEFAULTS: dict = {
     },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
-        'require_model_and_effort': True,
+        'model_effort_action': 'warn',
         'model_pattern': 'sonnet|opus|haiku|fable|inherit|claude-[a-z0-9-]+',
         'effort_values': ['low', 'medium', 'high', 'xhigh', 'max'],
         'suggested_agents': [],
@@ -52,6 +52,7 @@ _PATH_KEYS = ('usage_file', 'log_dir')
 
 # spawn_rules keys with a fixed set of values. Any other string falls back to the default.
 _CHOICES = {
+    'model_effort_action': ('off', 'warn', 'deny'),
     'skill_fork_missing_agent': ('warn', 'deny'),
     'model_override_in_call': ('allow', 'warn', 'deny'),
 }

@@ -11,8 +11,8 @@ Rules:
   resolved and checked too, depth 1.
 - Fail closed: whatever cannot be checked counts as not determinable and is denied. That includes every use of
   agent/workflow that is not a direct call (alias, property, optional call, ...).
-- With `require_model_and_effort` off nothing here denies; scripts are only analysed to count the agents for
-  the usage thresholds.
+- With `model_effort_action` off nothing here denies; scripts are only analysed to count the agents for
+  the usage thresholds. `warn` and `deny` judge the same way; spawn_gate turns a denial into a warning for `warn`.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ OPTIONS_FIXED = 'Options must be an object literal with fixed values'
 @dataclass(frozen=True)
 class Rules:
     """The `spawn_rules` section of the configuration, prepared for the checks."""
-    require: bool
+    model_effort_action: str
     model_pattern: re.Pattern
     effort_values: tuple[str, ...]
     suggested_agents: tuple[str, ...]
@@ -47,10 +47,15 @@ class Rules:
 
     @classmethod
     def from_config(cls, spawn_rules: dict) -> Rules:
-        return cls(spawn_rules['require_model_and_effort'], re.compile(spawn_rules['model_pattern']),
+        return cls(spawn_rules['model_effort_action'], re.compile(spawn_rules['model_pattern']),
                    tuple(spawn_rules['effort_values']), tuple(spawn_rules['suggested_agents']),
                    frozenset(spawn_rules['exceptions']), spawn_rules['skill_fork_missing_agent'],
                    spawn_rules['model_override_in_call'])
+
+    @property
+    def require(self) -> bool:
+        """Whether the model rule judges at all; `warn` judges too, spawn_gate only softens the result."""
+        return self.model_effort_action != 'off'
 
 
 DEFAULT_RULES = Rules.from_config(_config.DEFAULTS['spawn_rules'])
@@ -932,8 +937,8 @@ def _check_source(source: str, directories: list[str], cwd: str | None, child: b
 
 
 def _not_checkable(error: Unclear, rules: Rules) -> Check:
-    # With the model check off a script that cannot be analysed is allowed, but its agents cannot be counted.
-    return Check(False, str(error)) if rules.require else Check(True, agent_count=None)
+    # A script that cannot be analysed: its agents cannot be counted. With the model check off it is allowed.
+    return Check(False, str(error), agent_count=None) if rules.require else Check(True, agent_count=None)
 
 
 def check_workflow_script(source: str, directories: list[str], cwd: str | None = None,

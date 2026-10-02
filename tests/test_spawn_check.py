@@ -850,14 +850,15 @@ def test_custom_effort_values_and_model_pattern(agents):
 
 def test_rules_from_the_defaults_are_the_default_rules():
     assert rules() == sc.DEFAULT_RULES
-    assert sc.DEFAULT_RULES.require and sc.DEFAULT_RULES.exceptions == frozenset({'claude-code-guide',
+    assert sc.DEFAULT_RULES.model_effort_action == 'warn' and sc.DEFAULT_RULES.require
+    assert sc.DEFAULT_RULES.exceptions == frozenset({'claude-code-guide',
                                                                                   'statusline-setup'})
 
 
 # --- Model check off: only counting ---------------------------------------------------------------------
 
 def test_model_check_off_counts_without_judging():
-    off = rules(require_model_and_effort=False)
+    off = rules(model_effort_action='off')
     p = script("await agent('a'); await agent('b', {model: 'nonsense'})", rule_set=off)
     assert p.allowed and p.reason == '' and p.agent_count == 2
     p = script("for (const x of xs) await agent('a')", rule_set=off)
@@ -867,7 +868,7 @@ def test_model_check_off_counts_without_judging():
 @pytest.mark.parametrize('tool_input', [{'script': "const a = agent; await a('x')"}, {'script': 'agent(('},
                                         {'scriptPath': '/does/not/exist.js'}, {}])
 def test_model_check_off_and_script_not_analysable_leaves_the_count_unknown(tool_input):
-    off = rules(require_model_and_effort=False)
+    off = rules(model_effort_action='off')
     p = sc.check_workflow(tool_input, [], rules=off)
     assert p.allowed and p.agent_count is None and p.notes == []
     assert not sc.check_workflow(tool_input, []).allowed
@@ -877,7 +878,7 @@ def test_model_check_off_still_resolves_child_workflows(tmp_path):
     child = tmp_path / 'child.js'
     child.write_text("await agent('k')\nawait agent('l')\n", encoding='utf-8')
     p = script(f"await agent('e'); await workflow({{scriptPath: '{child}'}})",
-               rule_set=rules(require_model_and_effort=False))
+               rule_set=rules(model_effort_action='off'))
     assert p.allowed and p.agent_count == 3
 
 
@@ -962,7 +963,7 @@ def test_fork_skill_rules(tmp_path, agents):
     assert run('model', rules(model_override_in_call='allow')).notes == []
     over = run('model', rules(model_override_in_call='deny'))
     assert not over.allowed and over.reason.startswith('Skill "model": ')
-    off = rules(require_model_and_effort=False, skill_fork_missing_agent='deny')
+    off = rules(model_effort_action='off', skill_fork_missing_agent='deny')
     assert run('bare', off) == sc.Check(True, agent_count=1) and run('guide', off).notes == []
 
 

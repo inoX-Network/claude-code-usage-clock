@@ -159,7 +159,8 @@ def hook(script, payload, *args):
 
 
 def test_default_path_and_field_names_match_what_the_hooks_write(tmp_path, monkeypatch):
-    (tmp_path / 'config.json').write_text('{"thresholds": {"deny": "high"}}', encoding='utf-8')
+    (tmp_path / 'config.json').write_text('{"thresholds": {"deny": "high"}, "spawn_rules": {"model_effort_action": "deny"}}',
+                                             encoding='utf-8')
     monkeypatch.setenv('CCUC_CONFIG', str(tmp_path / 'config.json'))
     hook('spawn_gate.py', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'nobody-defined-this', 'prompt': 'x'}},
          '--mode=shadow')

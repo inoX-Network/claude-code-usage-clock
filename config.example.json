@@ -22,7 +22,7 @@
   },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
-    "require_model_and_effort": true,
+    "model_effort_action": "warn",
     "model_pattern": "sonnet|opus|haiku|fable|inherit|claude-[a-z0-9-]+",
     "effort_values": ["low", "medium", "high", "xhigh", "max"],
     "suggested_agents": [],

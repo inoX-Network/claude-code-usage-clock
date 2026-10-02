@@ -133,7 +133,8 @@ def test_invalid_regular_expression_falls_back(tmp_path):
     assert 'model_pattern' in log_lines(tmp_path)[0]['reason']
 
 
-@pytest.mark.parametrize('key,valid', [('skill_fork_missing_agent', ['warn', 'deny']),
+@pytest.mark.parametrize('key,valid', [('model_effort_action', ['off', 'warn', 'deny']),
+                                       ('skill_fork_missing_agent', ['warn', 'deny']),
                                        ('model_override_in_call', ['allow', 'warn', 'deny'])])
 def test_choice_keys_accept_their_values(tmp_path, key, valid):
     for value in valid:
@@ -144,7 +145,8 @@ def test_choice_keys_accept_their_values(tmp_path, key, valid):
 
 @pytest.mark.parametrize('key,value', [('skill_fork_missing_agent', 'allow'), ('skill_fork_missing_agent', 'Deny'),
                                        ('skill_fork_missing_agent', ''), ('model_override_in_call', 'block'),
-                                       ('model_override_in_call', 'warn ')])
+                                       ('model_override_in_call', 'warn '), ('model_effort_action', 'true'),
+                                       ('model_effort_action', 'DENY'), ('model_effort_action', '')])
 def test_choice_keys_with_other_values_fall_back_and_log(tmp_path, key, value):
     write_config(tmp_path, {'spawn_rules': {key: value, 'exceptions': ['kept']}})
     cfg = _config.load()
@@ -152,6 +154,12 @@ def test_choice_keys_with_other_values_fall_back_and_log(tmp_path, key, value):
     assert cfg['spawn_rules']['exceptions'] == ['kept']
     lines = log_lines(tmp_path)
     assert len(lines) == 1 and f'spawn_rules.{key}' in lines[0]['reason'] and 'must be one of' in lines[0]['reason']
+
+
+def test_the_removed_require_key_is_ignored_and_logged(tmp_path):
+    write_config(tmp_path, {'spawn_rules': {'require_model_and_effort': True}})
+    assert _config.load()['spawn_rules']['model_effort_action'] == 'warn'
+    assert 'spawn_rules.require_model_and_effort: unknown key ignored' in log_lines(tmp_path)[0]['reason']
 
 
 @pytest.mark.parametrize('value', [[], [''], ['low', ''], ['  ']])
