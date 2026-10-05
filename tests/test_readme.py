@@ -217,3 +217,28 @@ def test_the_log_fields_with_values_are_named_with_their_length_limit():
     assert 'at most 100 characters' in flat(readme) and '*names* of the input fields' in flat(readme)
     assert 'at most 100 characters' in flat(architecture) and 'only as field names' in flat(architecture)
     assert 'quoted values masked' in flat(architecture)
+
+
+# --- Status line: the text must match the code ------------------------------------------------------------------
+
+def test_the_status_line_sections_name_the_new_keys_the_state_file_and_the_clean_up_age():
+    import _context_state
+    with open(EXAMPLE, encoding='utf-8') as f:
+        keys = [k for k in json.load(f)['statusline'] if k.startswith(('context_', 'cache_'))]
+    assert keys == ['context_yellow_from_k', 'context_red_from_k', 'cache_yellow_below_min']
+    readme = section(readme_text(), '## What the status line shows')
+    architecture = section(architecture_text(), '## Status line')
+    for key in keys:
+        assert key in readme and key in architecture, key
+    assert 'ctx –/1000k' in flat(readme) and 'ctx –/1000k' in flat(architecture)
+    assert 'context/<session_id>.json' in readme and 'context/<session_id>.json' in architecture
+    assert f'{_context_state.MAX_AGE_S // 86400} days' in readme and f'{_context_state.MAX_AGE_S // 86400} days' in architecture
+    assert '[A-Za-z0-9_-]{1,128}' in architecture and _context_state.SESSION_ID.pattern in architecture
+    assert '_context_state.py' in architecture_text()      # in the file layout
+
+
+def test_the_weekly_notes_of_the_usage_line_are_documented_word_for_word():
+    import usage_clock
+    assert set(usage_clock.WEEK_NOTES) == {'warn', 'ask', 'deny'}
+    for text in usage_clock.WEEK_NOTES.values():
+        assert text in flat(readme_text()) and text in flat(architecture_text()), text

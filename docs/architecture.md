@@ -6,12 +6,13 @@ This document is the contract between the parts. Code and tests follow it; when 
 
 ```
 hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage-clock/
-  statusline.py           statusLine command: shows usage, merges it into the shared usage file
+  statusline.py           statusLine command: shows usage, context and cache clock, merges usage into the shared file
   usage_clock.py          hook UserPromptSubmit: usage line and/or local time as context for the model
   spawn_gate.py           hook PreToolUse (Agent|Workflow|Skill): usage thresholds + model/effort rules
   soft_stop.py            hook PreToolUse (*): soft stop for subagents near the usage limit
   _config.py              loads config.json next to the scripts, falls back to defaults
   _usage.py               reads and merges the shared usage file
+  _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json)
   _hookio.py              hook input/output, JSONL log, directory discovery
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
@@ -51,6 +52,39 @@ Readers classify the measurement as `ok`, `stale` (older than `max_age_min`, or 
 or `unknown` (missing, unreadable, no valid five-hour block). `stale` and `unknown` are treated alike by all
 decisions.
 
+## Status line
+
+`statusline.py` prints one line: `<model> | 5h 40% | week 61% [<- weekly limit reached] | ctx 231k/1000k 23% |
+cache 54m`. Every part is left out if its input is missing or invalid (bool, string, NaN, negative): silent
+rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in `ctx –/1000k`).
+
+- **5h / week:** from `rate_limits`, merged through the shared usage file (see above). Colours
+  `statusline.yellow_from` and `red_from`; the marker appears at `thresholds.start_block_week`.
+- **ctx:** from `context_window`. Needs a valid `context_window_size` (at least 1000), otherwise no part.
+  `total_input_tokens` (input + cache creation + cache read) is shown in thousands, cut not rounded; the
+  percentage is `used_percentage` rounded like the limits, and is left out if it is missing or broken.
+  `total_input_tokens` 0 or missing (before the first answer) shows `ctx –/1000k` in gray, never a zero.
+  The colour depends on the absolute tokens only: yellow from `statusline.context_yellow_from_k` (default 300),
+  red from `context_red_from_k` (default 500), both in thousands; the percentage and the window size do not matter.
+- **cache:** from `prompt_cache`, which is missing until the first request. `warm: false` shows `cache cold` in
+  red. `warm: true` with a numeric `expires_at` (Unix seconds) shows the minutes left, rounded up: gray
+  `cache 54m`, yellow below `statusline.cache_yellow_below_min` (default 5), red `cache cold` once it is 0 or
+  less. Warm without a usable `expires_at`, or a `warm` that is not a boolean: no part.
+
+### Context state file
+
+For a later context reminder, the status line writes `<log_dir>/context/<session_id>.json`:
+`{"session_id", "context_window_size", "used_tokens", "measured_at"}` (`measured_at` UTC ISO as in the usage file).
+
+- Written only if `session_id` matches `[A-Za-z0-9_-]{1,128}` (it becomes a file name), `total_input_tokens` is
+  above 0 and the window size is valid. Never before the first answer.
+- One file per session, so sessions do not mix and no lock is needed. Atomic: `<file>.tmp.<pid>` created with
+  `O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600, then `os.replace`. Folder mode 0700. A link as the target is replaced,
+  a link as the folder or as the temporary file is never written through.
+- Every write removes regular `*.json` files in that folder that are older than 7 days (by `lstat`; links and
+  folders are skipped; the file just written is kept).
+- Any error is ignored: the line is shown regardless.
+
 ## Configuration
 
 `config.json` next to the scripts (env override `CCUC_CONFIG`). Missing file: defaults. Unreadable file,
@@ -87,7 +121,12 @@ One line of context per prompt. `show_usage` and `show_time` switch the two part
 means no output. The time part needs no usage file.
 Example: `Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago ·
 Now: Wed 14 Jan 2026 10:05`. Reset times today show only the time. The threshold note uses the configured
-value, not a fixed number.
+value, not a fixed number. Notes are appended only for a fresh measurement (a stale one shows `STALE`
+instead): at or above `start_block_5h` ` — from N % on, no new blocks`; at or above `start_block_week` (needs a
+weekly value) ` — week at or above N %: <text>`, with the text chosen by `week_action`: `warn` "agents start with a
+warning", `ask` "new agents need the user's approval", `deny` "no new agents without --week-ok-until". Both
+notes can stand together, the 5h note first. The hook does not know `--week-ok-until`; the note names the action
+that applies without it.
 
 ### spawn_gate.py
 
@@ -156,7 +195,8 @@ Agent call). Everything else from the input only as field names (`input_keys`, `
 values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` carries quoted values masked:
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
-Per-agent call counters in `<log_dir>/counters/<agent_id>.json`.
+Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session context state in
+`<log_dir>/context/<session_id>.json` (see Status line).
 
 ## Known limits
 

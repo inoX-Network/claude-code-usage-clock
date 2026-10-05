@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Status line: model, five-hour window and weekly limit. Also merges the values into the shared usage file.
+"""Status line: model, five-hour window, weekly limit, context size and prompt cache clock. Also merges the
+usage values into the shared usage file and saves the context of each session (see _context_state.py).
 
 Claude Code passes a JSON document to the status line on stdin. It contains rate_limits.five_hour and
 rate_limits.seven_day (used_percentage, resets_at) without any network call: the values are already there.
@@ -10,20 +11,23 @@ share that file; the merge makes sure an idle session cannot overwrite fresh val
 line shows the merged values, so every session shows the same.
 
 If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent instead of claiming 0 %: a
-missing measurement is not "zero percent". If the merge fails, the session's own values are shown and
-nothing is written. The exit code is always 0.
+missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
+fails, the session's own values are shown and nothing is written. The exit code is always 0.
 
-Output: <model> | 5h NN% | week NN%
+Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23% | cache 54m
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _config  # noqa: E402
+import _context_state  # noqa: E402
+import _hookio  # noqa: E402
 import _usage  # noqa: E402
 
 GRAY = '\033[38;5;245m'
@@ -61,7 +65,67 @@ def _part(label: str, value: float | None, yellow_from: float, red_from: float) 
     return f' {GRAY}| {color}{label} {number}%{RESET}'
 
 
-def render(model: str, five: float | None, week: float | None, cfg: dict) -> str:
+def _count(value, minimum: float = 0) -> bool:
+    """A finite number (never bool) of at least `minimum`."""
+    return _usage._number(value) and value >= minimum
+
+
+def _context_numbers(status_input: dict) -> tuple[float, float | None, float | None] | None:
+    """(window size, used tokens, used percentage) from context_window; None without a valid window size.
+
+    Used tokens are None until the first API answer: total_input_tokens is 0 then, which means "not measured
+    yet", not a real zero. A broken percentage is None, too.
+    """
+    block = status_input.get('context_window')
+    size = block.get('context_window_size') if isinstance(block, dict) else None
+    if not _count(size, 1000):
+        return None
+    used, percent = block.get('total_input_tokens'), block.get('used_percentage')
+    return size, used if _count(used) and used > 0 else None, percent if _count(percent) else None
+
+
+def _context_part(numbers: tuple[float, float | None, float | None] | None, line_cfg: dict) -> str:
+    """`ctx 231k/1000k 23%`; before the first answer `ctx –/1000k`; nothing without a valid window size.
+
+    The colour follows the absolute tokens only, never the percentage: a bigger window must not hide a
+    context that is already expensive.
+    """
+    if numbers is None:
+        return ''
+    size, used, percent = numbers
+    window = f'{int(size) // 1000}k'
+    if used is None:
+        return f' {GRAY}| {GRAY}ctx –/{window}{RESET}'
+    rounded = _rounded(percent) if percent is not None else None
+    color = (RED if used >= line_cfg['context_red_from_k'] * 1000
+             else YELLOW if used >= line_cfg['context_yellow_from_k'] * 1000 else GRAY)
+    return f' {GRAY}| {color}ctx {int(used) // 1000}k/{window}{f" {rounded}%" if rounded is not None else ""}{RESET}'
+
+
+def _cache_part(status_input: dict, line_cfg: dict, now: float) -> str:
+    """`cache 54m` (minutes left, rounded up), yellow below the limit, `cache cold` in red.
+
+    prompt_cache is missing until the first request. Warm without a usable expires_at says nothing: a clock
+    that is guessed would be worse than none.
+    """
+    cache = status_input.get('prompt_cache')
+    if not isinstance(cache, dict):
+        return ''
+    warm = cache.get('warm')
+    if warm is False:
+        return f' {GRAY}| {RED}cache cold{RESET}'
+    expires = cache.get('expires_at')
+    if warm is not True or not _usage._number(expires):
+        return ''
+    minutes = math.ceil((expires - now) / 60)
+    if minutes <= 0:
+        return f' {GRAY}| {RED}cache cold{RESET}'
+    color = YELLOW if minutes < line_cfg['cache_yellow_below_min'] else GRAY
+    return f' {GRAY}| {color}cache {minutes}m{RESET}'
+
+
+def render(model: str, five: float | None, week: float | None, cfg: dict, status_input: dict | None = None,
+           now: float | None = None) -> str:
     line_cfg, limits = cfg['statusline'], cfg['thresholds']
     line = f'{GRAY}{model}{RESET}'
     line += _part('5h', five, line_cfg['yellow_from'], line_cfg['red_from'])
@@ -70,6 +134,9 @@ def render(model: str, five: float | None, week: float | None, cfg: dict) -> str
     week_rounded = _rounded(week) if week is not None else None
     if line_cfg['week_stop_marker'] and week_rounded is not None and week_rounded >= limits['start_block_week']:
         line += f' {RED}{WEEK_STOP_TEXT}{RESET}'
+    if status_input is not None:
+        line += _context_part(_context_numbers(status_input), line_cfg)
+        line += _cache_part(status_input, line_cfg, time.time() if now is None else now)
     return line
 
 
@@ -79,8 +146,21 @@ def _model_name(status_input: dict) -> str:
     return name if isinstance(name, str) and name else 'Claude'
 
 
+def _save_context(status_input: dict, now: float) -> None:
+    """The context state for the later reminder. Needs a measured context (not before the first answer);
+    any error is ignored, the line is more important."""
+    try:
+        numbers = _context_numbers(status_input)
+        if numbers is not None and numbers[1] is not None:
+            _context_state.save(os.path.join(_hookio.log_dir(), 'context'), status_input.get('session_id'),
+                                numbers[0], numbers[1], now)
+    except Exception:
+        pass
+
+
 def main() -> int:
     try:
+        now = time.time()
         try:
             status_input = json.load(sys.stdin)
         except (ValueError, RecursionError):
@@ -89,11 +169,15 @@ def main() -> int:
             status_input = {}
         five, week = _own_value(status_input, 'five_hour'), _own_value(status_input, 'seven_day')
         try:
-            merged = _usage.update_file(_usage.usage_path(), status_input, time.time())
+            merged = _usage.update_file(_usage.usage_path(), status_input, now)
             five, week = _merged_value(merged, 'five_hour'), _merged_value(merged, 'seven_day')
         except Exception:  # merge failed: show the own values, write nothing
             pass
-        print(render(_model_name(status_input), five, week, _config.load(log_problems=False)))
+        _save_context(status_input, now)
+        line = render(_model_name(status_input), five, week, _config.load(log_problems=False), status_input, now)
+        # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
+        sys.stdout.reconfigure(encoding='utf-8')
+        print(line)
     except Exception:
         pass
     return 0
