@@ -246,6 +246,8 @@ that key and writes one line to the log.
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
 | `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |
 | `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
+| `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
+| `wake_watcher.lead_min` | `10` | Longest lead before the prompt cache expires at which the watcher fires, in minutes; never more than a fifth of the cache lifetime (10 min for the 1-hour cache, 1 min for the 5-minute cache). |
 | `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |

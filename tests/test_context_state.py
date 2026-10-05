@@ -68,6 +68,43 @@ def test_float_numbers_are_stored_as_whole_numbers(tmp_path):
     assert '.' not in (state_dir(tmp_path) / 'abc-123_X.json').read_text(encoding='utf-8')
 
 
+# --- The cache clock (for the wake-up watcher) ------------------------------------------------------------------
+
+def save_cache(tmp_path, ttl, expires, now=NOW):
+    _context_state.save(str(state_dir(tmp_path)), 'abc-123_X', 1_000_000, 231_000, now, cache_ttl=ttl,
+                        cache_expires_at=expires)
+
+
+@pytest.mark.parametrize('ttl', ['1h', '5m'])
+def test_a_valid_cache_clock_is_stored_next_to_the_context(tmp_path, ttl):
+    save_cache(tmp_path, ttl, NOW + 3000)
+    assert read(tmp_path) == {'session_id': 'abc-123_X', 'context_window_size': 1_000_000, 'used_tokens': 231_000,
+                              'measured_at': '2027-01-15T08:00:00Z', 'cache_ttl': ttl,
+                              'cache_expires_at': int(NOW + 3000)}
+
+
+def test_the_expiry_is_stored_as_whole_unix_seconds(tmp_path):
+    save_cache(tmp_path, '1h', 1_800_003_000.7)
+    assert read(tmp_path)['cache_expires_at'] == 1_800_003_000
+    assert isinstance(read(tmp_path)['cache_expires_at'], int)
+
+
+@pytest.mark.parametrize('ttl,expires', [
+    ('2h', 1_800_003_000), ('1H', 1_800_003_000), ('', 1_800_003_000), (None, 1_800_003_000), (60, 1_800_003_000),
+    (['1h'], 1_800_003_000), ('1h', None), ('1h', 0), ('1h', -5), ('1h', True), ('1h', '1800003000'),
+    ('1h', float('nan')), ('1h', float('inf')), ('1h', [1]), (None, None)])
+def test_an_invalid_cache_clock_leaves_both_keys_out_but_the_context_is_still_written(tmp_path, ttl, expires):
+    save_cache(tmp_path, ttl, expires)
+    saved = read(tmp_path)
+    assert 'cache_ttl' not in saved and 'cache_expires_at' not in saved
+    assert saved['used_tokens'] == 231_000
+
+
+def test_without_a_cache_clock_the_file_is_exactly_as_before(tmp_path):
+    save(tmp_path, now=NOW)
+    assert set(read(tmp_path)) == {'session_id', 'context_window_size', 'used_tokens', 'measured_at'}
+
+
 # --- The session id decides the file name ---------------------------------------------------------------------
 
 @pytest.mark.parametrize('session_id', ['../x', '..', '.', '', 'a/b', 'a\\b', 'a b', 'a.json', 'x' * 129, 'ä', 'a\n',
@@ -155,6 +192,14 @@ def test_json_files_older_than_seven_days_are_removed_younger_ones_stay(tmp_path
     save(tmp_path, now=NOW)
     assert not old.exists() and edge.exists() and young.exists()
     assert (state_dir(tmp_path) / 'abc-123_X.json').exists()
+
+
+def test_heartbeat_files_follow_the_same_seven_day_rule(tmp_path):
+    old = make_old(tmp_path, 'old.watch', 7.01)
+    edge = make_old(tmp_path, 'edge.watch', 7)
+    young = make_old(tmp_path, 'young.watch', 6.9)
+    save(tmp_path, now=NOW)
+    assert not old.exists() and edge.exists() and young.exists()
 
 
 def test_cleanup_touches_only_regular_json_files(tmp_path):
@@ -301,3 +346,35 @@ def test_the_line_comes_first_and_the_measured_time_is_now(monkeypatch, capsys, 
     saved = json.loads((tmp_path / 'log' / 'context' / 'sess-1.json').read_text(encoding='utf-8'))
     assert saved['measured_at'] <= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 1))
     assert saved['measured_at'] >= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(before - 1))
+
+
+# --- The status line passes the cache clock on ---------------------------------------------------------------
+
+def with_cache(prompt_cache):
+    return dict(status(), prompt_cache=prompt_cache)
+
+
+@pytest.mark.parametrize('ttl', ['1h', '5m'])
+def test_a_warm_cache_is_passed_on_to_the_state_file(monkeypatch, capsys, tmp_path, ttl):
+    run_main(monkeypatch, capsys, with_cache({'warm': True, 'ttl': ttl, 'expires_at': 1_900_000_000}))
+    saved = json.loads((tmp_path / 'log' / 'context' / 'sess-1.json').read_text(encoding='utf-8'))
+    assert saved['cache_ttl'] == ttl and saved['cache_expires_at'] == 1_900_000_000
+
+
+@pytest.mark.parametrize('prompt_cache', [
+    {'warm': False, 'ttl': '1h', 'expires_at': 1_900_000_000}, {'ttl': '1h', 'expires_at': 1_900_000_000},
+    {'warm': 'true', 'ttl': '1h', 'expires_at': 1_900_000_000}, {'warm': 1, 'ttl': '1h', 'expires_at': 1_900_000_000},
+    {'warm': True, 'ttl': '2h', 'expires_at': 1_900_000_000}, {'warm': True, 'expires_at': 1_900_000_000},
+    {'warm': True, 'ttl': '1h'}, {'warm': True, 'ttl': '1h', 'expires_at': 'soon'},
+    {'warm': True, 'ttl': '1h', 'expires_at': 0}, None, 'warm', 5, []])
+def test_a_cold_or_unusable_cache_leaves_the_keys_out_but_the_context_is_written(
+        monkeypatch, capsys, tmp_path, prompt_cache):
+    run_main(monkeypatch, capsys, with_cache(prompt_cache))
+    saved = json.loads((tmp_path / 'log' / 'context' / 'sess-1.json').read_text(encoding='utf-8'))
+    assert saved['used_tokens'] == 231_000 and 'cache_ttl' not in saved and 'cache_expires_at' not in saved
+
+
+def test_without_prompt_cache_the_state_file_has_no_cache_keys(monkeypatch, capsys, tmp_path):
+    run_main(monkeypatch, capsys, status())
+    saved = json.loads((tmp_path / 'log' / 'context' / 'sess-1.json').read_text(encoding='utf-8'))
+    assert 'cache_ttl' not in saved
