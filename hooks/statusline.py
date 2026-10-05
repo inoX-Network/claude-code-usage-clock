@@ -173,13 +173,17 @@ def _model_name(status_input: dict) -> str:
 
 
 def _save_context(status_input: dict, now: float) -> None:
-    """The context state for the later reminder. Needs a measured context (not before the first answer);
-    any error is ignored, the line is more important."""
+    """The context state for the later reminder and the wake-up watcher. Needs a measured context (not before
+    the first answer). The cache clock goes along only while the cache is warm; any error is ignored, the line
+    is more important."""
     try:
         numbers = _context_numbers(status_input)
         if numbers is not None and numbers[1] is not None:
+            cache = status_input.get('prompt_cache')
+            warm = isinstance(cache, dict) and cache.get('warm') is True
             _context_state.save(os.path.join(_hookio.log_dir(), 'context'), status_input.get('session_id'),
-                                numbers[0], numbers[1], now)
+                                numbers[0], numbers[1], now,
+                                cache.get('ttl') if warm else None, cache.get('expires_at') if warm else None)
     except Exception:
         pass
 

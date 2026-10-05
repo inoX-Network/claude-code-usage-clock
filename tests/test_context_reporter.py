@@ -17,6 +17,7 @@ import pytest
 
 import _config
 import _context_state
+import _wake
 import context_reporter
 import statusline
 from conftest import HOOKS
@@ -531,3 +532,139 @@ def test_the_hook_does_not_read_a_transcript_even_when_the_input_names_one(tmp_p
     transcript.write_text('{"usage": {"input_tokens": 999999}}\n', encoding='utf-8')
     context = run_hook(dict(PROMPT, transcript_path=str(transcript)))[1]
     assert context == LINE
+
+
+# --- The offer to start the wake-up watcher ------------------------------------------------------------------
+
+WATCHER = os.path.join(HOOKS, 'wake_watcher.py')
+HINT = (f' Wake-up watcher: start it once now in the background (Bash, run_in_background true, timeout 7200000): '
+        f'python3 {WATCHER} {SID}')
+
+
+def wake_cfg(from_k=200):
+    cfg = json.loads(json.dumps(CFG))
+    cfg['wake_watcher']['from_k'] = from_k
+    return cfg
+
+
+def beat(tmp_path, state, age_s, session_id=SID):
+    """A heartbeat of the watcher that is `age_s` seconds old at NOW."""
+    _wake.write_heartbeat(str(state_dir(tmp_path)), session_id, state, NOW.timestamp() - age_s)
+
+
+def test_the_watcher_is_off_by_default_and_the_line_stays_as_it_was(tmp_path):
+    save(tmp_path, used=900_000)
+    assert build(tmp_path)[1] == 'Context: 900k/1000k tokens (90%). Measured, not estimated.'
+
+
+def test_from_k_zero_never_offers_it(tmp_path):
+    save(tmp_path, used=900_000)
+    assert 'Wake-up' not in build(tmp_path, cfg=wake_cfg(0))[1]
+
+
+@pytest.mark.parametrize('used,offered', [(199_999, False), (200_000, True), (200_001, True), (900_000, True),
+                                          (10_000, False)])
+def test_the_offer_starts_at_exactly_from_k_thousand_tokens(tmp_path, used, offered):
+    save(tmp_path, used=used)
+    line = build(tmp_path, cfg=wake_cfg())[1]
+    assert line.startswith('Context: ') and ('Wake-up watcher' in line) is offered
+
+
+def test_the_offer_follows_the_line_with_a_ready_command(tmp_path):
+    save(tmp_path, used=250_000)
+    assert build(tmp_path, cfg=wake_cfg()) == (
+        'UserPromptSubmit', 'Context: 250k/1000k tokens (25%). Measured, not estimated.' + HINT)
+
+
+def test_the_threshold_may_be_fractional(tmp_path):
+    save(tmp_path, used=12_499)
+    assert 'Wake-up' not in build(tmp_path, cfg=wake_cfg(12.5))[1]
+    save(tmp_path, used=12_500)
+    assert 'Wake-up' in build(tmp_path, cfg=wake_cfg(12.5))[1]
+
+
+def test_the_path_of_the_script_is_absolute_and_quoted(tmp_path, monkeypatch):
+    save(tmp_path, used=250_000)
+    monkeypatch.setattr(context_reporter, '__file__', '/opt/my hooks/it\'s/context_reporter.py')
+    line = build(tmp_path, cfg=wake_cfg())[1]
+    assert line.endswith(f"python3 '/opt/my hooks/it'\"'\"'s/wake_watcher.py' {SID}")
+
+
+def test_the_path_is_made_absolute_from_a_relative_script_name(tmp_path, monkeypatch):
+    save(tmp_path, used=250_000)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(context_reporter, '__file__', 'context_reporter.py')
+    assert build(tmp_path, cfg=wake_cfg())[1].endswith(f'python3 {tmp_path}/wake_watcher.py {SID}')
+
+
+def test_after_a_tool_there_is_never_an_offer_even_far_above_the_threshold(tmp_path):
+    save(tmp_path, used=900_000)
+    assert build(tmp_path, TOOL, wake_cfg()) == ('PostToolUse', 'Context: 900k/1000k tokens (90%). Measured, not estimated.')
+
+
+@pytest.mark.parametrize('agent_id', ['a1b2c3', '', None, 0])
+def test_a_subagent_gets_no_offer(tmp_path, agent_id):
+    save(tmp_path, used=900_000)
+    assert build(tmp_path, dict(PROMPT, agent_id=agent_id), wake_cfg()) is None
+
+
+@pytest.mark.parametrize('state,age_s,offered', [
+    ('watching', 0, False), ('watching', 60, False), ('watching', 180, False),      # a living watcher
+    ('watching', 181, True), ('watching', 3600, True),                              # one that has stopped
+    ('fired', 0, False), ('fired', 59 * 60, False), ('fired', 60 * 60, False),      # the rest after a fire
+    ('fired', 60 * 60 + 1, True), ('fired', 5 * 3600, True)])
+def test_no_offer_while_a_watcher_lives_or_has_fired_within_the_hour(tmp_path, state, age_s, offered):
+    save(tmp_path, used=250_000)
+    beat(tmp_path, state, age_s)
+    assert ('Wake-up watcher' in build(tmp_path, cfg=wake_cfg())[1]) is offered
+
+
+def test_a_heartbeat_of_another_session_does_not_block(tmp_path):
+    save(tmp_path, used=250_000)
+    beat(tmp_path, 'watching', 0, session_id='another-session')
+    assert 'Wake-up watcher' in build(tmp_path, cfg=wake_cfg())[1]
+
+
+def test_a_broken_heartbeat_does_not_block(tmp_path):
+    save(tmp_path, used=250_000)
+    (state_dir(tmp_path) / f'{SID}.watch').write_text('not json', encoding='utf-8')
+    assert 'Wake-up watcher' in build(tmp_path, cfg=wake_cfg())[1]
+
+
+def test_a_heartbeat_does_not_change_the_line_below_the_threshold(tmp_path):
+    save(tmp_path, used=100_000)
+    beat(tmp_path, 'watching', 0)
+    assert build(tmp_path, cfg=wake_cfg())[1] == 'Context: 100k/1000k tokens (10%). Measured, not estimated.'
+
+
+def test_a_failing_offer_never_costs_the_context_line(tmp_path, monkeypatch):
+    save(tmp_path, used=250_000)
+
+    def boom(*_a):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(_wake, 'read_heartbeat', boom)
+    assert build(tmp_path, cfg=wake_cfg())[1] == 'Context: 250k/1000k tokens (25%). Measured, not estimated.'
+
+
+def test_a_missing_wake_module_does_not_cost_the_context_line(tmp_path, monkeypatch):
+    save(tmp_path, used=250_000)
+    monkeypatch.setitem(sys.modules, '_wake', None)       # an import of it now fails
+    assert build(tmp_path, cfg=wake_cfg())[1] == 'Context: 250k/1000k tokens (25%). Measured, not estimated.'
+
+
+def test_the_hook_process_offers_the_watcher_from_the_configured_threshold(tmp_path):
+    fresh_state(tmp_path, used=250_000)
+    off = run_hook(PROMPT)
+    assert off[1] == 'Context: 250k/1000k tokens (25%). Measured, not estimated.'
+    on = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 200}}))
+    assert on[0] == 'UserPromptSubmit' and on[1].endswith(HINT)
+    below = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 251}}))
+    assert 'Wake-up' not in below[1]
+
+
+def test_the_command_in_the_offer_splits_into_interpreter_script_and_session_id(tmp_path):
+    import shlex
+    fresh_state(tmp_path, used=250_000)
+    command = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 200}}))[1].split('): ', 1)[1]
+    assert shlex.split(command) == ['python3', WATCHER, SID]
+    assert os.path.isfile(shlex.split(command)[1])

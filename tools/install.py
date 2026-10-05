@@ -13,6 +13,8 @@ What it does:
      spawn-gate   PreToolUse Agent|Workflow|Skill: usage thresholds and model rules
                   (enforce: broken -> exit 2, shadow: ... || true)
      soft-stop    PreToolUse *: soft stop for subagents near the usage limit            (... || true)
+   The wake-up watcher (wake_watcher.py, _wake.py) needs no settings entry and is no component: it is copied
+   with the other runtime files and started by the context reporter's hint once `wake_watcher.from_k` is set.
    Own entries are recognised by the full path of the script in --target, not by its file name. They are updated
    (command and matcher), never duplicated. A hook of someone else that has the same script name is left alone
    and named in the output. Everything else in settings.json stays as it is.
@@ -53,8 +55,9 @@ SMOKE_TIMEOUT_S = 15  # generous: the smoke test may run on a loaded machine, th
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
-REQUIRED_FILES = ('_config.py', '_context_state.py', '_hookio.py', '_spawn_check.py', '_usage.py',
-                  'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py', 'soft_stop.py')
+REQUIRED_FILES = ('_config.py', '_context_state.py', '_hookio.py', '_spawn_check.py', '_usage.py', '_wake.py',
+                  'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py', 'soft_stop.py',
+                  'wake_watcher.py')
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
 NEVER_BLOCK = ' || true'

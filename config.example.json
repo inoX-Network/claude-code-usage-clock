@@ -30,6 +30,10 @@
     "after_tool_from": 50,
     "max_age_min": 15
   },
+  "wake_watcher": {
+    "from_k": 0,
+    "lead_min": 10
+  },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
     "model_effort_action": "warn",

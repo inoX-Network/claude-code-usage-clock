@@ -8,6 +8,11 @@ the hook has nothing to say and stays silent.
 UserPromptSubmit always reports. PostToolUse reports only from `context_reporter.after_tool_from` percent of the
 window on, so a long run is reminded as the context gets expensive, not after every tool call.
 
+UserPromptSubmit (never PostToolUse) also adds one sentence that offers the wake-up watcher (wake_watcher.py) with a
+ready command, from `wake_watcher.from_k` thousand tokens on (0: never). It stays out while a watcher is alive
+or has fired within the last hour (heartbeat file, see _wake.py): the routine the watcher triggers would
+otherwise start the next one. If the offer fails for any reason, the context line is still given.
+
 Silent (no output, exit 0) for a subagent (its context is another one), for another event, and for every file
 that is missing, a link, not a regular file, broken, of another session, implausible, older than
 `context_reporter.max_age_min` or from the future. Never blocks and always exits with 0, even if an import
@@ -15,6 +20,7 @@ fails: exit code 2 on UserPromptSubmit would reject every prompt the user types.
 """
 import json
 import os
+import shlex
 import stat
 import sys
 from datetime import datetime, timezone
@@ -27,8 +33,9 @@ AFTER_TOOL = 'PostToolUse'
 MAX_BYTES = 4096
 
 
-def read_state(directory: str, session_id) -> dict | None:
-    """The state of one session, None for every reason to stay silent. Never follows a link."""
+def read_state(directory: str, session_id, suffix: str = '.json') -> dict | None:
+    """The state of one session, None for every reason to stay silent. Never follows a link. `suffix` picks the
+    file: the state file of the status line, or the heartbeat of the wake-up watcher (`.watch`, see _wake.py)."""
     import _context_state
     import _usage
     if not isinstance(session_id, str) or not _context_state.SESSION_ID.fullmatch(session_id):
@@ -37,7 +44,7 @@ def read_state(directory: str, session_id) -> dict | None:
         return None
     try:
         # O_NONBLOCK: a named pipe planted as the file must not block the hook
-        descriptor = os.open(os.path.join(directory, f'{session_id}.json'),
+        descriptor = os.open(os.path.join(directory, f'{session_id}{suffix}'),
                              os.O_RDONLY | os.O_NONBLOCK | _usage.NO_FOLLOW)
     except OSError:
         return None
@@ -85,6 +92,20 @@ def text(size: int, used: int) -> str:
     return f'Context: {used // 1000}k/{size // 1000}k tokens ({percent}%). Measured, not estimated.'
 
 
+def wake_offer(directory: str, session_id: str, now: datetime) -> str:
+    """The sentence that offers the wake-up watcher, '' if one lives or has fired lately or if anything fails: the
+    context line is worth more than the offer."""
+    try:
+        import _wake
+        if _wake.blocks_hint(_wake.read_heartbeat(directory, session_id), now.timestamp()):
+            return ''
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wake_watcher.py')
+        return (' Wake-up watcher: start it once now in the background (Bash, run_in_background true, '
+                f'timeout 7200000): python3 {shlex.quote(script)} {session_id}')
+    except Exception:
+        return ''
+
+
 def build_context(hook_input: dict, cfg: dict, directory: str, now: datetime) -> tuple[str, str] | None:
     """(event, line) for the model, None to stay silent."""
     event = hook_input.get('hook_event_name')
@@ -100,7 +121,11 @@ def build_context(hook_input: dict, cfg: dict, directory: str, now: datetime) ->
     # The exact share against the limit, not the rounded one shown in the line
     if event == AFTER_TOOL and used * 100 < cfg['context_reporter']['after_tool_from'] * size:
         return None
-    return event, text(size, used)
+    line = text(size, used)
+    from_k = cfg['wake_watcher']['from_k']
+    if event == PROMPT and from_k > 0 and used >= from_k * 1000:
+        line += wake_offer(directory, hook_input['session_id'], now)
+    return event, line
 
 
 def main() -> int:

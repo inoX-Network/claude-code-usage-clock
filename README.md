@@ -16,6 +16,9 @@ repo closes that gap with a status line and four hooks (five parts):
 | **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
 
+On top of these there is one optional helper that needs no settings entry: the [wake-up
+watcher](#the-wake-up-watcher), off by default.
+
 "Log only" (`shadow` mode) means the gates decide and write their decision to a log, but block nothing. Run
 them that way for a while, read the log, then switch to `enforce`.
 
@@ -129,6 +132,43 @@ silent, and says nothing at all, when:
 Several sessions at once each get their own numbers. The texts are English; the model relays them to you in
 your language.
 
+### The wake-up watcher
+
+A model does nothing while you are away, but the prompt cache stays warm for up to an hour. If you leave a long
+session without saying goodbye, the cache goes cold and the next message writes the whole context again. The
+wake-up watcher uses the warm cache: shortly before it expires it wakes the model, which then runs its
+session-end routine (save progress, commit, push, summary) while the context is still cheap to read.
+
+It is off by default. Switch it on by setting `wake_watcher.from_k` to the context size (in thousands of tokens)
+from which you want it, for example `200`. From then on the context reporter adds one sentence to the prompt line:
+the model starts `wake_watcher.py` once in the background (it is copied by the installer, no settings entry). The
+watcher checks once a minute and ends with a message, which Claude Code hands to the model as the result of the
+background task:
+
+- It fires when the context has reached `from_k`, the cache is warm, and the cache expires within the lead time:
+  `wake_watcher.lead_min` (default 10 minutes), but at most a fifth of the cache lifetime, so 10 minutes for the
+  1-hour cache and 1 minute for the 5-minute cache. The message says how long you were away, how much cache is left
+  and the context size, and tells the model to run its session-end routine without asking and not to start another
+  watcher.
+- A cold or unknown cache never fires: waking a cold cache would write the whole context again, which is what it
+  is meant to avoid. When you write, the expiry moves and the watcher waits on.
+- It stops with a short message that asks for nothing (Claude Code still delivers it, after `/clear` to the new
+  session) when the session is gone (after `/clear` or closing it: no fresh state file on
+  three checks in a row; a sleeping computer does not count), after 115 minutes (Claude Code ends background tasks
+  after two hours; the next prompt offers it again), when another watcher for the session lives, or when
+  `from_k` is 0.
+- After a wake-up the offer rests for an hour, so the routine does not start the next watcher.
+
+What you need for this:
+
+- The status line, with its `refreshInterval` (the installer sets 60 seconds). The watcher reads the cache clock
+  from the state file the status line writes; without refreshing it would see an idle session as gone.
+- A **session-end routine** in the instructions the model reads (for example your `CLAUDE.md`): what "save progress,
+  commit, push, summary" means for your projects. The wake-up message is the output of a tool, and a model rightly
+  does not follow instructions from tool output on its own; one line in your instructions that names the wake-up
+  call as a trigger for the routine closes that gap.
+- Only the main session is offered the watcher, never a subagent, and only with a prompt, never after a tool call.
+
 ## What the status line shows
 
 ```
@@ -151,8 +191,9 @@ Opus | 5h 40% ↻14:00 | week 61% ↻Mon 09:00 | ctx 231k/1000k 23% | cache 54m
 - A part whose input is missing is left out, never filled with a guess.
 
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
-used tokens, time) for each session, private to you (mode 0600) and cleaned up after 7 days. The context
-reporter reads that file; without the status line there is nothing for it to report.
+used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
+(mode 0600) and cleaned up after 7 days. The context reporter and the wake-up watcher read that file; without the
+status line there is nothing for them to read.
 
 ## The two gates
 
@@ -246,6 +287,8 @@ that key and writes one line to the log.
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
 | `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |
 | `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
+| `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
+| `wake_watcher.lead_min` | `10` | Longest lead before the prompt cache expires at which the watcher fires, in minutes; never more than a fifth of the cache lifetime (10 min for the 1-hour cache, 1 min for the 5-minute cache). |
 | `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |
@@ -319,6 +362,10 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
   Skill discovery covers your personal skills and the project folders from the start folder up to the repo
   root, not plugin or managed skills or folders added with `--add-dir`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
+- The wake-up watcher is as good as the cache clock Claude Code passes to the status line (`prompt_cache`), which
+  is not a versioned API either; without it the watcher never fires. It cannot wake a session whose computer is
+  asleep or switched off, and it cannot know that the model will follow the wake-up call. If Claude Code ever
+  compacts an idle session on its own before the cache expires, the watcher finds nothing left to save.
 
 ### Working with a guard hook
 

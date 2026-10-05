@@ -1113,6 +1113,27 @@ def test_the_context_state_module_is_required_and_copied(repo, tmp_path):
     assert (target / '_context_state.py').is_file()
 
 
+@pytest.mark.parametrize('name', ['wake_watcher.py', '_wake.py'])
+def test_the_wake_up_watcher_files_are_required_and_copied(repo, tmp_path, name):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert name in load_module().REQUIRED_FILES
+    (repo / 'hooks' / name).unlink()
+    r = run_in(repo, '--settings', settings, '--target', target)
+    assert r.returncode == 1 and name in r.stdout and not target.exists()
+    (repo / 'hooks' / name).write_text('', encoding='utf-8')
+    assert run_in(repo, '--settings', settings, '--target', target).returncode == 0
+    assert (target / name).is_file()
+
+
+def test_the_wake_up_watcher_is_no_component_and_gets_no_settings_entry(tmp_path):
+    settings = write_settings(tmp_path)
+    r = run('--settings', settings, '--target', tmp_path / 'target')
+    assert r.returncode == 0, r.stdout
+    assert 'wake_watcher' not in json.dumps(read(settings)) and 'wake_watcher' not in load_module().COMPONENTS
+    assert 'wake_watcher.py' not in load_module().SCRIPTS.values()
+
+
 def test_a_broken_context_state_module_fails_the_status_line_smoke_test(repo, tmp_path):
     settings = write_settings(tmp_path)
     (repo / 'hooks' / '_context_state.py').write_text('def (:\n', encoding='utf-8')

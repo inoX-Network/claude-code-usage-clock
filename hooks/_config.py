@@ -43,6 +43,10 @@ DEFAULTS: dict = {
         'after_tool_from': 50,
         'max_age_min': 15,
     },
+    'wake_watcher': {
+        'from_k': 0,
+        'lead_min': 10,
+    },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
         'model_effort_action': 'warn',
@@ -159,6 +163,15 @@ def load(log_problems: bool = True) -> dict:
     if not (math.isfinite(reporter['max_age_min']) and reporter['max_age_min'] > 0):
         problems.append('context_reporter.max_age_min: must be a positive number, using default')
         reporter['max_age_min'] = DEFAULTS['context_reporter']['max_age_min']
+    waker = cfg['wake_watcher']
+    # Negative or infinite would never or always arm the watcher; 0 is valid and means off.
+    if not (math.isfinite(waker['from_k']) and waker['from_k'] >= 0):
+        problems.append('wake_watcher.from_k: must be a number of at least 0, using default')
+        waker['from_k'] = DEFAULTS['wake_watcher']['from_k']
+    # Zero, negative or infinite would never fire or no longer be a lead time.
+    if not (math.isfinite(waker['lead_min']) and waker['lead_min'] > 0):
+        problems.append('wake_watcher.lead_min: must be a positive number, using default')
+        waker['lead_min'] = DEFAULTS['wake_watcher']['lead_min']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')
