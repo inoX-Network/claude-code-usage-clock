@@ -55,12 +55,16 @@ decisions.
 
 ## Status line
 
-`statusline.py` prints one line: `<model> | 5h 40% | week 61% [<- weekly limit reached] | ctx 231k/1000k 23% |
-cache 54m`. Every part is left out if its input is missing or invalid (bool, string, NaN, negative): silent
+`statusline.py` prints one line: `<model> | 5h 40% ↻14:00 | week 61% [↻Mon 09:00] [<- weekly limit reached] |
+ctx 231k/1000k 23% | cache 54m`. Every part is left out if its input is missing or invalid (bool, string, NaN, negative): silent
 rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in `ctx –/1000k`).
 
 - **5h / week:** from `rate_limits`, merged through the shared usage file (see above). Colours
-  `statusline.yellow_from` and `red_from`; the marker appears at `thresholds.start_block_week`.
+  `statusline.yellow_from` and `red_from`; the marker appears at `thresholds.start_block_week`. With
+  `statusline.show_reset` (default true) each part ends with its `resets_at` in local time, in the part's colour:
+  `↻HH:MM` for the five hours, `↻<weekday> HH:MM` for the week, the latter only from `yellow_from` on. The
+  reset comes from the same block as the value shown (merged, or the session's own if the merge failed);
+  missing, broken or not in the future: no reset text.
 - **ctx:** from `context_window`. Needs a valid `context_window_size` (at least 1000), otherwise no part.
   `total_input_tokens` (input + cache creation + cache read) is shown in thousands, cut not rounded; the
   percentage is `used_percentage` rounded like the limits, and is left out if it is missing or broken.

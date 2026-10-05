@@ -26,6 +26,11 @@ def plain(text):
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
+def no_reset(text):
+    """The line without its reset times, for tests about something else (the reset tests are further down)."""
+    return re.sub(r' ↻(?:[A-Z][a-z]{2} )?\d{2}:\d{2}', '', text)
+
+
 def run(status_input, tmp_path, extra_env=None, raw=None):
     env = dict(os.environ, **(extra_env or {}))
     return subprocess.run([sys.executable, SCRIPT], input=raw if raw is not None else json.dumps(status_input),
@@ -107,7 +112,7 @@ def test_script_writes_the_file_and_shows_the_merged_values(tmp_path):
     now = time.time()
     r = run({'model': {'display_name': 'Opus'}, 'rate_limits': {'five_hour': b(79, now + 3600),
                                                                  'seven_day': b(48, now + 86400)}}, tmp_path)
-    assert r.returncode == 0 and plain(r.stdout).strip() == 'Opus | 5h 79% | week 48%'
+    assert r.returncode == 0 and no_reset(plain(r.stdout)).strip() == 'Opus | 5h 79% | week 48%'
     saved = json.loads(usage.read_text(encoding='utf-8'))
     assert saved['five_hour']['used_percentage'] == 79 and saved['seven_day']['used_percentage'] == 48
     assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', saved['measured_at'])
@@ -132,7 +137,7 @@ def test_week_marker_appears_through_the_script(tmp_path):
     now = time.time()
     r = run({'model': {'display_name': 'M'}, 'rate_limits': {'five_hour': b(10, now + 3600),
                                                               'seven_day': b(80, now + 86400)}}, tmp_path)
-    assert plain(r.stdout).strip() == 'M | 5h 10% | week 80% <- weekly limit reached'
+    assert no_reset(plain(r.stdout)).strip() == 'M | 5h 10% | week 80% <- weekly limit reached'
 
 
 def test_without_rate_limits_only_the_model_is_shown_and_nothing_is_written(tmp_path):
@@ -153,7 +158,7 @@ def test_garbage_input_keeps_the_stored_values_on_display(tmp_path):
     now = time.time()
     run({'rate_limits': {'five_hour': b(79, now + 3600), 'seven_day': b(48, now + 86400)}}, tmp_path)
     r = run(None, tmp_path, raw='no object')
-    assert r.returncode == 0 and plain(r.stdout).strip() == 'Claude | 5h 79% | week 48%'
+    assert r.returncode == 0 and no_reset(plain(r.stdout)).strip() == 'Claude | 5h 79% | week 48%'
 
 
 def test_broken_usage_file_is_rebuilt_by_an_active_session(tmp_path):
@@ -162,7 +167,7 @@ def test_broken_usage_file_is_rebuilt_by_an_active_session(tmp_path):
     assert r.returncode == 0 and plain(r.stdout).strip() == 'Claude'
     now = time.time()
     r = run({'rate_limits': {'five_hour': b(30, now + 3600)}}, tmp_path)
-    assert plain(r.stdout).strip() == 'Claude | 5h 30%'
+    assert no_reset(plain(r.stdout)).strip() == 'Claude | 5h 30%'
     assert json.loads((tmp_path / 'usage.json').read_text(encoding='utf-8'))['five_hour']['used_percentage'] == 30
 
 
@@ -173,7 +178,7 @@ def test_failed_merge_shows_the_own_values_and_writes_nothing(tmp_path):
     r = run({'model': {'display_name': 'Opus'}, 'rate_limits': {'five_hour': b(23.4, now + 3600),
                                                                  'seven_day': b(19, now + 86400)}},
             tmp_path, {'CCUC_USAGE_FILE': str(blocker / 'usage.json')})
-    assert r.returncode == 0 and plain(r.stdout).strip() == 'Opus | 5h 23% | week 19%'
+    assert r.returncode == 0 and no_reset(plain(r.stdout)).strip() == 'Opus | 5h 23% | week 19%'
     assert sorted(os.listdir(tmp_path)) == ['blocker']
 
 
@@ -188,7 +193,7 @@ def test_own_values_are_shown_without_a_reset_time_when_the_merge_fails(tmp_path
 def test_decimal_values_work_in_a_comma_locale(tmp_path):
     now = time.time()
     r = run({'rate_limits': {'five_hour': b(23.4, now + 3600)}}, tmp_path, {'LC_ALL': 'de_DE.UTF-8', 'LANG': 'de_DE.UTF-8'})
-    assert r.returncode == 0 and plain(r.stdout).strip() == 'Claude | 5h 23%'
+    assert r.returncode == 0 and no_reset(plain(r.stdout)).strip() == 'Claude | 5h 23%'
 
 
 def test_config_file_controls_colors_and_marker(tmp_path):
@@ -228,7 +233,7 @@ def test_main_survives_a_failing_merge_in_process(monkeypatch, capsys):
     now = time.time()
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'rate_limits': {'five_hour': b(40, now + 60)}})))
     assert statusline.main() == 0
-    assert plain(capsys.readouterr().out).strip() == 'Claude | 5h 40%'
+    assert no_reset(plain(capsys.readouterr().out)).strip() == 'Claude | 5h 40%'
 
 
 # --- Context: always visible, colour only by absolute tokens ----------------------------------------
@@ -334,7 +339,7 @@ def test_script_shows_the_context_part_in_utf8_even_on_an_ascii_machine(tmp_path
                   rate_limits={'five_hour': b(40, now + 3600), 'seven_day': b(61, now + 86400)})
     r = subprocess.run([sys.executable, SCRIPT], input=json.dumps(status).encode('utf-8'), capture_output=True,
                        env=dict(os.environ, PYTHONIOENCODING='ascii', PYTHONUTF8='0', LC_ALL='C'), timeout=20)
-    assert r.returncode == 0 and plain(r.stdout.decode('utf-8')).strip() == 'Opus | 5h 40% | week 61% | ctx 231k/1000k 23%'
+    assert r.returncode == 0 and no_reset(plain(r.stdout.decode('utf-8'))).strip() == 'Opus | 5h 40% | week 61% | ctx 231k/1000k 23%'
     early = subprocess.run([sys.executable, SCRIPT], input=json.dumps(window(0)).encode('utf-8'), capture_output=True,
                            env=dict(os.environ, PYTHONIOENCODING='ascii', LC_ALL='C',
                                     CCUC_USAGE_FILE=str(tmp_path / 'other.json')), timeout=20)
@@ -441,3 +446,83 @@ def test_cache_part_through_the_script_uses_the_real_clock(tmp_path):
     assert re.fullmatch(r'Opus \| cache (19|20)m', plain(r.stdout).strip())
     r = run({'prompt_cache': {'warm': True, 'expires_at': int(time.time()) - 5}}, tmp_path)
     assert plain(r.stdout).strip() == 'Claude | cache cold' and f'{RED}cache cold' in r.stdout
+
+
+# --- Reset times: when the window starts again ------------------------------------------------------------
+
+def hhmm(ts):
+    """Local HH:MM, computed independently of the code under test."""
+    return time.strftime('%H:%M', time.localtime(ts))
+
+
+def day_hhmm(ts):
+    return ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[time.localtime(ts).tm_wday] + ' ' + hhmm(ts)
+
+
+def test_the_five_hour_part_shows_its_reset_time_in_its_own_colour():
+    reset = NOW + 2 * 3600
+    line = statusline.render('Opus', 23.0, None, CFG, None, NOW, (reset, None))
+    assert f'{GRAY}5h 23% ↻{hhmm(reset)}{RESET}' in line
+    assert f'{RED}5h 80% ↻{hhmm(reset)}{RESET}' in statusline.render('Opus', 80.0, None, CFG, None, NOW, (reset, None))
+
+
+@pytest.mark.parametrize('week,shown', [(49.4, False), (49.5, True), (61, True), (90, True)])
+def test_the_weekly_reset_time_is_shown_only_from_yellow_on_with_the_weekday(week, shown):
+    reset = NOW + 3 * 86400
+    line = plain(statusline.render('Opus', None, week, CFG, None, NOW, (None, reset)))
+    assert (f'↻{day_hhmm(reset)}' in line) is shown
+
+
+def test_the_weekly_reset_follows_the_configured_yellow_and_stands_before_the_marker():
+    cfg = json.loads(json.dumps(CFG))
+    cfg['statusline']['yellow_from'] = 20
+    reset = NOW + 86400
+    assert f'week 25% ↻{day_hhmm(reset)}' in plain(statusline.render('M', None, 25, cfg, None, NOW, (None, reset)))
+    line = plain(statusline.render('M', None, 80, CFG, None, NOW, (None, reset)))
+    assert line == f'M | week 80% ↻{day_hhmm(reset)} <- weekly limit reached'
+
+
+@pytest.mark.parametrize('reset', [None, NOW, NOW - 60, True, 'tomorrow', float('nan'), float('inf'), 1e300, -1e300])
+def test_a_missing_past_or_broken_reset_time_is_left_out(reset):
+    line = plain(statusline.render('M', 30.0, 70.0, CFG, None, NOW, (reset, reset)))
+    assert line == 'M | 5h 30% | week 70%'
+
+
+def test_without_reset_times_and_without_a_value_nothing_is_added():
+    assert plain(statusline.render('M', None, None, CFG, None, NOW, (NOW + 60, NOW + 60))) == 'M'
+    assert plain(statusline.render('M', 30.0, 70.0, CFG)) == 'M | 5h 30% | week 70%'
+
+
+def test_the_reset_times_can_be_switched_off():
+    cfg = json.loads(json.dumps(CFG))
+    cfg['statusline']['show_reset'] = False
+    line = plain(statusline.render('M', 30.0, 70.0, cfg, None, NOW, (NOW + 3600, NOW + 86400)))
+    assert line == 'M | 5h 30% | week 70%'
+
+
+def test_script_shows_the_merged_reset_times(tmp_path):
+    now = time.time()
+    five, week = now + 3600, now + 2 * 86400
+    r = run({'model': {'display_name': 'Opus'}, 'rate_limits': {'five_hour': b(79, five), 'seven_day': b(48, week)}},
+            tmp_path, {'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
+    assert plain(r.stdout).strip() == f'Opus | 5h 79% ↻{hhmm(five)} | week 48%'
+    r = run({'model': {'display_name': 'Opus'}, 'rate_limits': {'five_hour': None, 'seven_day': b(60, week)}},
+            tmp_path, {'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
+    assert plain(r.stdout).strip() == f'Opus | 5h 79% ↻{hhmm(five)} | week 60% ↻{day_hhmm(week)}'
+
+
+def test_script_shows_the_own_reset_time_when_the_merge_fails(tmp_path):
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('x', encoding='utf-8')
+    five = time.time() + 1800
+    r = run({'rate_limits': {'five_hour': b(12, five)}}, tmp_path, {'CCUC_USAGE_FILE': str(blocker / 'usage.json')})
+    assert plain(r.stdout).strip() == f'Claude | 5h 12% ↻{hhmm(five)}'
+
+
+def test_config_file_switches_the_reset_times_off(tmp_path):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'statusline': {'show_reset': False}}), encoding='utf-8')
+    now = time.time()
+    r = run({'rate_limits': {'five_hour': b(7, now + 3600), 'seven_day': b(80, now + 86400)}}, tmp_path,
+            {'CCUC_CONFIG': str(config), 'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
+    assert plain(r.stdout).strip() == 'Claude | 5h 7% | week 80% <- weekly limit reached'

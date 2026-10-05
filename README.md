@@ -132,11 +132,14 @@ your language.
 ## What the status line shows
 
 ```
-Opus | 5h 40% | week 61% | ctx 231k/1000k 23% | cache 54m
+Opus | 5h 40% ↻14:00 | week 61% ↻Mon 09:00 | ctx 231k/1000k 23% | cache 54m
 ```
 
 - `5h` and `week` come from `rate_limits` (yellow from 50 %, red from 75 %); at the weekly threshold
   `<- weekly limit reached` follows.
+- `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday and appears only
+  from yellow on; below that it is days away. A missing or past reset time is left out
+  (`statusline.show_reset`).
 - `ctx` is the input context of the session: tokens used, window size, share of the window. It is always shown,
   from the first prompt on; before the first answer it reads `ctx –/1000k` instead of a made-up zero. The colour
   depends on the absolute tokens, not on the percentage: yellow from 300k, red from 500k
@@ -238,6 +241,7 @@ that key and writes one line to the log.
 | `display.show_usage` / `show_time` | `true` / `true` | Parts of the prompt line. |
 | `statusline.yellow_from` / `red_from` | `50` / `75` | Colours. |
 | `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |
+| `statusline.show_reset` | `true` | Show when the windows reset (`↻14:00`; the weekly one from yellow on). |
 | `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
 | `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |

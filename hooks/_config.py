@@ -22,6 +22,7 @@ DEFAULTS: dict = {
         'yellow_from': 50,
         'red_from': 75,
         'week_stop_marker': True,
+        'show_reset': True,
         'context_yellow_from_k': 300,
         'context_red_from_k': 500,
         'cache_yellow_below_min': 5,
