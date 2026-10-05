@@ -8,6 +8,8 @@ What it does:
 3. Backs up settings.json, then adds the selected components:
      statusline   statusLine = python3 <target>/statusline.py (refreshInterval 60)
      usage-clock  UserPromptSubmit: usage and local time as context for the model      (... || true)
+     context-reporter  UserPromptSubmit and PostToolUse *: the fill level of the context window
+                  as context for the model, needs the status line (two entries, same command) (... || true)
      spawn-gate   PreToolUse Agent|Workflow|Skill: usage thresholds and model rules
                   (enforce: broken -> exit 2, shadow: ... || true)
      soft-stop    PreToolUse *: soft stop for subagents near the usage limit            (... || true)
@@ -40,7 +42,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
@@ -50,25 +52,29 @@ TIMEOUT_S = 5
 SMOKE_TIMEOUT_S = 15  # generous: the smoke test may run on a loaded machine, the hook timeout stays 5
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
-COMPONENTS = ('statusline', 'usage-clock', 'spawn-gate', 'soft-stop')
+COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
 REQUIRED_FILES = ('_config.py', '_context_state.py', '_hookio.py', '_spawn_check.py', '_usage.py',
-                  'statusline.py', 'usage_clock.py', 'spawn_gate.py', 'soft_stop.py')
-SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py',
+                  'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py', 'soft_stop.py')
+SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
 NEVER_BLOCK = ' || true'
 SPAWN_BROKEN = ' || { echo "spawn gate broken - start denied" >&2; exit 2; }'
 GATES = ('spawn-gate', 'soft-stop')  # the components that have a --mode
-# component -> (event, matcher). None = no matcher.
-HOOKS = {'usage-clock': ('UserPromptSubmit', None),
-         'spawn-gate': ('PreToolUse', 'Agent|Workflow|Skill'),
-         'soft-stop': ('PreToolUse', '*')}
-TOUCHED_EVENTS = ('UserPromptSubmit', 'PreToolUse')
+# component -> [(event, matcher), ...]. None = no matcher. One command per component, one entry per event.
+HOOKS = {'usage-clock': [('UserPromptSubmit', None)],
+         'context-reporter': [('UserPromptSubmit', None), ('PostToolUse', '*')],
+         'spawn-gate': [('PreToolUse', 'Agent|Workflow|Skill')],
+         'soft-stop': [('PreToolUse', '*')]}
+TOUCHED_EVENTS = tuple(dict.fromkeys(event for entries in HOOKS.values() for event, _ in entries))
 TEMP_SUFFIX = '.tmp-usage-clock'
 
-# One typical input per component for the smoke test
+# One typical input per component for the smoke test. The context reporter needs a state file of its session.
+SMOKE_SESSION = 'smoke-test'
+SMOKE_CONTEXT = 'Context: 123k/1000k tokens (12%). Measured, not estimated.'
 SMOKE_INPUTS = {
     'statusline': {'model': {'display_name': 'smoke-test'}},
     'usage-clock': {'hook_event_name': 'UserPromptSubmit', 'prompt': 'smoke test'},
+    'context-reporter': {'hook_event_name': 'UserPromptSubmit', 'session_id': SMOKE_SESSION, 'prompt': 'smoke test'},
     'spawn-gate': {'hook_event_name': 'PreToolUse', 'tool_name': 'Agent',
                    'tool_input': {'subagent_type': 'smoke-agent', 'prompt': 'smoke test'}},
     'soft-stop': {'hook_event_name': 'PreToolUse', 'agent_id': 'smoke-test', 'tool_name': 'Read',
@@ -207,10 +213,11 @@ def load_settings(path: str) -> tuple[dict, bool]:
 def installed_command(data: dict, component: str, target: str) -> str | None:
     """The command of our installed entry of this component (script in --target), None if there is none."""
     path = os.path.join(target, SCRIPTS[component])
-    for group in data.get('hooks', {}).get(HOOKS[component][0], []):
-        for entry in group.get('hooks', []):
-            if points_to(entry.get('command'), path):
-                return entry.get('command')
+    for event, _ in HOOKS[component]:
+        for group in data.get('hooks', {}).get(event, []):
+            for entry in group.get('hooks', []):
+                if points_to(entry.get('command'), path):
+                    return entry.get('command')
     return None
 
 
@@ -328,11 +335,12 @@ def plan_install(data: dict, args: argparse.Namespace, target: str, modes: dict[
     hook_components = [c for c in args.components if c in HOOKS]
     hooks = data.setdefault('hooks', {}) if hook_components else None
     for component in hook_components:
-        event, matcher = HOOKS[component]
         mode = modes[component][0] if component in modes else None
         command = hook_command(target, component, mode, args.week_ok_until)
         earlier = option_value(installed_command(data, component, target), 'week-ok-until')
-        messages += upsert_hook(hooks, event, matcher, command, SCRIPTS[component], os.path.join(target, SCRIPTS[component]))
+        for event, matcher in HOOKS[component]:
+            messages += upsert_hook(hooks, event, matcher, command, SCRIPTS[component],
+                                    os.path.join(target, SCRIPTS[component]))
         if component == 'spawn-gate' and earlier and not args.week_ok_until:
             shown = re.sub(r'[^0-9A-Za-z-]', '?', earlier)[:20]
             messages.append(f'{SCRIPTS[component]}: the weekly approval --week-ok-until={shown} is removed, this run '
@@ -354,24 +362,24 @@ def plan_uninstall(data: dict, args: argparse.Namespace, target: str) -> list[st
     removed_any = False
     for component in (c for c in args.components if c in HOOKS):
         path = os.path.join(target, SCRIPTS[component])
-        event = HOOKS[component][0]
-        groups = hooks.get(event, [])
-        removed = 0
-        for group in list(groups):
-            entries = group.get('hooks', [])
-            kept = [entry for entry in entries if not points_to(entry.get('command'), path)]
-            if len(kept) == len(entries):
-                continue
-            removed += len(entries) - len(kept)
-            if kept:
-                group['hooks'] = kept
-            else:
-                groups.remove(group)
-        if removed and not groups:
-            del hooks[event]
-        removed_any = removed_any or bool(removed)
-        messages.append(f'{event}: {SCRIPTS[component]} removed' if removed
-                        else f'{event}: {SCRIPTS[component]} not found - unchanged')
+        for event, _ in HOOKS[component]:
+            groups = hooks.get(event, [])
+            removed = 0
+            for group in list(groups):
+                entries = group.get('hooks', [])
+                kept = [entry for entry in entries if not points_to(entry.get('command'), path)]
+                if len(kept) == len(entries):
+                    continue
+                removed += len(entries) - len(kept)
+                if kept:
+                    group['hooks'] = kept
+                else:
+                    groups.remove(group)
+            if removed and not groups:
+                del hooks[event]
+            removed_any = removed_any or bool(removed)
+            messages.append(f'{event}: {SCRIPTS[component]} removed' if removed
+                            else f'{event}: {SCRIPTS[component]} not found - unchanged')
     if removed_any and not hooks:
         del data['hooks']
     if 'statusline' in args.components and 'statusLine' in data:
@@ -418,6 +426,12 @@ def _check_evidence(component: str, stdout: str, log_dir: str) -> str | None:
         if 'Usage:' not in context:
             return 'no usage part in the context (a module failed to load?)'
         return None if 'Now:' in context else 'no time part in the context'
+    if component == 'context-reporter':
+        try:
+            context = json.loads(stdout)['hookSpecificOutput']['additionalContext']
+        except (ValueError, KeyError, TypeError):
+            return f'output is not the expected JSON: {stdout[:100]!r}'
+        return None if context == SMOKE_CONTEXT else f'unexpected context line: {str(context)[:100]!r}'
     records = _log_records(log_dir, SCRIPTS[component][:-len('.py')])
     if not records:
         return 'the hook ran but wrote no log line (a module failed to load?)'
@@ -426,6 +440,16 @@ def _check_evidence(component: str, stdout: str, log_dir: str) -> str | None:
         if record.get('decision') == 'error' or 'internally' in reason:
             return f'failed internally ({reason[:100]})'
     return None
+
+
+def write_smoke_context(log_dir: str) -> None:
+    """The state file the status line would have written for the smoke session: fresh, 12 % of a 1000k window."""
+    folder = os.path.join(log_dir, 'context')
+    os.makedirs(folder)
+    state = {'session_id': SMOKE_SESSION, 'context_window_size': 1_000_000, 'used_tokens': 123_456,
+             'measured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
+    with open(os.path.join(folder, f'{SMOKE_SESSION}.json'), 'w', encoding='utf-8') as f:
+        json.dump(state, f)
 
 
 def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]]) -> list[str]:
@@ -439,6 +463,8 @@ def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]]) -> l
         os.mkdir(os.path.join(tmp, 'agents'))
         with open(os.path.join(tmp, 'agents', 'smoke-agent.md'), 'w', encoding='utf-8') as f:
             f.write('---\nname: smoke-agent\nmodel: haiku\neffort: low\n---\nSmoke test agent.\n')
+        if 'context-reporter' in args.components:
+            write_smoke_context(os.path.join(tmp, 'log'))
         env = dict(os.environ, HOME=os.path.join(tmp, 'home'), CCUC_USAGE_FILE=os.path.join(tmp, 'usage.json'),
                    CCUC_LOG_DIR=os.path.join(tmp, 'log'), CCUC_AGENT_DIRS=os.path.join(tmp, 'agents'),
                    CCUC_CONFIG=os.path.join(tmp, 'no-config.json'))

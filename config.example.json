@@ -25,6 +25,10 @@
     "week_action": "warn",
     "ask_verified_in_bypass": false
   },
+  "context_reporter": {
+    "after_tool_from": 50,
+    "max_age_min": 15
+  },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
     "model_effort_action": "warn",

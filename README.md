@@ -5,13 +5,14 @@ whether new agents may start and running ones keep working.
 
 Claude Code knows your plan limits, but the model working for you does not. It cannot tell whether starting
 ten agents at 80 % of the five-hour window is a good idea, it does not know that it is 3 a.m., and an
-overnight run happily spends the whole window. This repo closes that gap with a status line and three hooks
-(four parts):
+overnight run happily spends the whole window. It cannot see how full its own context window is either. This
+repo closes that gap with a status line and four hooks (five parts):
 
 | Part | What it does | Maturity | Default |
 |---|---|---|---|
 | **Status line** | Shows model, 5h and weekly usage, the context size and the prompt cache clock in colour. Several sessions merge into one shared usage file, so every session and every hook sees the same, current numbers. | stable | on |
 | **Usage clock** (`UserPromptSubmit`) | Adds one line of context to every prompt: usage, reset times, and the local date and time. Both parts switch independently. | stable | on |
+| **Context reporter** (`UserPromptSubmit`, `PostToolUse`) | Tells the model how full its context window is, from the numbers the status line measured: with every prompt, and after a tool call once the context is half full. Needs the status line; subagents get nothing. | available | on |
 | **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
 
@@ -33,7 +34,7 @@ them that way for a while, read the log, then switch to `enforce`.
 git clone https://github.com/inoX-Network/claude-code-usage-clock
 cd claude-code-usage-clock
 python3 tools/install.py --dry-run     # shows what would change
-python3 tools/install.py               # installs all four parts, gates in shadow mode
+python3 tools/install.py               # installs all five parts, gates in shadow mode
 ```
 
 The installer copies the scripts to `~/.claude/hooks/usage-clock/`, creates `config.json` there if it does not
@@ -57,7 +58,7 @@ Options:
 
 | Option | Meaning |
 |---|---|
-| `--components statusline,usage-clock,spawn-gate,soft-stop` | Install only some parts. |
+| `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop` | Install only some parts. The context reporter adds two entries (`UserPromptSubmit` and `PostToolUse`) and says nothing without the status line. |
 | `--mode shadow\|enforce` | Mode of the two gates. Without it an existing installation keeps its mode; a first install starts in `shadow`. |
 | `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). Needs the component `spawn-gate`. |
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
@@ -105,6 +106,29 @@ The time part is useful on its own: every message in the transcript carries its 
 find later when something happened. Turn either part off in `config.json` (`display.show_usage`,
 `display.show_time`).
 
+### The context window
+
+```
+Context: 168k/1000k tokens (17%). Measured, not estimated.
+```
+
+The context reporter adds this line to every prompt, and after a tool call once the context has reached
+`context_reporter.after_tool_from` (default 50 %) of the window, so a long run is reminded as the context gets
+expensive and not after every single call. The numbers are those of the `ctx` part of the status line, with the
+tokens cut to thousands and the percentage rounded the same way. Without them the model can only guess how full
+its context is.
+
+It reads nothing but the per-session file the status line writes (see below), never the transcript. It stays
+silent, and says nothing at all, when:
+
+- the status line is not installed, or has not measured this session yet (before the first answer),
+- the measurement is older than `context_reporter.max_age_min` (default 15 minutes) or from the future,
+- the file is missing, broken, a link, or belongs to another session,
+- the call comes from a subagent: its context is another one, and the file describes the main session.
+
+Several sessions at once each get their own numbers. The texts are English; the model relays them to you in
+your language.
+
 ## What the status line shows
 
 ```
@@ -124,7 +148,8 @@ Opus | 5h 40% | week 61% | ctx 231k/1000k 23% | cache 54m
 - A part whose input is missing is left out, never filled with a guess.
 
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
-used tokens, time) for each session, private to you (mode 0600) and cleaned up after 7 days.
+used tokens, time) for each session, private to you (mode 0600) and cleaned up after 7 days. The context
+reporter reads that file; without the status line there is nothing for it to report.
 
 ## The two gates
 
@@ -215,6 +240,8 @@ that key and writes one line to the log.
 | `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |
 | `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
+| `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |
+| `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
 | `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |
@@ -277,6 +304,9 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
   ([#40094](https://github.com/anthropics/claude-code/issues/40094),
   [#45133](https://github.com/anthropics/claude-code/issues/45133)). In all these cases the tools report
   `unknown` rather than wrong numbers.
+- The context reporter is only as good as the status line: its numbers come from the per-session file the status
+  line writes from the `context_window` input, which is not a versioned API either. If that input is missing, the
+  reporter says nothing rather than guess. It reports the main session only; a subagent gets no line.
 - The usage file and the counters are ordinary files. A model that can write them can fake them, and a model
   that can edit `settings.json` or the config can switch the gates off. On their own these tools are a
   seatbelt, not a lock. See [Working with a guard hook](#working-with-a-guard-hook).
