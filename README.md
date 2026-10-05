@@ -152,7 +152,8 @@ background task:
   watcher.
 - A cold or unknown cache never fires: waking a cold cache would write the whole context again, which is what it
   is meant to avoid. When you write, the expiry moves and the watcher waits on.
-- It stops without waking anyone when the session is gone (after `/clear` or closing it: no fresh state file on
+- It stops with a short message that asks for nothing (Claude Code still delivers it, after `/clear` to the new
+  session) when the session is gone (after `/clear` or closing it: no fresh state file on
   three checks in a row; a sleeping computer does not count), after 115 minutes (Claude Code ends background tasks
   after two hours; the next prompt offers it again), when another watcher for the session lives, or when
   `from_k` is 0.
