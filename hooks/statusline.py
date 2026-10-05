@@ -13,11 +13,12 @@ If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent ins
 missing measurement is not "zero percent". If the merge fails, the session's own values are shown and
 nothing is written. The exit code is always 0.
 
-Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23%
+Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23% | cache 54m
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -87,6 +88,28 @@ def _context_part(status_input: dict, line_cfg: dict) -> str:
     return f' {GRAY}| {color}ctx {int(used) // 1000}k/{window}{f" {percent}%" if percent is not None else ""}{RESET}'
 
 
+def _cache_part(status_input: dict, line_cfg: dict, now: float) -> str:
+    """`cache 54m` (minutes left, rounded up), yellow below the limit, `cache cold` in red.
+
+    prompt_cache is missing until the first request. Warm without a usable expires_at says nothing: a clock
+    that is guessed would be worse than none.
+    """
+    cache = status_input.get('prompt_cache')
+    if not isinstance(cache, dict):
+        return ''
+    warm = cache.get('warm')
+    if warm is False:
+        return f' {GRAY}| {RED}cache cold{RESET}'
+    expires = cache.get('expires_at')
+    if warm is not True or not _usage._number(expires):
+        return ''
+    minutes = math.ceil((expires - now) / 60)
+    if minutes <= 0:
+        return f' {GRAY}| {RED}cache cold{RESET}'
+    color = YELLOW if minutes < line_cfg['cache_yellow_below_min'] else GRAY
+    return f' {GRAY}| {color}cache {minutes}m{RESET}'
+
+
 def render(model: str, five: float | None, week: float | None, cfg: dict, status_input: dict | None = None,
            now: float | None = None) -> str:
     line_cfg, limits = cfg['statusline'], cfg['thresholds']
@@ -99,6 +122,7 @@ def render(model: str, five: float | None, week: float | None, cfg: dict, status
         line += f' {RED}{WEEK_STOP_TEXT}{RESET}'
     if status_input is not None:
         line += _context_part(status_input, line_cfg)
+        line += _cache_part(status_input, line_cfg, time.time() if now is None else now)
     return line
 
 

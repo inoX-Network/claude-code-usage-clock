@@ -354,3 +354,90 @@ def test_config_file_controls_the_context_colors(tmp_path):
     assert f'{GRAY}ctx 9k' in run(window(9_999), tmp_path, env).stdout
     assert f'{YELLOW}ctx 10k' in run(window(10_000), tmp_path, env).stdout
     assert f'{RED}ctx 20k' in run(window(20_000), tmp_path, env).stdout
+
+
+# --- Cache clock from prompt_cache -------------------------------------------------------------------
+
+NOW = 1_800_000_000.0
+
+
+def cache_of(prompt_cache, cfg=CFG, now=NOW, **status):
+    """The cache part of the line, as the coloured text, or '' if the line has none."""
+    text = statusline.render('M', None, None, cfg, dict(status, prompt_cache=prompt_cache), now)
+    match = re.search(r'\| ((?:\x1b\[[0-9;]*m)*cache .*?)\x1b\[0m', text)
+    return match.group(1) if match else ''
+
+
+def warm(seconds_left, **extra):
+    return dict({'warm': True, 'ttl': '1h', 'expires_at': NOW + seconds_left}, **extra)
+
+
+def test_cache_part_follows_the_context_part_in_the_documented_order():
+    status = dict(window(231_000), prompt_cache=warm(54 * 60))
+    assert plain(statusline.render('Opus', 40, 61, CFG, status, NOW)) == (
+        'Opus | 5h 40% | week 61% | ctx 231k/1000k 23% | cache 54m')
+
+
+def test_cache_part_without_a_context_part():
+    assert plain(statusline.render('M', None, None, CFG, {'prompt_cache': warm(3600)}, NOW)) == 'M | cache 60m'
+
+
+def test_cache_exact_colors_and_layout():
+    assert statusline.render('M', None, None, CFG, {'prompt_cache': warm(54 * 60)}, NOW) == (
+        f'{GRAY}M{RESET} {GRAY}| {GRAY}cache 54m{RESET}')
+    assert statusline.render('M', None, None, CFG, {'prompt_cache': warm(3 * 60)}, NOW) == (
+        f'{GRAY}M{RESET} {GRAY}| {YELLOW}cache 3m{RESET}')
+    assert statusline.render('M', None, None, CFG, {'prompt_cache': {'warm': False}}, NOW) == (
+        f'{GRAY}M{RESET} {GRAY}| {RED}cache cold{RESET}')
+
+
+@pytest.mark.parametrize('seconds,text,color', [(54 * 60, 'cache 54m', GRAY), (5 * 60 + 1, 'cache 6m', GRAY),
+                                                (5 * 60, 'cache 5m', GRAY), (4 * 60 + 1, 'cache 5m', GRAY),
+                                                (4 * 60, 'cache 4m', YELLOW), (3 * 60 + 1, 'cache 4m', YELLOW),
+                                                (60, 'cache 1m', YELLOW), (1, 'cache 1m', YELLOW),
+                                                (0, 'cache cold', RED), (-1, 'cache cold', RED),
+                                                (-3600, 'cache cold', RED)])
+def test_cache_minutes_are_rounded_up_and_yellow_below_five_cold_when_expired(seconds, text, color):
+    assert cache_of(warm(seconds)) == f'{color}{text}'
+
+
+def test_cache_yellow_limit_comes_from_the_config():
+    cfg = json.loads(json.dumps(CFG))
+    cfg['statusline']['cache_yellow_below_min'] = 10
+    assert cache_of(warm(9 * 60), cfg) == f'{YELLOW}cache 9m'
+    assert cache_of(warm(10 * 60), cfg) == f'{GRAY}cache 10m'
+    cfg['statusline']['cache_yellow_below_min'] = 0
+    assert cache_of(warm(60), cfg) == f'{GRAY}cache 1m'
+
+
+def test_cache_cold_when_not_warm_whatever_expires_at_says():
+    assert cache_of({'warm': False}) == f'{RED}cache cold'
+    assert cache_of({'warm': False, 'expires_at': NOW + 3600}) == f'{RED}cache cold'
+    assert cache_of({'warm': False, 'expires_at': None, 'ttl': '5m'}) == f'{RED}cache cold'
+
+
+@pytest.mark.parametrize('prompt_cache', [None, 'warm', 5, [], [{'warm': True}], {},
+                                          {'warm': True}, {'warm': True, 'expires_at': None},
+                                          {'warm': True, 'expires_at': True}, {'warm': True, 'expires_at': '1800003600'},
+                                          {'warm': True, 'expires_at': float('nan')},
+                                          {'warm': True, 'expires_at': float('inf')},
+                                          {'warm': 'false', 'expires_at': NOW + 3600},
+                                          {'warm': None, 'expires_at': NOW + 3600},
+                                          {'warm': 0, 'expires_at': NOW + 3600},
+                                          {'expires_at': NOW + 3600}])
+def test_cache_part_is_left_out_if_it_cannot_be_judged(prompt_cache):
+    assert cache_of(prompt_cache) == ''
+    assert plain(statusline.render('M', 10, None, CFG, {'prompt_cache': prompt_cache}, NOW)) == 'M | 5h 10%'
+
+
+def test_a_missing_prompt_cache_key_leaves_the_part_out():
+    assert plain(statusline.render('M', None, None, CFG, window(5_000), NOW)) == 'M | ctx 5k/1000k 23%'
+
+
+def test_cache_part_through_the_script_uses_the_real_clock(tmp_path):
+    expires = int(time.time()) + 20 * 60
+    r = run({'model': {'display_name': 'Opus'}, 'prompt_cache': {'warm': True, 'ttl': '1h', 'expires_at': expires}},
+            tmp_path)
+    assert re.fullmatch(r'Opus \| cache (19|20)m', plain(r.stdout).strip())
+    r = run({'prompt_cache': {'warm': True, 'expires_at': int(time.time()) - 5}}, tmp_path)
+    assert plain(r.stdout).strip() == 'Claude | cache cold' and f'{RED}cache cold' in r.stdout
