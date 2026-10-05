@@ -21,6 +21,9 @@ DEFAULTS: dict = {
         'yellow_from': 50,
         'red_from': 75,
         'week_stop_marker': True,
+        'context_yellow_from_k': 300,
+        'context_red_from_k': 500,
+        'cache_yellow_below_min': 5,
     },
     'thresholds': {
         'start_block_5h': 75,

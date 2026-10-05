@@ -184,6 +184,8 @@ that key and writes one line to the log.
 | `display.show_usage` / `show_time` | `true` / `true` | Parts of the prompt line. |
 | `statusline.yellow_from` / `red_from` | `50` / `75` | Colours. |
 | `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |
+| `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
+| `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
 | `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |

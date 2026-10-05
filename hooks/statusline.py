@@ -13,7 +13,7 @@ If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent ins
 missing measurement is not "zero percent". If the merge fails, the session's own values are shown and
 nothing is written. The exit code is always 0.
 
-Output: <model> | 5h NN% | week NN%
+Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23%
 """
 from __future__ import annotations
 
@@ -61,7 +61,34 @@ def _part(label: str, value: float | None, yellow_from: float, red_from: float) 
     return f' {GRAY}| {color}{label} {number}%{RESET}'
 
 
-def render(model: str, five: float | None, week: float | None, cfg: dict) -> str:
+def _count(value, minimum: float = 0) -> bool:
+    """A finite number (never bool) of at least `minimum`."""
+    return _usage._number(value) and value >= minimum
+
+
+def _context_part(status_input: dict, line_cfg: dict) -> str:
+    """`ctx 231k/1000k 23%`; before the first answer `ctx –/1000k`; nothing without a valid window size.
+
+    context_window.total_input_tokens is 0 until the first API answer: that is "not measured yet", not a
+    real zero, so it shows a dash. The colour follows the absolute tokens only, never the percentage: a
+    bigger window must not hide a context that is already expensive.
+    """
+    block = status_input.get('context_window')
+    size = block.get('context_window_size') if isinstance(block, dict) else None
+    if not _count(size, 1000):
+        return ''
+    window = f'{int(size) // 1000}k'
+    used = block.get('total_input_tokens')
+    if not _count(used) or used == 0:
+        return f' {GRAY}| {GRAY}ctx –/{window}{RESET}'
+    percent = _rounded(block['used_percentage']) if _count(block.get('used_percentage')) else None
+    color = (RED if used >= line_cfg['context_red_from_k'] * 1000
+             else YELLOW if used >= line_cfg['context_yellow_from_k'] * 1000 else GRAY)
+    return f' {GRAY}| {color}ctx {int(used) // 1000}k/{window}{f" {percent}%" if percent is not None else ""}{RESET}'
+
+
+def render(model: str, five: float | None, week: float | None, cfg: dict, status_input: dict | None = None,
+           now: float | None = None) -> str:
     line_cfg, limits = cfg['statusline'], cfg['thresholds']
     line = f'{GRAY}{model}{RESET}'
     line += _part('5h', five, line_cfg['yellow_from'], line_cfg['red_from'])
@@ -70,6 +97,8 @@ def render(model: str, five: float | None, week: float | None, cfg: dict) -> str
     week_rounded = _rounded(week) if week is not None else None
     if line_cfg['week_stop_marker'] and week_rounded is not None and week_rounded >= limits['start_block_week']:
         line += f' {RED}{WEEK_STOP_TEXT}{RESET}'
+    if status_input is not None:
+        line += _context_part(status_input, line_cfg)
     return line
 
 
@@ -93,7 +122,10 @@ def main() -> int:
             five, week = _merged_value(merged, 'five_hour'), _merged_value(merged, 'seven_day')
         except Exception:  # merge failed: show the own values, write nothing
             pass
-        print(render(_model_name(status_input), five, week, _config.load(log_problems=False)))
+        line = render(_model_name(status_input), five, week, _config.load(log_problems=False), status_input, time.time())
+        # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
+        sys.stdout.reconfigure(encoding='utf-8')
+        print(line)
     except Exception:
         pass
     return 0

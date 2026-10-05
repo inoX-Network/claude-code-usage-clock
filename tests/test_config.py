@@ -229,3 +229,25 @@ def test_log_reason_is_capped(tmp_path):
 def test_default_path_is_next_to_the_scripts(monkeypatch):
     monkeypatch.delenv('CCUC_CONFIG')
     assert _config.config_path() == os.path.join(ROOT, 'hooks', 'config.json')
+
+
+def test_statusline_context_and_cache_keys_have_their_defaults_and_are_overridable(tmp_path):
+    cfg = _config.load()
+    assert (cfg['statusline']['context_yellow_from_k'], cfg['statusline']['context_red_from_k'],
+            cfg['statusline']['cache_yellow_below_min']) == (300, 500, 5)
+    write_config(tmp_path, {'statusline': {'context_yellow_from_k': 100, 'context_red_from_k': 150.5,
+                                           'cache_yellow_below_min': 10}})
+    cfg = _config.load()
+    assert (cfg['statusline']['context_yellow_from_k'], cfg['statusline']['context_red_from_k'],
+            cfg['statusline']['cache_yellow_below_min']) == (100, 150.5, 10)
+    assert log_lines(tmp_path) == []
+
+
+def test_statusline_context_and_cache_keys_with_wrong_types_fall_back_and_log(tmp_path):
+    write_config(tmp_path, {'statusline': {'context_yellow_from_k': '300', 'context_red_from_k': True,
+                                           'cache_yellow_below_min': [5], 'yellow_from': 40}})
+    cfg = _config.load()
+    assert cfg['statusline'] == dict(_config.DEFAULTS['statusline'], yellow_from=40)
+    reason = log_lines(tmp_path)[0]['reason']
+    for key in ('context_yellow_from_k', 'context_red_from_k', 'cache_yellow_below_min'):
+        assert f'statusline.{key}: wrong type' in reason

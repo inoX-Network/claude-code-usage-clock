@@ -229,3 +229,128 @@ def test_main_survives_a_failing_merge_in_process(monkeypatch, capsys):
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'rate_limits': {'five_hour': b(40, now + 60)}})))
     assert statusline.main() == 0
     assert plain(capsys.readouterr().out).strip() == 'Claude | 5h 40%'
+
+
+# --- Context: always visible, colour only by absolute tokens ----------------------------------------
+
+def window(total, size=1_000_000, percent=23):
+    return {'context_window': {'total_input_tokens': total, 'context_window_size': size, 'used_percentage': percent}}
+
+
+def ctx_of(status_input, cfg=CFG):
+    """The context part of the line, plain, or '' if the line has none."""
+    text = statusline.render('M', None, None, cfg, status_input, 0)
+    match = re.search(r'\| (?:\x1b\[[0-9;]*m)*(ctx [^\x1b]*)', text)
+    return match.group(1) if match else ''
+
+
+def test_context_part_shows_tokens_window_and_percent_in_the_documented_order():
+    line = statusline.render('Opus', 40, 61, CFG, window(231_000, percent=23.4), 0)
+    assert plain(line) == 'Opus | 5h 40% | week 61% | ctx 231k/1000k 23%'
+    assert plain(statusline.render('M', 10, 80, CFG, window(231_000), 0)) == (
+        'M | 5h 10% | week 80% <- weekly limit reached | ctx 231k/1000k 23%')
+
+
+def test_context_part_is_the_only_part_if_there_are_no_limits():
+    assert plain(statusline.render('M', None, None, CFG, window(5_000, percent=1), 0)) == 'M | ctx 5k/1000k 1%'
+
+
+def test_context_exact_colors_and_layout():
+    line = statusline.render('M', None, None, CFG, window(231_000), 0)
+    assert line == f'{GRAY}M{RESET} {GRAY}| {GRAY}ctx 231k/1000k 23%{RESET}'
+
+
+def test_context_tokens_are_cut_not_rounded_and_the_percent_is_rounded_like_the_limits():
+    assert ctx_of(window(231_999, percent=22.5)) == 'ctx 231k/1000k 22%'
+    assert ctx_of(window(231_000, size=200_000, percent=23.5)) == 'ctx 231k/200k 24%'
+
+
+@pytest.mark.parametrize('tokens,color', [(1, GRAY), (299_000, GRAY), (299_999, GRAY), (300_000, YELLOW),
+                                          (300_001, YELLOW), (499_000, YELLOW), (499_999, YELLOW), (500_000, RED),
+                                          (900_000, RED)])
+def test_context_color_depends_on_the_absolute_tokens_at_the_exact_limit(tokens, color):
+    line = statusline.render('M', None, None, CFG, window(tokens), 0)
+    assert f'{color}ctx ' in line
+
+
+def test_context_color_ignores_the_percent_and_the_window_size():
+    assert f'{GRAY}ctx ' in statusline.render('M', None, None, CFG, window(100_000, size=100_000, percent=100), 0)
+    assert f'{RED}ctx ' in statusline.render('M', None, None, CFG, window(500_000, size=10_000_000, percent=5), 0)
+
+
+def test_context_thresholds_come_from_the_config():
+    cfg = json.loads(json.dumps(CFG))
+    cfg['statusline'].update(context_yellow_from_k=100, context_red_from_k=150.5)
+    assert f'{GRAY}ctx ' in statusline.render('M', None, None, cfg, window(99_999), 0)
+    assert f'{YELLOW}ctx ' in statusline.render('M', None, None, cfg, window(100_000), 0)
+    assert f'{YELLOW}ctx ' in statusline.render('M', None, None, cfg, window(150_499), 0)
+    assert f'{RED}ctx ' in statusline.render('M', None, None, cfg, window(150_500), 0)
+
+
+@pytest.mark.parametrize('total', [0, None, 0.0])
+def test_before_the_first_answer_the_part_shows_a_dash_in_gray_never_a_zero(total):
+    status = window(total, percent=0)
+    line = statusline.render('M', None, None, CFG, status, 0)
+    assert plain(line) == 'M | ctx –/1000k'
+    assert f'{GRAY}ctx –/1000k{RESET}' in line
+
+
+def test_missing_total_field_and_null_current_usage_count_as_before_the_first_answer():
+    assert ctx_of({'context_window': {'context_window_size': 1_000_000}}) == 'ctx –/1000k'
+    status = window(0)
+    status['context_window']['current_usage'] = None
+    assert ctx_of(status) == 'ctx –/1000k'
+
+
+@pytest.mark.parametrize('status', [{}, {'context_window': None}, {'context_window': 'x'}, {'context_window': []},
+                                    {'context_window': {}}, window(5_000, size=None), window(5_000, size=0),
+                                    window(5_000, size=-1), window(5_000, size=999), window(5_000, size=True),
+                                    window(5_000, size='1000000'), window(5_000, size=float('nan')),
+                                    window(5_000, size=float('inf')), window(None, size=None)])
+def test_without_a_valid_window_size_the_part_is_left_out(status):
+    assert ctx_of(status) == ''
+    assert plain(statusline.render('M', 10, None, CFG, status, 0)) == 'M | 5h 10%'
+
+
+@pytest.mark.parametrize('total', [True, '231000', -5, float('nan'), float('inf'), [1], {}])
+def test_broken_token_values_are_treated_as_unknown_not_shown(total):
+    assert ctx_of(window(total)) == 'ctx –/1000k'
+
+
+@pytest.mark.parametrize('percent,expected', [(None, 'ctx 231k/1000k'), (True, 'ctx 231k/1000k'),
+                                              ('23', 'ctx 231k/1000k'), (-1, 'ctx 231k/1000k'),
+                                              (float('nan'), 'ctx 231k/1000k'), (0, 'ctx 231k/1000k 0%')])
+def test_a_missing_or_broken_percent_leaves_out_only_the_percent(percent, expected):
+    assert ctx_of(window(231_000, percent=percent)) == expected
+
+
+def test_the_part_is_left_out_if_no_status_input_is_given():
+    assert plain(statusline.render('M', 10, 20, CFG)) == 'M | 5h 10% | week 20%'
+
+
+def test_script_shows_the_context_part_in_utf8_even_on_an_ascii_machine(tmp_path):
+    now = time.time()
+    status = dict(window(231_000), model={'display_name': 'Opus'},
+                  rate_limits={'five_hour': b(40, now + 3600), 'seven_day': b(61, now + 86400)})
+    r = subprocess.run([sys.executable, SCRIPT], input=json.dumps(status).encode('utf-8'), capture_output=True,
+                       env=dict(os.environ, PYTHONIOENCODING='ascii', PYTHONUTF8='0', LC_ALL='C'), timeout=20)
+    assert r.returncode == 0 and plain(r.stdout.decode('utf-8')).strip() == 'Opus | 5h 40% | week 61% | ctx 231k/1000k 23%'
+    early = subprocess.run([sys.executable, SCRIPT], input=json.dumps(window(0)).encode('utf-8'), capture_output=True,
+                           env=dict(os.environ, PYTHONIOENCODING='ascii', LC_ALL='C',
+                                    CCUC_USAGE_FILE=str(tmp_path / 'other.json')), timeout=20)
+    assert plain(early.stdout.decode('utf-8')).strip() == 'Claude | ctx –/1000k'
+
+
+def test_script_shows_the_context_without_any_rate_limits(tmp_path):
+    r = run(dict(window(120_000, percent=12), model={'display_name': 'Opus'}), tmp_path)
+    assert plain(r.stdout).strip() == 'Opus | ctx 120k/1000k 12%'
+    assert not (tmp_path / 'usage.json').exists()
+
+
+def test_config_file_controls_the_context_colors(tmp_path):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'statusline': {'context_yellow_from_k': 10, 'context_red_from_k': 20}}), encoding='utf-8')
+    env = {'CCUC_CONFIG': str(config)}
+    assert f'{GRAY}ctx 9k' in run(window(9_999), tmp_path, env).stdout
+    assert f'{YELLOW}ctx 10k' in run(window(10_000), tmp_path, env).stdout
+    assert f'{RED}ctx 20k' in run(window(20_000), tmp_path, env).stdout
