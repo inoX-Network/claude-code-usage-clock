@@ -14,7 +14,7 @@ If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent ins
 missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
 fails, the session's own values are shown and nothing is written. The exit code is always 0.
 
-Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23% | cache 54m
+Output: <model> | 5h NN% ↻HH:MM | week NN% | ctx 231k/1000k 23% | cache 54m (the weekly reset time from yellow on)
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ YELLOW = '\033[38;5;179m'
 RED = '\033[38;5;167m'
 RESET = '\033[0m'
 WEEK_STOP_TEXT = '<- weekly limit reached'
+WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')   # fixed English names, independent of the locale
 
 
 def _own_value(status_input: dict, name: str) -> float | None:
@@ -49,6 +50,25 @@ def _merged_value(merged: dict, name: str) -> float | None:
     return float(block['used_percentage']) if isinstance(block, dict) else None
 
 
+def _reset_of(source: dict | None, name: str):
+    """resets_at of one block, unchecked: _reset_text decides whether it can be shown."""
+    block = source.get(name) if isinstance(source, dict) else None
+    return block.get('resets_at') if isinstance(block, dict) else None
+
+
+def _reset_text(reset, now: float, with_day: bool) -> str:
+    """` ↻19:10` in local time, for the week with the weekday (` ↻Mon 15:00`); '' for a reset that is missing,
+    broken or already past: a guessed time would be worse than none."""
+    if not _usage._number(reset) or reset <= now:
+        return ''
+    try:
+        moment = time.localtime(reset)
+    except (OverflowError, OSError, ValueError):
+        return ''
+    day = f'{WEEKDAYS[moment.tm_wday]} ' if with_day else ''
+    return f' ↻{day}{moment.tm_hour:02d}:{moment.tm_min:02d}'
+
+
 def _rounded(value: float) -> int | None:
     # '%.0f' rounds like C printf (half to even) and, unlike int(), never depends on a locale
     try:
@@ -57,12 +77,12 @@ def _rounded(value: float) -> int | None:
         return None
 
 
-def _part(label: str, value: float | None, yellow_from: float, red_from: float) -> str:
+def _part(label: str, value: float | None, yellow_from: float, red_from: float, suffix: str = '') -> str:
     number = _rounded(value) if value is not None else None
     if number is None:
         return ''
     color = RED if number >= red_from else YELLOW if number >= yellow_from else GRAY
-    return f' {GRAY}| {color}{label} {number}%{RESET}'
+    return f' {GRAY}| {color}{label} {number}%{suffix}{RESET}'
 
 
 def _count(value, minimum: float = 0) -> bool:
@@ -125,18 +145,24 @@ def _cache_part(status_input: dict, line_cfg: dict, now: float) -> str:
 
 
 def render(model: str, five: float | None, week: float | None, cfg: dict, status_input: dict | None = None,
-           now: float | None = None) -> str:
+           now: float | None = None, resets: tuple = (None, None)) -> str:
+    """`resets` = (resets_at of the five-hour window, of the week). The weekly one is shown only from
+    `yellow_from` on: below that it is days away and only takes room."""
     line_cfg, limits = cfg['statusline'], cfg['thresholds']
-    line = f'{GRAY}{model}{RESET}'
-    line += _part('5h', five, line_cfg['yellow_from'], line_cfg['red_from'])
-    line += _part('week', week, line_cfg['yellow_from'], line_cfg['red_from'])
-    # The limit from which no new agents start: visible, not only agreed on.
+    now = time.time() if now is None else now
+    five_reset, week_reset = resets if line_cfg['show_reset'] else (None, None)
     week_rounded = _rounded(week) if week is not None else None
+    if week_rounded is None or week_rounded < line_cfg['yellow_from']:
+        week_reset = None
+    line = f'{GRAY}{model}{RESET}'
+    line += _part('5h', five, line_cfg['yellow_from'], line_cfg['red_from'], _reset_text(five_reset, now, False))
+    line += _part('week', week, line_cfg['yellow_from'], line_cfg['red_from'], _reset_text(week_reset, now, True))
+    # The limit from which no new agents start: visible, not only agreed on.
     if line_cfg['week_stop_marker'] and week_rounded is not None and week_rounded >= limits['start_block_week']:
         line += f' {RED}{WEEK_STOP_TEXT}{RESET}'
     if status_input is not None:
         line += _context_part(_context_numbers(status_input), line_cfg)
-        line += _cache_part(status_input, line_cfg, time.time() if now is None else now)
+        line += _cache_part(status_input, line_cfg, now)
     return line
 
 
@@ -168,13 +194,17 @@ def main() -> int:
         if not isinstance(status_input, dict):
             status_input = {}
         five, week = _own_value(status_input, 'five_hour'), _own_value(status_input, 'seven_day')
+        source = status_input.get('rate_limits')
         try:
             merged = _usage.update_file(_usage.usage_path(), status_input, now)
             five, week = _merged_value(merged, 'five_hour'), _merged_value(merged, 'seven_day')
+            source = merged
         except Exception:  # merge failed: show the own values, write nothing
             pass
         _save_context(status_input, now)
-        line = render(_model_name(status_input), five, week, _config.load(log_problems=False), status_input, now)
+        resets = (_reset_of(source, 'five_hour'), _reset_of(source, 'seven_day'))
+        line = render(_model_name(status_input), five, week, _config.load(log_problems=False), status_input, now,
+                      resets)
         # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
         sys.stdout.reconfigure(encoding='utf-8')
         print(line)
