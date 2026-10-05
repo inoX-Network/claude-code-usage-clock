@@ -41,24 +41,15 @@ def _prune(directory: str, now: float, keep: str) -> None:
             continue    # gone already, or not ours to delete: the next write tries again
 
 
-def save(directory: str, session_id, size, used, now: float, cache_ttl=None, cache_expires_at=None) -> None:
-    """Writes the state of one session. Does nothing for an invalid session id or for numbers that are not
-    positive and finite. The cache clock is written only if the ttl is "1h" or "5m" and the expiry a positive
-    finite number; otherwise both keys are left out. Raises OSError if the file cannot be written."""
-    if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
-        return
-    if not all(_usage._number(value) and value > 0 for value in (size, used)):
-        return
+def write_private(directory: str, name: str, content: str) -> bool:
+    """Writes `<directory>/<name>` atomically (temporary file + os.replace, never through a link, mode 0600; the
+    folder is created with 0700). False, and nothing written, if the folder is a link. Raises OSError if the
+    file cannot be written. The caller has validated `name`."""
     if os.path.islink(directory):
-        return      # a planted link as the folder: never write through it
+        return False      # a planted link as the folder: never write through it
     os.makedirs(directory, mode=0o700, exist_ok=True)
-    path = os.path.join(directory, f'{session_id}.json')
+    path = os.path.join(directory, name)
     tmp = f'{path}.tmp.{os.getpid()}'
-    state = {'session_id': session_id, 'context_window_size': int(size), 'used_tokens': int(used),
-             'measured_at': _usage._measured_at(now)}
-    if cache_ttl in CACHE_TTLS and _usage._number(cache_expires_at) and cache_expires_at > 0:
-        state.update(cache_ttl=cache_ttl, cache_expires_at=int(cache_expires_at))
-    content = json.dumps(state, separators=(',', ':'))
     try:
         try:
             os.unlink(tmp)  # a leftover, possibly a planted link: remove it, never write through it
@@ -74,7 +65,25 @@ def save(directory: str, session_id, size, used, now: float, cache_ttl=None, cac
         except OSError:
             pass
         raise
+    return True
+
+
+def save(directory: str, session_id, size, used, now: float, cache_ttl=None, cache_expires_at=None) -> None:
+    """Writes the state of one session. Does nothing for an invalid session id or for numbers that are not
+    positive and finite. The cache clock is written only if the ttl is "1h" or "5m" and the expiry a positive
+    finite number; otherwise both keys are left out. Raises OSError if the file cannot be written."""
+    if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
+        return
+    if not all(_usage._number(value) and value > 0 for value in (size, used)):
+        return
+    state = {'session_id': session_id, 'context_window_size': int(size), 'used_tokens': int(used),
+             'measured_at': _usage._measured_at(now)}
+    if cache_ttl in CACHE_TTLS and _usage._number(cache_expires_at) and cache_expires_at > 0:
+        state.update(cache_ttl=cache_ttl, cache_expires_at=int(cache_expires_at))
+    name = f'{session_id}.json'
+    if not write_private(directory, name, json.dumps(state, separators=(',', ':'))):
+        return
     try:
-        _prune(directory, now, os.path.basename(path))
+        _prune(directory, now, name)
     except OSError:
         pass
