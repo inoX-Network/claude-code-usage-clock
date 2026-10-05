@@ -251,3 +251,46 @@ def test_statusline_context_and_cache_keys_with_wrong_types_fall_back_and_log(tm
     reason = log_lines(tmp_path)[0]['reason']
     for key in ('context_yellow_from_k', 'context_red_from_k', 'cache_yellow_below_min'):
         assert f'statusline.{key}: wrong type' in reason
+
+
+# --- context_reporter ---------------------------------------------------------------------------------------------
+
+def test_context_reporter_keys_have_their_defaults_and_are_overridable(tmp_path):
+    assert _config.load()['context_reporter'] == {'after_tool_from': 50, 'max_age_min': 15}
+    write_config(tmp_path, {'context_reporter': {'after_tool_from': 0, 'max_age_min': 0.5}})
+    assert _config.load()['context_reporter'] == {'after_tool_from': 0, 'max_age_min': 0.5}
+    write_config(tmp_path, {'context_reporter': {'after_tool_from': 100.0}})
+    assert _config.load()['context_reporter'] == {'after_tool_from': 100.0, 'max_age_min': 15}
+    assert log_lines(tmp_path) == []
+
+
+@pytest.mark.parametrize('value', ['50', True, None, [50]])
+def test_context_reporter_keys_with_wrong_types_fall_back_and_log(tmp_path, value):
+    write_config(tmp_path, {'context_reporter': {'after_tool_from': value, 'max_age_min': value}})
+    assert _config.load()['context_reporter'] == _config.DEFAULTS['context_reporter']
+    reason = log_lines(tmp_path)[0]['reason']
+    assert 'context_reporter.after_tool_from: wrong type' in reason and 'context_reporter.max_age_min: wrong type' in reason
+
+
+@pytest.mark.parametrize('value', [-1, -0.01, 100.01, 101, float('nan'), float('inf'), float('-inf')])
+def test_after_tool_from_outside_0_to_100_falls_back_and_logs(tmp_path, value):
+    write_config(tmp_path, '{"context_reporter": {"after_tool_from": %s, "max_age_min": 20}}' % json.dumps(value))
+    cfg = _config.load()
+    assert cfg['context_reporter'] == {'after_tool_from': 50, 'max_age_min': 20}
+    assert 'context_reporter.after_tool_from: must be a number from 0 to 100, using default' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('value', [0, -1, -0.5, float('nan'), float('inf'), float('-inf')])
+def test_max_age_min_that_is_not_a_positive_finite_number_falls_back_and_logs(tmp_path, value):
+    write_config(tmp_path, '{"context_reporter": {"after_tool_from": 60, "max_age_min": %s}}' % json.dumps(value))
+    cfg = _config.load()
+    assert cfg['context_reporter'] == {'after_tool_from': 60, 'max_age_min': 15}
+    assert 'context_reporter.max_age_min: must be a positive number, using default' in log_lines(tmp_path)[0]['reason']
+
+
+def test_context_reporter_section_with_another_type_or_unknown_key(tmp_path):
+    write_config(tmp_path, {'context_reporter': 'on'})
+    assert _config.load()['context_reporter'] == _config.DEFAULTS['context_reporter']
+    write_config(tmp_path, {'context_reporter': {'bogus': 1}})
+    assert _config.load()['context_reporter'] == _config.DEFAULTS['context_reporter']
+    assert 'context_reporter.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']

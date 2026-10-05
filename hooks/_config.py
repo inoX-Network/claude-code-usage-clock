@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 
@@ -36,6 +37,10 @@ DEFAULTS: dict = {
         'unknown_usage_max_agents': 1,
         'week_action': 'warn',
         'ask_verified_in_bypass': False,
+    },
+    'context_reporter': {
+        'after_tool_from': 50,
+        'max_age_min': 15,
     },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
@@ -144,6 +149,15 @@ def load(log_problems: bool = True) -> dict:
     if not cfg['checkpoint_dir_suffix'].strip().strip('/'):
         problems.append('checkpoint_dir_suffix: must not be empty or only "/", using default')
         cfg['checkpoint_dir_suffix'] = DEFAULTS['checkpoint_dir_suffix']
+    reporter = cfg['context_reporter']
+    # A percentage outside 0-100 would report always or never; NaN and infinity fail these comparisons, too.
+    if not 0 <= reporter['after_tool_from'] <= 100:
+        problems.append('context_reporter.after_tool_from: must be a number from 0 to 100, using default')
+        reporter['after_tool_from'] = DEFAULTS['context_reporter']['after_tool_from']
+    # Zero, negative or infinite would make every measurement stale or none.
+    if not (math.isfinite(reporter['max_age_min']) and reporter['max_age_min'] > 0):
+        problems.append('context_reporter.max_age_min: must be a positive number, using default')
+        reporter['max_age_min'] = DEFAULTS['context_reporter']['max_age_min']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')

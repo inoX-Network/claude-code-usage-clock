@@ -8,11 +8,12 @@ This document is the contract between the parts. Code and tests follow it; when 
 hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage-clock/
   statusline.py           statusLine command: shows usage, context and cache clock, merges usage into the shared file
   usage_clock.py          hook UserPromptSubmit: usage line and/or local time as context for the model
+  context_reporter.py     hooks UserPromptSubmit + PostToolUse: fill level of the context window as context for the model
   spawn_gate.py           hook PreToolUse (Agent|Workflow|Skill): usage thresholds + model/effort rules
   soft_stop.py            hook PreToolUse (*): soft stop for subagents near the usage limit
   _config.py              loads config.json next to the scripts, falls back to defaults
   _usage.py               reads and merges the shared usage file
-  _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json)
+  _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json); the reporter reads it
   _hookio.py              hook input/output, JSONL log, directory discovery
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
@@ -73,7 +74,7 @@ rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in
 
 ### Context state file
 
-For a later context reminder, the status line writes `<log_dir>/context/<session_id>.json`:
+For the context reporter (see `context_reporter.py`), the status line writes `<log_dir>/context/<session_id>.json`:
 `{"session_id", "context_window_size", "used_tokens", "measured_at"}` (`measured_at` UTC ISO as in the usage file).
 
 - Written only if `session_id` matches `[A-Za-z0-9_-]{1,128}` (it becomes a file name), `total_input_tokens` is
@@ -91,12 +92,17 @@ For a later context reminder, the status line writes `<log_dir>/context/<session
 wrong types or unknown keys: defaults for the affected keys, one log line, never a crash. Defaults are
 listed in `config.example.json`.
 
+`context_reporter.after_tool_from` must be a number from 0 to 100 and `context_reporter.max_age_min` a finite
+number above 0; anything else (also NaN and infinity) falls back to the default and writes the usual one log line.
+The context reporter itself does not write that line (see `context_reporter.py`), the other hooks do.
+
 Two switches are deliberately NOT in the config file but in the hook command in `settings.json`:
 `--mode=shadow|enforce` (default `shadow`) and `--week-ok-until=YYYY-MM-DD`. Where `settings.json` is
 protected against the model, the model cannot switch itself free.
 
 `tools/install.py` writes both. It recognises its own entries by the full path of the script in `--target`
-(never by the file name alone), keeps the mode of an installed entry when `--mode` is left out, and drops an
+(never by the file name alone; a component with two events, the context reporter, gets one entry per event with the
+same command, and each is found, updated and removed on its own), keeps the mode of an installed entry when `--mode` is left out, and drops an
 earlier `--week-ok-until` when it is left out (and says so). The command of the spawn gate ends with
 `|| { echo …; exit 2; }` in `enforce` (a broken installation denies) and with `|| true` in `shadow` (nothing
 may block); the other hooks always end with `|| true`. Every hook entry gets a timeout of 5 s. The status line
@@ -108,6 +114,7 @@ entry gets `refreshInterval: 60`; an update of our own entry adds it only if it 
 | Hook | Event | On internal error |
 |---|---|---|
 | `usage_clock.py` | UserPromptSubmit | exit 0, no output (a prompt must never be rejected) |
+| `context_reporter.py` | UserPromptSubmit, PostToolUse `*` | exit 0, no output (nothing may be rejected or blocked) |
 | `soft_stop.py` | PreToolUse `*` | exit 0, allow (fail open) |
 | `spawn_gate.py` | PreToolUse `Agent\|Workflow\|Skill` | deny (fail closed), except while checking a Skill: warn; in `shadow` only logged |
 
@@ -129,6 +136,44 @@ weekly value) ` — week at or above N %: <text>`, with the text chosen by `week
 warning", `ask` "new agents need the user's approval", `deny` "no new agents without --week-ok-until". Both
 notes can stand together, the 5h note first. The hook does not know `--week-ok-until`; the note names the action
 that applies without it.
+
+### context_reporter.py
+
+Tells the model how full its context window is. One command, two events: `UserPromptSubmit` (no matcher) and
+`PostToolUse` (matcher `*`); the installer component `context-reporter` writes both entries.
+Example: `Context: 168k/1000k tokens (17%). Measured, not estimated.`
+
+- **Source:** only the context state file of the status line, `<log_dir>/context/<session_id>.json` (see
+  Status line; `log_dir` as for the other hooks: `CCUC_LOG_DIR`, else config). The transcript is never read. The
+  hook has no numbers of its own: without the status line, or before its first measurement (no first answer yet),
+  nothing is reported.
+- **Events:** `UserPromptSubmit` always reports. `PostToolUse` reports only if the exact share
+  `used / window * 100` is at or above `context_reporter.after_tool_from` (default 50, a number from 0 to 100;
+  compared before rounding, so 499 999 of 1 000 000 tokens stays silent although the line would show 50 %). Any
+  other event, or a missing or non-text `hook_event_name`: silent.
+- **Text:** `Context: <used>k/<window>k tokens (<percent>%). Measured, not estimated.` Both token numbers are cut to
+  thousands, the percentage is `used * 100 / window` rounded with `%.0f` (half to even): the same cut and the
+  same rounding as the `ctx` part of the status line.
+- **Output:** `{"hookSpecificOutput": {"hookEventName": <event>, "additionalContext": <text>}}`, like `usage_clock.py`.
+- **Silent** (no output, exit 0) when any of these is true:
+  - the input is not a JSON object, or has an `agent_id` key (a subagent: its context is another one, the file
+    describes the main session);
+  - `session_id` is missing or does not match `_context_state.SESSION_ID` (it becomes a file name: no path tricks);
+  - the file is missing, a link, not a regular file (named pipes are opened without blocking and then refused),
+    not valid UTF-8 JSON (only the first 4096 bytes are read; the file is about 150 bytes) or not an object; a link
+    as the `context` folder is refused, too;
+  - `session_id` in the file differs from the one in the input;
+  - `context_window_size` or `used_tokens` is not a finite number (not bool, not NaN), the window is below 1000
+    (the status line never writes one), `used_tokens` is not above 0, or more is used than the window holds;
+  - `measured_at` is missing, not text, not an ISO time with a time zone, older than `context_reporter.max_age_min`
+    (default 15 minutes, a number above 0; exactly that age still counts) or more than one minute in the future
+    (the same classification as the usage measurement, `_usage.MIN_AGE_MIN`).
+- **On internal error:** exit 0, no output, nothing logged. Config problems are not logged either (the hook runs
+  after every tool call); a wrong `context_reporter` value falls back to its default.
+- **Limits:** the percentage is computed from the two stored numbers. The status line shows the percentage
+  Claude Code passes in `used_percentage`; both agree as long as that is `total_input_tokens / window`.
+  Subagents get nothing, and the file is an ordinary file, like the usage file: a model that can write it can
+  fake it.
 
 ### spawn_gate.py
 
@@ -211,7 +256,7 @@ values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` ca
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
 Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session context state in
-`<log_dir>/context/<session_id>.json` (see Status line). A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.json` (see Status line). The context reporter logs nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
 
 ## Known limits

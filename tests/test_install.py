@@ -98,7 +98,8 @@ def test_adds_all_components_and_leaves_everything_else_untouched(tmp_path):
     new = read(settings)
     assert new['model'] == 'opus' and new['env'] == {'X': '1'}
     assert new['hooks']['PreToolUse'][0] == original['hooks']['PreToolUse'][0]  # the foreign hook is unchanged
-    assert len(new['hooks']['PreToolUse']) == 3 and len(new['hooks']['UserPromptSubmit']) == 1
+    assert len(new['hooks']['PreToolUse']) == 3 and len(new['hooks']['UserPromptSubmit']) == 2
+    assert len(new['hooks']['PostToolUse']) == 1
     assert all(h['timeout'] == 5 and h['type'] == 'command' for g in new['hooks']['PreToolUse'][1:] for h in g['hooks'])
     assert 'autoContinueAtUsageLimit' not in new
     assert len(backups(tmp_path)) == 1
@@ -110,13 +111,16 @@ def test_hook_commands_have_the_exact_form(tmp_path):
     target = tmp_path / 'target'
     assert run('--settings', settings, '--target', target, '--mode', 'enforce', '--week-ok-until', '2026-01-19').returncode == 0
     new = read(settings)
-    assert commands(new, 'UserPromptSubmit') == [f'python3 {quoted(target, "usage_clock.py")} || true']
+    assert commands(new, 'UserPromptSubmit') == [f'python3 {quoted(target, "usage_clock.py")} || true',
+                                                 f'python3 {quoted(target, "context_reporter.py")} || true']
+    assert new['hooks']['PostToolUse'] == [{'matcher': '*', 'hooks': [
+        {'type': 'command', 'command': f'python3 {quoted(target, "context_reporter.py")} || true', 'timeout': 5}]}]
     groups = {g['matcher']: g['hooks'][0]['command'] for g in new['hooks']['PreToolUse']}
     assert groups['*'] == f'python3 {quoted(target, "soft_stop.py")} --mode=enforce || true'
     assert groups['Agent|Workflow|Skill'] == (
         f'python3 {quoted(target, "spawn_gate.py")} --mode=enforce --week-ok-until=2026-01-19'
         ' || { echo "spawn gate broken - start denied" >&2; exit 2; }')
-    assert 'matcher' not in new['hooks']['UserPromptSubmit'][0]
+    assert all('matcher' not in group for group in new['hooks']['UserPromptSubmit'])
     assert new['statusLine'] == {'type': 'command', 'command': f'python3 {quoted(target, "statusline.py")}',
                                  'padding': 0, 'refreshInterval': 60}
 
@@ -206,8 +210,10 @@ def test_entry_with_the_same_script_in_another_folder_is_not_ours_and_is_reporte
     r = run('--settings', settings, '--target', tmp_path / 'new place')
     assert r.returncode == 0, r.stdout
     data = read(settings)
-    assert len(commands(data, 'PreToolUse')) == 4 and len(commands(data, 'UserPromptSubmit')) == 2
-    assert sum('old place' in c for c in commands(data, 'PreToolUse') + commands(data, 'UserPromptSubmit')) == 3
+    assert len(commands(data, 'PreToolUse')) == 4 and len(commands(data, 'UserPromptSubmit')) == 4
+    assert len(commands(data, 'PostToolUse')) == 2
+    assert sum('old place' in c for c in commands(data, 'PreToolUse') + commands(data, 'UserPromptSubmit')
+               + commands(data, 'PostToolUse')) == 5
     assert 'left untouched' in r.stdout and 'old place' in r.stdout
     # how to get rid of the old entries, but only if they are an old copy of this tool
     assert (f'It was left untouched; if it is an old copy of this tool, check the path and remove it with '
@@ -720,7 +726,7 @@ def test_uninstall_with_components_removes_only_those(tmp_path):
     assert run(*args, '--uninstall', '--components', 'soft-stop,statusline').returncode == 0
     new = read(settings)
     assert 'statusLine' not in new and len(commands(new, 'PreToolUse')) == 1 and 'spawn_gate.py' in commands(new, 'PreToolUse')[0]
-    assert len(commands(new, 'UserPromptSubmit')) == 1
+    assert len(commands(new, 'UserPromptSubmit')) == 2 and len(commands(new, 'PostToolUse')) == 1
 
 
 def test_uninstall_in_a_group_with_other_hooks_keeps_the_others(tmp_path):
@@ -1059,7 +1065,7 @@ def test_a_foreign_usage_clock_or_gate_with_the_same_name_is_not_taken_either(tm
     settings = write_settings(tmp_path, {'hooks': {'UserPromptSubmit': [other], 'PreToolUse': [gate]}})
     assert run('--settings', settings, '--target', tmp_path / 'target').returncode == 0
     new = read(settings)['hooks']
-    assert new['UserPromptSubmit'][0] == other and len(new['UserPromptSubmit']) == 2
+    assert new['UserPromptSubmit'][0] == other and len(new['UserPromptSubmit']) == 3
     assert new['PreToolUse'][0] == gate and len(new['PreToolUse']) == 3
 
 
@@ -1101,7 +1107,9 @@ def test_the_context_state_module_is_required_and_copied(repo, tmp_path):
     r = run_in(repo, '--settings', settings, '--target', target)
     assert r.returncode == 1 and '_context_state.py' in r.stdout and not target.exists()
     (repo / 'hooks' / '_context_state.py').write_text('', encoding='utf-8')
-    assert run_in(repo, '--settings', settings, '--target', target).returncode == 0
+    # an empty module is enough for every part but the context reporter, which needs its SESSION_ID
+    assert run_in(repo, '--settings', settings, '--target', target,
+                  '--components', 'statusline,usage-clock,spawn-gate,soft-stop').returncode == 0
     assert (target / '_context_state.py').is_file()
 
 
@@ -1110,4 +1118,225 @@ def test_a_broken_context_state_module_fails_the_status_line_smoke_test(repo, tm
     (repo / 'hooks' / '_context_state.py').write_text('def (:\n', encoding='utf-8')
     r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'statusline')
     assert r.returncode == 1 and 'SMOKE TEST FAILED' in r.stdout and 'statusline.py' in r.stdout, r.stdout
+    assert read(settings) == {}
+
+
+# --- Component context-reporter: one command, two events ------------------------------------------------------------
+
+def reporter_entries(settings):
+    """[(event, matcher, command, timeout)] of the entries that run context_reporter.py."""
+    return [(event, group.get('matcher'), h['command'], h.get('timeout'))
+            for event, groups in read(settings).get('hooks', {}).items() for group in groups for h in group['hooks']
+            if 'context_reporter.py' in h['command']]
+
+
+def test_the_component_installs_both_events_with_the_same_command_and_the_standard_timeout(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    r = run('--settings', settings, '--target', target, '--components', 'context-reporter')
+    assert r.returncode == 0, r.stdout
+    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    assert sorted(reporter_entries(settings), key=str) == sorted([('UserPromptSubmit', None, command, 5),
+                                                                   ('PostToolUse', '*', command, 5)], key=str)
+    assert list(read(settings)) == ['hooks'] and sorted(read(settings)['hooks']) == ['PostToolUse', 'UserPromptSubmit']
+    assert 'UserPromptSubmit: context_reporter.py added' in r.stdout
+    assert 'PostToolUse: context_reporter.py added (matcher *)' in r.stdout
+    assert 'Mode:' not in r.stdout and 'Mode shadow' not in r.stdout       # no gate, no mode
+
+
+def test_the_standard_installation_includes_the_reporter_and_the_status_line_that_feeds_it(tmp_path):
+    settings = write_settings(tmp_path)
+    assert run('--settings', settings, '--target', tmp_path / 'target').returncode == 0
+    assert len(reporter_entries(settings)) == 2 and 'statusLine' in read(settings)
+
+
+def test_a_second_run_does_not_duplicate_the_reporter_entries(tmp_path):
+    settings = write_settings(tmp_path)
+    args = ('--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert run(*args).returncode == 0
+    once = settings.read_text(encoding='utf-8')
+    r = run(*args)
+    assert r.returncode == 0 and 'already up to date - not written' in r.stdout
+    assert r.stdout.count('context_reporter.py already installed - unchanged') == 2
+    assert settings.read_text(encoding='utf-8') == once and len(reporter_entries(settings)) == 2
+
+
+def test_an_old_command_or_matcher_of_one_event_is_updated_without_a_duplicate(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    args = ('--settings', settings, '--target', target, '--components', 'context-reporter')
+    assert run(*args).returncode == 0
+    data = read(settings)
+    data['hooks']['PostToolUse'][0]['matcher'] = 'Bash'
+    data['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'] = f'python3 {quoted(target, "context_reporter.py")}'
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = run(*args)
+    assert r.returncode == 0 and 'PostToolUse: context_reporter.py updated (matcher Bash -> *)' in r.stdout, r.stdout
+    assert 'UserPromptSubmit: context_reporter.py updated' in r.stdout
+    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    assert sorted((e[:3] for e in reporter_entries(settings)), key=str) == sorted(
+        [('UserPromptSubmit', None, command), ('PostToolUse', '*', command)], key=str)
+
+
+def test_a_missing_second_event_is_added_and_the_first_stays(tmp_path):
+    settings = write_settings(tmp_path)
+    args = ('--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert run(*args).returncode == 0
+    data = read(settings)
+    del data['hooks']['PostToolUse']
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = run(*args)
+    assert 'UserPromptSubmit: context_reporter.py already installed - unchanged' in r.stdout
+    assert 'PostToolUse: context_reporter.py added (matcher *)' in r.stdout
+    assert len(reporter_entries(settings)) == 2
+
+
+def test_the_reporter_does_not_touch_foreign_post_tool_hooks_and_names_a_look_alike(tmp_path):
+    foreign = {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': 'python3 /opt/format.py'}]}
+    look_alike = {'matcher': '*', 'hooks': [{'type': 'command', 'command': 'python3 /opt/x/context_reporter.py'}]}
+    settings = write_settings(tmp_path, {'hooks': {'PostToolUse': [foreign, look_alike]}})
+    r = run('--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert r.returncode == 0
+    groups = read(settings)['hooks']['PostToolUse']
+    assert groups[:2] == [foreign, look_alike] and len(groups) == 3
+    assert 'PostToolUse: another hook runs a context_reporter.py from a different path' in r.stdout
+
+
+def test_without_the_component_no_reporter_entry_and_no_post_tool_event_appear(tmp_path):
+    settings = write_settings(tmp_path)
+    r = run('--settings', settings, '--target', tmp_path / 'target',
+            '--components', 'statusline,usage-clock,spawn-gate,soft-stop')
+    assert r.returncode == 0
+    assert 'PostToolUse' not in read(settings)['hooks'] and reporter_entries(settings) == []
+    assert 'context-reporter' not in r.stdout and 'passed (statusline, usage-clock, spawn-gate, soft-stop)' in r.stdout
+
+
+def test_a_broken_post_tool_structure_is_refused_and_left_alone(tmp_path):
+    settings = write_settings(tmp_path, {'hooks': {'PostToolUse': 'nope'}})
+    r = run('--settings', settings, '--target', tmp_path / 'target')
+    assert r.returncode == 2 and 'hooks.PostToolUse' in r.stdout
+    assert read(settings) == {'hooks': {'PostToolUse': 'nope'}}
+
+
+def test_uninstall_removes_both_events_and_nothing_else(tmp_path):
+    foreign = {'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': 'python3 /opt/format.py'}]}
+    settings = write_settings(tmp_path, {'hooks': {'PostToolUse': [foreign]}})
+    args = ('--settings', settings, '--target', tmp_path / 'target')
+    assert run(*args).returncode == 0
+    r = run(*args, '--uninstall')
+    assert r.returncode == 0 and 'UserPromptSubmit: context_reporter.py removed' in r.stdout
+    assert 'PostToolUse: context_reporter.py removed' in r.stdout
+    assert read(settings) == {'hooks': {'PostToolUse': [foreign]}}
+
+
+def test_uninstall_of_only_the_reporter_keeps_the_usage_clock(tmp_path):
+    settings = write_settings(tmp_path)
+    args = ('--settings', settings, '--target', tmp_path / 'target')
+    assert run(*args).returncode == 0
+    assert run(*args, '--uninstall', '--components', 'context-reporter').returncode == 0
+    new = read(settings)
+    assert reporter_entries(settings) == [] and 'PostToolUse' not in new['hooks']
+    assert len(commands(new, 'UserPromptSubmit')) == 1 and 'usage_clock.py' in commands(new, 'UserPromptSubmit')[0]
+
+
+def test_uninstall_reports_the_event_that_was_already_removed_by_hand(tmp_path):
+    settings = write_settings(tmp_path)
+    args = ('--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert run(*args).returncode == 0
+    data = read(settings)
+    del data['hooks']['PostToolUse']
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = run(*args, '--uninstall')
+    assert r.returncode == 0
+    assert 'UserPromptSubmit: context_reporter.py removed' in r.stdout
+    assert 'PostToolUse: context_reporter.py not found - unchanged' in r.stdout
+    assert read(settings) == {}
+
+
+def test_uninstall_in_a_shared_group_keeps_the_foreign_hook(tmp_path):
+    target = tmp_path / 'target'
+    ours = {'type': 'command', 'command': f'python3 {quoted(target, "context_reporter.py")} || true'}
+    other = {'type': 'command', 'command': 'python3 /opt/other.py'}
+    settings = write_settings(tmp_path, {'hooks': {'PostToolUse': [{'matcher': '*', 'hooks': [other, ours]}],
+                                                   'UserPromptSubmit': [{'hooks': [ours, other]}]}})
+    assert run('--settings', settings, '--target', target, '--uninstall').returncode == 0
+    assert read(settings) == {'hooks': {'PostToolUse': [{'matcher': '*', 'hooks': [other]}],
+                                        'UserPromptSubmit': [{'hooks': [other]}]}}
+
+
+def test_the_components_help_and_the_required_files_name_the_reporter():
+    module = load_module()
+    assert 'context-reporter' in ''.join(module.build_parser().format_help().split())   # the help wraps at hyphens
+    assert 'context_reporter.py' in module.REQUIRED_FILES and module.SCRIPTS['context-reporter'] == 'context_reporter.py'
+    assert module.TOUCHED_EVENTS == ('UserPromptSubmit', 'PostToolUse', 'PreToolUse')
+    assert 'context-reporter' not in module.GATES
+
+
+def test_a_missing_reporter_source_stops_before_anything_is_written(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    (repo / 'hooks' / 'context_reporter.py').unlink()
+    r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target')
+    assert r.returncode == 1 and 'context_reporter.py' in r.stdout
+    assert read(settings) == {} and not (tmp_path / 'target').exists()
+
+
+def test_the_installed_reporter_commands_work_as_written(tmp_path):
+    """Wiring: the commands from settings.json start the copied script and read the state file of the session."""
+    from datetime import timezone
+    settings = write_settings(tmp_path)
+    assert run('--settings', settings, '--target', tmp_path / 'target').returncode == 0
+    folder = tmp_path / 'log' / 'context'
+    folder.mkdir(parents=True)
+    (folder / 's1.json').write_text(json.dumps({
+        'session_id': 's1', 'context_window_size': 1_000_000, 'used_tokens': 600_000,
+        'measured_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}), encoding='utf-8')
+    env = dict(os.environ, CCUC_LOG_DIR=str(tmp_path / 'log'))
+    for event in ('UserPromptSubmit', 'PostToolUse'):
+        command = next(c for c in commands(read(settings), event) if 'context_reporter.py' in c)
+        done = subprocess.run(['/bin/sh', '-c', command], input=json.dumps({'hook_event_name': event, 'session_id': 's1'}),
+                              capture_output=True, text=True, timeout=30, env=env)
+        output = json.loads(done.stdout)['hookSpecificOutput']
+        assert done.returncode == 0 and output['hookEventName'] == event
+        assert output['additionalContext'] == 'Context: 600k/1000k tokens (60%). Measured, not estimated.'
+
+
+def test_a_vanished_reporter_never_blocks(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert run('--settings', settings, '--target', target).returncode == 0
+    new = read(settings)
+    shutil.rmtree(target)
+    for event in ('UserPromptSubmit', 'PostToolUse'):
+        for command in (c for c in commands(new, event) if 'context_reporter.py' in c):
+            done = subprocess.run(['/bin/sh', '-c', command], input='{}', capture_output=True, text=True, timeout=20)
+            assert done.returncode == 0 and done.stdout == '', command
+
+
+def test_the_smoke_test_starts_the_reporter_with_a_state_file_of_its_own(tmp_path):
+    settings = write_settings(tmp_path)
+    r = run('--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter', '--dry-run')
+    assert r.returncode == 0 and 'Smoke test: passed (context-reporter)' in r.stdout
+    assert not (tmp_path / 'log').exists() and not list(tmp_path.glob('**/smoke-test.json'))   # nothing left behind
+
+
+@pytest.mark.parametrize('content,expected', [
+    ('raise SystemExit(0)\n', "output is not the expected JSON: ''"),
+    ('print("not json")\n', 'output is not valid JSON'),
+    ('print("{}")\n', 'output is not the expected JSON'),
+    ('print(\'{"hookSpecificOutput": {"additionalContext": "Context: 1k/2k"}}\')\n', 'unexpected context line'),
+    ('import does_not_exist\n', 'exit 1'),
+])
+def test_the_smoke_test_rejects_a_reporter_that_exits_cleanly_but_says_nothing_useful(repo, tmp_path, content, expected):
+    settings = write_settings(tmp_path)
+    (repo / 'hooks' / 'context_reporter.py').write_text(content, encoding='utf-8')
+    r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert r.returncode == 1 and 'SMOKE TEST FAILED' in r.stdout and expected in r.stdout, r.stdout
+    assert read(settings) == {}
+
+
+def test_a_broken_context_state_module_fails_the_reporter_smoke_test(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    (repo / 'hooks' / '_context_state.py').write_text('', encoding='utf-8')
+    r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
+    assert r.returncode == 1 and 'context_reporter.py: output is not the expected JSON' in r.stdout, r.stdout
     assert read(settings) == {}

@@ -242,3 +242,52 @@ def test_the_weekly_notes_of_the_usage_line_are_documented_word_for_word():
     assert set(usage_clock.WEEK_NOTES) == {'warn', 'ask', 'deny'}
     for text in usage_clock.WEEK_NOTES.values():
         assert text in flat(readme_text()) and text in flat(architecture_text()), text
+
+
+# --- Context reporter: the text must match the code ------------------------------------------------------------------
+
+def test_the_documented_context_line_is_exactly_what_the_hook_says():
+    import context_reporter
+    line = 'Context: 168k/1000k tokens (17%). Measured, not estimated.'
+    assert context_reporter.text(1_000_000, 168_000) == line
+    assert line in readme_text()
+    assert 'Context: 168k/1000k tokens (17%). Measured, not estimated.' in architecture_text()
+
+
+def test_the_components_option_names_every_component_the_installer_knows():
+    spec = importlib.util.spec_from_file_location('install_for_readme_components', INSTALL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    row = next(row for row in table_after(readme_text(), 'Options:') if '--components' in row[0])
+    assert all(name in row[0] for name in module.COMPONENTS), row[0]
+    assert re.findall(r'--components ([\w,-]+)', row[0]) == [','.join(module.COMPONENTS)]
+
+
+def test_the_readme_lists_the_context_reporter_as_a_part_and_says_what_it_needs_and_who_gets_nothing():
+    text = readme_text()
+    row = next(line for line in text.splitlines() if line.startswith('| **Context reporter**'))
+    assert '`UserPromptSubmit`' in row and '`PostToolUse`' in row and 'Needs the status line' in row
+    assert 'subagents get nothing' in row
+    body = flat(section(text, '### The context window'))
+    for needle in ('context_reporter.after_tool_from', '50 %', 'context_reporter.max_age_min', '15 minutes', 'never the transcript',
+                   'status line is not installed', 'subagent', 'ctx'):
+        assert needle in body, needle
+    assert 'five parts' in text and 'all five parts' in text
+
+
+def test_both_documents_name_the_reporter_config_keys_with_the_defaults_of_the_code():
+    import _config
+    assert _config.DEFAULTS['context_reporter'] == {'after_tool_from': 50, 'max_age_min': 15}
+    section_text = flat(section(architecture_text(), '### context_reporter.py'))
+    for needle in ('context_reporter.after_tool_from', 'context_reporter.max_age_min', '(default 50', '(default 15 minutes',
+                   'agent_id', 'SESSION_ID', 'Subagents get nothing', 'transcript is never read'):
+        assert needle in section_text, needle
+
+
+def test_the_architecture_lists_the_reporter_in_layout_and_hook_table_and_the_installer_note():
+    text = architecture_text()
+    layout = section(text, '## Layout')
+    assert 'context_reporter.py' in layout and 'UserPromptSubmit + PostToolUse' in layout
+    row = next(line for line in section(text, '## Hooks').splitlines() if line.startswith('| `context_reporter.py`'))
+    assert 'UserPromptSubmit, PostToolUse `*`' in row and 'exit 0, no output' in row
+    assert 'one entry per event' in flat(section(text, '## Configuration'))
