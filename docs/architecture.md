@@ -11,9 +11,11 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   context_reporter.py     hooks UserPromptSubmit + PostToolUse: fill level of the context window as context for the model
   spawn_gate.py           hook PreToolUse (Agent|Workflow|Skill): usage thresholds + model/effort rules
   soft_stop.py            hook PreToolUse (*): soft stop for subagents near the usage limit
+  wake_watcher.py         background task, no hook: wakes an idle session shortly before its prompt cache expires
   _config.py              loads config.json next to the scripts, falls back to defaults
   _usage.py               reads and merges the shared usage file
   _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json); the reporter reads it
+  _wake.py                what reporter and watcher share: ALIVE_MIN, REST_AFTER_FIRE_MIN, the heartbeat file
   _hookio.py              hook input/output, JSONL log, directory discovery
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
@@ -79,15 +81,19 @@ rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in
 ### Context state file
 
 For the context reporter (see `context_reporter.py`), the status line writes `<log_dir>/context/<session_id>.json`:
-`{"session_id", "context_window_size", "used_tokens", "measured_at"}` (`measured_at` UTC ISO as in the usage file).
+`{"session_id", "context_window_size", "used_tokens", "measured_at"}` (`measured_at` UTC ISO as in the usage file)
+and, only while `prompt_cache.warm` is `true`, `"cache_ttl"` (`"1h"` or `"5m"`) and `"cache_expires_at"` (Unix
+seconds, an integer). Both keys are written together or not at all: a cold cache, a `ttl` of any other value or an
+`expires_at` that is not a positive finite number leaves them out. Readers that know only the four keys stay valid.
 
 - Written only if `session_id` matches `[A-Za-z0-9_-]{1,128}` (it becomes a file name), `total_input_tokens` is
   above 0 and the window size is valid. Never before the first answer.
 - One file per session, so sessions do not mix and no lock is needed. Atomic: `<file>.tmp.<pid>` created with
   `O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600, then `os.replace`. Folder mode 0700. A link as the target is replaced,
   a link as the folder or as the temporary file is never written through.
-- Every write removes regular `*.json` files in that folder that are older than 7 days (by `lstat`; links and
-  folders are skipped; the file just written is kept).
+- Every write removes regular `*.json` and `*.watch` (heartbeat of the wake-up watcher) files in that folder that
+  are older than 7 days (by `lstat`; links and folders are skipped; the file just written is kept). The heartbeat
+  of a live watcher is rewritten every minute, so only leftovers go.
 - Any error is ignored: the line is shown regardless.
 
 ## Configuration
@@ -99,6 +105,10 @@ listed in `config.example.json`.
 `context_reporter.after_tool_from` must be a number from 0 to 100 and `context_reporter.max_age_min` a finite
 number above 0; anything else (also NaN and infinity) falls back to the default and writes the usual one log line.
 The context reporter itself does not write that line (see `context_reporter.py`), the other hooks do.
+
+`wake_watcher.from_k` must be a finite number of at least 0 (0 = off, the default) and `wake_watcher.lead_min` a
+finite number above 0 (default 10); anything else falls back to the default with the usual log line (the watcher
+itself loads the config without logging).
 
 Two switches are deliberately NOT in the config file but in the hook command in `settings.json`:
 `--mode=shadow|enforce` (default `shadow`) and `--week-ok-until=YYYY-MM-DD`. Where `settings.json` is
@@ -172,12 +182,74 @@ Example: `Context: 168k/1000k tokens (17%). Measured, not estimated.`
   - `measured_at` is missing, not text, not an ISO time with a time zone, older than `context_reporter.max_age_min`
     (default 15 minutes, a number above 0; exactly that age still counts) or more than one minute in the future
     (the same classification as the usage measurement, `_usage.MIN_AGE_MIN`).
+- **Offer of the wake-up watcher:** on `UserPromptSubmit` only (never `PostToolUse`, never with an `agent_id`), if
+  `wake_watcher.from_k` is above 0 and `used_tokens` is at or above `from_k * 1000`, one sentence follows the line:
+  `Wake-up watcher: start it once now in the background (Bash, run_in_background true, timeout 7200000): python3
+  <abs dir>/wake_watcher.py <session_id>` (the path from `__file__`, absolute, through `shlex.quote`). Not offered
+  while the heartbeat file says a watcher lives (`watching`, at most `_wake.ALIVE_MIN` = 3 minutes old) or has
+  fired (`fired`, at most `_wake.REST_AFTER_FIRE_MIN` = 60 minutes old): the routine the wake-up triggers would
+  start the next watcher at once. A heartbeat more than one minute ahead of the clock counts as broken and blocks
+  nothing. If anything in the offer fails (missing `_wake.py`, unreadable heartbeat), the context line goes out
+  without it. With `from_k` 0 the output is byte for byte the line above.
 - **On internal error:** exit 0, no output, nothing logged. Config problems are not logged either (the hook runs
   after every tool call); a wrong `context_reporter` value falls back to its default.
 - **Limits:** the percentage is computed from the two stored numbers. The status line shows the percentage
   Claude Code passes in `used_percentage`; both agree as long as that is `total_input_tokens / window`.
   Subagents get nothing, and the file is an ordinary file, like the usage file: a model that can write it can
   fake it.
+
+### wake_watcher.py
+
+Not a hook: a script the model starts once in the background (`python3 wake_watcher.py <session_id>`,
+`run_in_background`, timeout 7200000) when the context reporter offers it. It polls and ends with one printed
+paragraph, which Claude Code delivers to the model as the result of the background task (a finished background
+task wakes an idle session; observed, not a documented guarantee). The installer copies it (and `_wake.py`)
+with the other runtime files; there is no settings entry and no component. `watch(session_id, cfg, directory, now,
+sleep)` is the whole logic with injectable clock and sleep; `main` prints its result and exits 0 (invalid or
+missing session id: a message and exit 2).
+
+Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `wake_watcher.py`), `ALIVE_MIN` 3 and
+`REST_AFTER_FIRE_MIN` 60 (`_wake.py`, shared with the reporter).
+
+- **At the start**, in this order: `from_k` is 0: message `disabled`, nothing written. A heartbeat of state
+  `watching` at most `ALIVE_MIN` minutes old (a living watcher): message `already running`, nothing written. A
+  `fired` heartbeat or a broken file does not stop a start.
+- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: end. (2) read
+  the state file through `context_reporter.read_state` (no link, no named pipe, size limit) and take it as alive if
+  `measured_at` is at most `STALE_MIN` minutes old and not more than a minute in the future. A missing, stale or
+  unreadable file counts one missed poll; the third in a row ends with `session ... is no longer active`; a fresh
+  file resets the counter. (3) write the heartbeat `watching`. (4) check the fire condition. (5) sleep `POLL_S`.
+  The poll that ends the watcher as gone writes no heartbeat. A heartbeat that cannot be written ends the watcher with
+  a message (the double-start guard is then unreliable, and a watcher that cannot say it lives must not run).
+- **Fire condition:** the state has plausible numbers (as the reporter requires), `used_tokens` is at least
+  `from_k * 1000`, `cache_ttl` is `1h` or `5m`, `cache_expires_at` a positive number, and
+  `0 < expires_at - now <= min(lead_min, ttl_minutes / 5) * 60`. So the lead is 10 minutes for `1h` and 1 minute
+  for `5m` with the default `lead_min`; a bigger `lead_min` does not widen it. Before the message the heartbeat
+  `fired` is written; if that fails, the watcher ends without waking anyone.
+- **Message** (English, one paragraph, with the session id): how long the user was away (about TTL minus the
+  rest), the rest of the cache in minutes (rounded up), the context in k and the threshold; then `The user is away.
+  Run your session-end routine now, without asking (save progress, commit, push, summary), then end the turn. Do
+  not start a new watcher.` The other endings say why the watcher stopped; the one for a gone session adds `If you
+  are a different session, there is nothing to do.` (a task started in one session wakes whichever session is
+  current when it ends, also after `/clear`).
+- **Heartbeat file** `<log_dir>/context/<session_id>.watch`: `{"session_id", "state": "watching"|"fired", "at":
+  "<UTC ISO>"}`. Written like the state file (atomic, `O_EXCL|O_NOFOLLOW`, 0600, never through a link, shared code
+  `_context_state.write_private`), read with the same guards. The state file's seven-day clean-up removes old
+  `*.watch` files, too.
+- **Cases:** `/clear` or closing the session: the status line stops writing, the file goes stale, the watcher ends
+  after three stale polls, about four to five minutes after the last write, and did not fire in between because
+  a stale file never fires (a fire right after `/clear` is possible only within the two minutes in which the old file
+  still counts as fresh). Sleeping or suspended computer: the polls stop with the status line; afterwards one stale
+  poll is not enough to end, and an expiry that has passed in the meantime is cold and never fires. Cold or
+  unknown cache: waits, never fires. The user writes: the status line writes a later `cache_expires_at`, the
+  watcher waits on. The 2-hour limit of background tasks: the watcher ends itself after 115 minutes; the next prompt
+  at or above `from_k` offers it again (its heartbeat is then older than `ALIVE_MIN`); the time between its end and
+  that prompt is unwatched.
+- **Limits:** the expiry is as old as the state file (the status line refreshes every `refreshInterval` = 60 s). With
+  the 5-minute cache the lead is one poll interval: a poll that comes a little later than 60 s can step over it, with
+  the 1-hour cache the window holds ten polls. Two watchers can start within the same second before the first heartbeat
+  exists. The model decides whether it follows the wake-up call; its instructions need a session-end routine. If
+  Claude Code compacts an idle session by itself before the cache expires, there is nothing left to save.
 
 ### spawn_gate.py
 
@@ -260,7 +332,8 @@ values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` ca
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
 Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session context state in
-`<log_dir>/context/<session_id>.json` (see Status line). The context reporter logs nothing. A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
+`<log_dir>/context/<session_id>.watch`. The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
 
 ## Known limits
