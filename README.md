@@ -59,8 +59,8 @@ Options:
 |---|---|
 | `--components statusline,usage-clock,spawn-gate,soft-stop` | Install only some parts. |
 | `--mode shadow\|enforce` | Mode of the two gates. Without it an existing installation keeps its mode; a first install starts in `shadow`. |
-| `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). |
-| `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone. |
+| `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). Needs the component `spawn-gate`. |
+| `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
@@ -97,8 +97,9 @@ At or above `start_block_5h` the line says so (`— from 75 % on, no new blocks`
 adds a weekly note that follows `thresholds.week_action`: `week at or above 75 %: agents start with a warning`
 (`warn`), `…: new agents need the user's approval` (`ask`) or `…: no new agents without --week-ok-until` (`deny`).
 Both notes can stand together. With a missing or old measurement it says `unknown` or `STALE` and
-asks to start larger blocks only after a fresh measurement. The texts are English; the model relays them to
-you in your language.
+asks to start larger blocks only after a fresh measurement. Without a weekly value it shows `week ?`, and a
+measurement stamped slightly ahead of your clock shows `measured in the future`. The texts are English; the
+model relays them to you in your language.
 
 The time part is useful on its own: every message in the transcript carries its date and time, so you can
 find later when something happened. Turn either part off in `config.json` (`display.show_usage`,
@@ -147,7 +148,8 @@ used tokens, time) for each session, private to you (mode 0600) and cleaned up a
   The level covers the whole model rule: with `warn`, `skill_fork_missing_agent` and `model_override_in_call`
   set to `deny` also only warn.
   [`docs/agents.md`](docs/agents.md) explains how to give your agents a model and an effort.
-- It fails closed: if the gate itself breaks, starts are denied (in `enforce` mode).
+- It fails closed: if the gate itself breaks, starts are denied (in `enforce` mode). The one exception is a
+  skill: an internal error while checking it only warns.
 
 Why the model rule exists: two audit runs started agents without a model set, so most of them ran on the most
 expensive model, simple counting jobs included. Together the two runs used about a third of the weekly limit
@@ -167,8 +169,9 @@ A checkpoint write is a Write/Edit into a directory whose path ends with `checkp
 The arguments of `echo` and `printf` must be quoted (double quotes without `$`, backticks or `\`). `printf`
 counts only without options and only with `%s`, `%b` and `%%` in its format: an option such as `-v` or a
 numeric conversion such as `%d` can run code in bash and zsh, so such a command is no checkpoint write.
-An agent that has saved once must save again at least every 15 calls. Tell your agents in their prompt where
-their checkpoint file is. Unknown usage never blocks here.
+An agent that has saved once must save again at least every 15 calls, whatever the usage. Tell your agents in
+their prompt where their checkpoint file is. Unknown or stale usage never triggers the three levels above; the
+agent gets one warning instead.
 
 ### From shadow to enforce
 
@@ -181,10 +184,12 @@ python3 tools/install.py --mode enforce      # when the log looks right
 
 With `model_effort_action: deny`, `enforce` refuses every agent without `model:` and `effort:`, including
 built-in types such as `general-purpose` and `Explore`. Run `tools/check_agents.py` first; it changes nothing.
+It searches the agents of the current folder first (`--project DIR` for another one), reads the `spawn_rules`
+of your installation (`--config PATH` for another file) and exits with 1 if it reports anything.
 
-`log_summary.py` finds the log the way the hooks do: `CCUC_LOG_DIR`, else `log_dir` from the `config.json` of
-your installation (`~/.claude/hooks/usage-clock/config.json`), else the default folder. `--config PATH` takes
-`log_dir` from another config file; or pass the path of a log file.
+`log_summary.py` finds the log in this order: `log_dir` from `--config PATH`, else `CCUC_LOG_DIR`, else
+`log_dir` from the config file in `CCUC_CONFIG` or, without it, of your installation
+(`~/.claude/hooks/usage-clock/config.json`), else the default folder. Or pass the path of a log file.
 
 The log (`~/.cache/claude-usage-clock/log.jsonl`) records, per decision: the time, the hook, the decision and
 its mode, and a reason. Values from the input appear only as short strings of at most 100 characters: the tool
@@ -228,6 +233,9 @@ that key and writes one line to the log.
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
 
 The mode and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config file.
+
+Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
+folder) and `CCUC_USAGE_FILE` (the shared usage file).
 
 ### Model names, effort values and exceptions
 
@@ -274,6 +282,8 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
   seatbelt, not a lock. See [Working with a guard hook](#working-with-a-guard-hook).
 - Agent discovery covers project agents (`.claude/agents`) and user agents (`~/.claude/agents`), not plugin or
   managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
+  Skill discovery covers your personal skills and the project folders from the start folder up to the repo
+  root, not plugin or managed skills or folders added with `--add-dir`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
 
 ### Working with a guard hook

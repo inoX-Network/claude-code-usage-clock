@@ -99,7 +99,9 @@ protected against the model, the model cannot switch itself free.
 (never by the file name alone), keeps the mode of an installed entry when `--mode` is left out, and drops an
 earlier `--week-ok-until` when it is left out (and says so). The command of the spawn gate ends with
 `|| { echo …; exit 2; }` in `enforce` (a broken installation denies) and with `|| true` in `shadow` (nothing
-may block); the other hooks always end with `|| true`.
+may block); the other hooks always end with `|| true`. Every hook entry gets a timeout of 5 s. The status line
+entry gets `refreshInterval: 60`; an update of our own entry adds it only if it is missing, and
+`--replace-statusline` keeps the `refreshInterval` of the replaced status line.
 
 ## Hooks
 
@@ -107,7 +109,7 @@ may block); the other hooks always end with `|| true`.
 |---|---|---|
 | `usage_clock.py` | UserPromptSubmit | exit 0, no output (a prompt must never be rejected) |
 | `soft_stop.py` | PreToolUse `*` | exit 0, allow (fail open) |
-| `spawn_gate.py` | PreToolUse `Agent\|Workflow\|Skill` | deny (fail closed); in `shadow` only logged |
+| `spawn_gate.py` | PreToolUse `Agent\|Workflow\|Skill` | deny (fail closed), except while checking a Skill: warn; in `shadow` only logged |
 
 Output formats: deny = `{"hookSpecificOutput": {"hookEventName", "permissionDecision": "deny",
 "permissionDecisionReason"}}`; warning = `{"hookSpecificOutput": {"hookEventName", "additionalContext"}}`.
@@ -155,6 +157,19 @@ that applies without it.
 3. `exceptions` start without the model check (Agent tool and Skill forks), with a short note. They do not
    apply to `agent(...)` calls inside workflow scripts.
 
+Workflow calls are checked by `script`, else `scriptPath`, else the stored workflow `name`. A child workflow
+(`workflow(...)` in the script) is read and checked one level deep; a child that calls `workflow(...)` itself is
+not determinable. Limits (`_spawn_check.py`), beyond which a definition or script is not determinable and
+therefore a finding: 1 s per search or script check, 5000 entries per agent or skill folder, 256 KB per
+definition file, 1 MB (characters) per workflow script.
+
+Discovery: agents as above; skills and commands from `~` and from the start folder (`CLAUDE_PROJECT_DIR`, else
+`cwd`) and its parents up to the repo root; a worktree without its own `.claude/skills` is followed by its
+main checkout. Not covered: plugins,
+managed skills, `--add-dir` and folders below the start folder. `CCUC_AGENT_DIRS`, `CCUC_SKILL_DIRS` and
+`CCUC_COMMAND_DIRS` (paths separated by `os.pathsep`) replace the discovery; the tests and the installer's
+smoke test use them.
+
 Config switches:
 
 | Key | Effect |
@@ -196,7 +211,8 @@ values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` ca
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
 Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session context state in
-`<log_dir>/context/<session_id>.json` (see Status line).
+`<log_dir>/context/<session_id>.json` (see Status line). A config problem is logged as a line with hook
+`config` and decision `defaults`.
 
 ## Known limits
 
