@@ -10,7 +10,7 @@ overnight run happily spends the whole window. This repo closes that gap with a 
 
 | Part | What it does | Maturity | Default |
 |---|---|---|---|
-| **Status line** | Shows model, 5h and weekly usage in colour. Several sessions merge into one shared usage file, so every session and every hook sees the same, current numbers. | stable | on |
+| **Status line** | Shows model, 5h and weekly usage, the context size and the prompt cache clock in colour. Several sessions merge into one shared usage file, so every session and every hook sees the same, current numbers. | stable | on |
 | **Usage clock** (`UserPromptSubmit`) | Adds one line of context to every prompt: usage, reset times, and the local date and time. Both parts switch independently. | stable | on |
 | **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
@@ -77,7 +77,7 @@ the installer did. What stays, and how to remove it:
 | What stays | How to remove it |
 |---|---|
 | The `--target` folder (default `~/.claude/hooks/usage-clock/`) with the scripts and your `config.json` | `rm -r ~/.claude/hooks/usage-clock` (or the folder you gave with `--target`) |
-| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl` and the per-agent counters | `rm -r ~/.cache/claude-usage-clock` |
+| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters and the per-session context files | `rm -r ~/.cache/claude-usage-clock` |
 | The shared usage file `~/.claude/rate-limit.json` and its lock file `rate-limit.json.lock` (the `usage_file` in your config) | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
@@ -100,6 +100,27 @@ you in your language.
 The time part is useful on its own: every message in the transcript carries its date and time, so you can
 find later when something happened. Turn either part off in `config.json` (`display.show_usage`,
 `display.show_time`).
+
+## What the status line shows
+
+```
+Opus | 5h 40% | week 61% | ctx 231k/1000k 23% | cache 54m
+```
+
+- `5h` and `week` come from `rate_limits` (yellow from 50 %, red from 75 %); at the weekly threshold
+  `<- weekly limit reached` follows.
+- `ctx` is the input context of the session: tokens used, window size, share of the window. It is always shown,
+  from the first prompt on; before the first answer it reads `ctx –/1000k` instead of a made-up zero. The colour
+  depends on the absolute tokens, not on the percentage: yellow from 300k, red from 500k
+  (`statusline.context_yellow_from_k`, `context_red_from_k`), because a long context costs the same on a small
+  and on a large window.
+- `cache` is how long the prompt cache of the session stays warm: minutes left, yellow below 5
+  (`statusline.cache_yellow_below_min`), red `cache cold` when it has run out or is not warm. Nothing is shown
+  until the first request.
+- A part whose input is missing is left out, never filled with a guess.
+
+While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
+used tokens, time) for each session, private to you (mode 0600) and cleaned up after 7 days.
 
 ## The two gates
 
@@ -180,7 +201,7 @@ that key and writes one line to the log.
 | Key | Default | Meaning |
 |---|---|---|
 | `usage_file` | `~/.claude/rate-limit.json` | Shared usage file written by the status line. |
-| `log_dir` | `~/.cache/claude-usage-clock` | Log and per-agent counters. |
+| `log_dir` | `~/.cache/claude-usage-clock` | Log, per-agent counters and per-session context files. |
 | `display.show_usage` / `show_time` | `true` / `true` | Parts of the prompt line. |
 | `statusline.yellow_from` / `red_from` | `50` / `75` | Colours. |
 | `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |

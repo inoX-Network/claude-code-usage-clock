@@ -1091,3 +1091,23 @@ def test_the_original_error_survives_when_the_temp_file_is_already_gone(tmp_path
     with pytest.raises(PermissionError, match='replace refused'):
         module.copy_runtime_files(str(target))
     assert not list(target.glob('*.tmp-usage-clock'))
+
+
+def test_the_context_state_module_is_required_and_copied(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert '_context_state.py' in load_module().REQUIRED_FILES
+    (repo / 'hooks' / '_context_state.py').unlink()
+    r = run_in(repo, '--settings', settings, '--target', target)
+    assert r.returncode == 1 and '_context_state.py' in r.stdout and not target.exists()
+    (repo / 'hooks' / '_context_state.py').write_text('', encoding='utf-8')
+    assert run_in(repo, '--settings', settings, '--target', target).returncode == 0
+    assert (target / '_context_state.py').is_file()
+
+
+def test_a_broken_context_state_module_fails_the_status_line_smoke_test(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    (repo / 'hooks' / '_context_state.py').write_text('def (:\n', encoding='utf-8')
+    r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'statusline')
+    assert r.returncode == 1 and 'SMOKE TEST FAILED' in r.stdout and 'statusline.py' in r.stdout, r.stdout
+    assert read(settings) == {}
