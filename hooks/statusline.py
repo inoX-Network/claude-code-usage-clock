@@ -11,8 +11,8 @@ share that file; the merge makes sure an idle session cannot overwrite fresh val
 line shows the merged values, so every session shows the same.
 
 If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent instead of claiming 0 %: a
-missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge fails, the session's own values are shown and
-nothing is written. The exit code is always 0.
+missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
+fails, the session's own values are shown and nothing is written. The exit code is always 0.
 
 Output: <model> | 5h NN% | week NN% | ctx 231k/1000k 23% | cache 54m
 """

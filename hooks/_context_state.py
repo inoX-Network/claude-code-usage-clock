@@ -7,7 +7,8 @@ The session id comes from the status line input and becomes a file name: it is a
 [A-Za-z0-9_-]{1,128}, anything else writes nothing. Writing is atomic (temporary file + os.replace) and
 never follows links: a planted link is replaced, never written through. Files and folder are private
 (0600 / 0700). Every write also removes `*.json` files older than seven days (not the one just written);
-links and folders are left alone. The caller treats every error as "no state": the status line must never fail because of this file.
+links and folders are left alone. The caller treats every error as "no state": the status line must never
+fail because of this file.
 """
 from __future__ import annotations
 
