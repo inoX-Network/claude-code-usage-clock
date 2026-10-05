@@ -381,8 +381,13 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 |---|---|
 | `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
 | `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
-| `~/.claude/rate-limit.json*` (with `.lock` and `.tmp.*`) | The shared usage numbers. |
-| `~/.cache/claude-usage-clock/` | Log and per-agent checkpoint counters. |
+| `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
+| `~/.claude/rate-limit.json.lock` | Held while the numbers are merged; a model that holds it keeps them from updating. |
+| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state and watcher heartbeats. |
+
+List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
+nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is
+created fresh for every write, a leftover or planted link there is removed first, and it is never written through.
 
 ## Development
 
