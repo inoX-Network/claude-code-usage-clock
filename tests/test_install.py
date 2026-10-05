@@ -1340,3 +1340,13 @@ def test_a_broken_context_state_module_fails_the_reporter_smoke_test(repo, tmp_p
     r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'context-reporter')
     assert r.returncode == 1 and 'context_reporter.py: output is not the expected JSON' in r.stdout, r.stdout
     assert read(settings) == {}
+
+
+def test_installed_command_finds_our_entry_in_any_event_of_the_component(tmp_path):
+    module = load_module()
+    target = str(tmp_path / 'target')
+    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    only_post = {'hooks': {'PostToolUse': [{'matcher': '*', 'hooks': [{'type': 'command', 'command': command}]}]}}
+    assert module.installed_command(only_post, 'context-reporter', target) == command
+    assert module.installed_command(only_post, 'context-reporter', str(tmp_path / 'elsewhere')) is None
+    assert module.installed_command({}, 'context-reporter', target) is None

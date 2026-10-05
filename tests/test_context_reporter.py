@@ -280,7 +280,21 @@ def test_a_link_instead_of_the_folder_is_not_followed(tmp_path):
 def test_a_named_pipe_instead_of_the_file_stays_silent_and_does_not_hang(tmp_path):
     state_dir(tmp_path).mkdir(parents=True)
     os.mkfifo(state_dir(tmp_path) / f'{SID}.json')
-    assert run_hook(PROMPT) is None
+    assert run_hook(PROMPT) is None          # nobody writes into the pipe: a blocking open would hang here
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='needs named pipes')
+def test_a_named_pipe_that_holds_a_valid_state_is_still_not_read(tmp_path):
+    """Only a regular file counts: what a pipe delivers is not what the status line wrote."""
+    state_dir(tmp_path).mkdir(parents=True)
+    path = state_dir(tmp_path) / f'{SID}.json'
+    os.mkfifo(path)
+    descriptor = os.open(path, os.O_RDWR)       # read and write end at once: neither side blocks
+    try:
+        os.write(descriptor, json.dumps(state(measured_at=NOW.strftime('%Y-%m-%dT%H:%M:%SZ'))).encode('utf-8'))
+        assert build(tmp_path) is None
+    finally:
+        os.close(descriptor)
 
 
 @pytest.mark.parametrize('content', ['', 'not json', '{', '[1, 2]', 'null', '"text"', '5', '{"a": ' * 5000,
