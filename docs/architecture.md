@@ -121,7 +121,12 @@ One line of context per prompt. `show_usage` and `show_time` switch the two part
 means no output. The time part needs no usage file.
 Example: `Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago ·
 Now: Wed 14 Jan 2026 10:05`. Reset times today show only the time. The threshold note uses the configured
-value, not a fixed number.
+value, not a fixed number. Notes are appended only for a fresh measurement (a stale one shows `STALE`
+instead): at or above `start_block_5h` ` — from N % on, no new blocks`; at or above `start_block_week` (needs a
+weekly value) ` — week at or above N %: <text>`, with the text chosen by `week_action`: `warn` "agents start with a
+warning", `ask` "new agents need the user's approval", `deny` "no new agents without --week-ok-until". Both
+notes can stand together, the 5h note first. The hook does not know `--week-ok-until`; the note names the action
+that applies without it.
 
 ### spawn_gate.py
 

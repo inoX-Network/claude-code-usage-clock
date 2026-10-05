@@ -29,8 +29,16 @@ def with_reset(value: str, reset: float | None, now: datetime) -> str:
     return f'{value} (resets {format_reset(reset, now)})' if reset is not None else value
 
 
-def usage_text(usage, threshold: float, now: datetime) -> str:
-    """The usage part. `usage` is a _usage.Usage, `threshold` is thresholds.start_block_5h."""
+WEEK_NOTES = {
+    'warn': 'agents start with a warning',
+    'ask': "new agents need the user's approval",
+    'deny': 'no new agents without --week-ok-until',
+}
+
+
+def usage_text(usage, thresholds: dict, now: datetime) -> str:
+    """The usage part. `usage` is a _usage.Usage, `thresholds` is the config section of that name: the notes
+    use start_block_5h, start_block_week and week_action. The weekly note says what the spawn gate does."""
     if usage.state == 'unknown':
         return f'Usage: unknown (no valid measurement in the usage file) — {FRESH_MEASUREMENT_HINT}.'
     five = with_reset(f'{usage.five_hour:.0f} %', usage.five_hour_reset, now)
@@ -39,8 +47,11 @@ def usage_text(usage, threshold: float, now: datetime) -> str:
     line = f'Usage: 5h {five} · week {week} · measured {measured}'
     if usage.state == 'stale':
         line += f' — STALE, counts as unknown; {FRESH_MEASUREMENT_HINT}'
-    elif usage.five_hour >= threshold:
-        line += f' — from {threshold:g} % on, no new blocks'
+    else:
+        if usage.five_hour >= thresholds['start_block_5h']:
+            line += f' — from {thresholds["start_block_5h"]:g} % on, no new blocks'
+        if usage.week is not None and usage.week >= thresholds['start_block_week']:
+            line += f' — week at or above {thresholds["start_block_week"]:g} %: {WEEK_NOTES[thresholds["week_action"]]}'
     return line
 
 
@@ -57,7 +68,7 @@ def build_line(cfg: dict, now: datetime | None = None) -> str:
             import _usage
             thresholds = cfg['thresholds']
             usage = _usage.read_usage(now=now, max_age_min=thresholds['max_age_min'])
-            parts.append(usage_text(usage, thresholds['start_block_5h'], now))
+            parts.append(usage_text(usage, thresholds, now))
         except Exception:  # a broken usage part must not take the time part down with it
             pass
     if cfg['display']['show_time']:

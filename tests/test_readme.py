@@ -235,3 +235,10 @@ def test_the_status_line_sections_name_the_new_keys_the_state_file_and_the_clean
     assert f'{_context_state.MAX_AGE_S // 86400} days' in readme and f'{_context_state.MAX_AGE_S // 86400} days' in architecture
     assert '[A-Za-z0-9_-]{1,128}' in architecture and _context_state.SESSION_ID.pattern in architecture
     assert '_context_state.py' in architecture_text()      # in the file layout
+
+
+def test_the_weekly_notes_of_the_usage_line_are_documented_word_for_word():
+    import usage_clock
+    assert set(usage_clock.WEEK_NOTES) == {'warn', 'ask', 'deny'}
+    for text in usage_clock.WEEK_NOTES.values():
+        assert text in flat(readme_text()) and text in flat(architecture_text()), text

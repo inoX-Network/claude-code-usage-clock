@@ -34,6 +34,11 @@ def usage(five=40.0, week=61.0, age=0.0, five_reset=None, week_reset=None, max_a
     return _usage.Usage(five, week, age, five_reset, week_reset, max_age)
 
 
+def th(five=75, week=75, action='warn'):
+    """The thresholds section as usage_text takes it."""
+    return {'start_block_5h': five, 'start_block_week': week, 'week_action': action}
+
+
 def write_usage(path, five=42, week=23, age_min=1, five_in_h=2, week_in_h=100, measured_at=None, five_block=True):
     now = datetime.now(UTC)
     data = {'five_hour': {'used_percentage': five, 'resets_at': (now + timedelta(hours=five_in_h)).timestamp()}
@@ -74,7 +79,7 @@ def write_config(tmp_path, content):
 
 def test_line_matches_the_documented_example():
     u = usage(40, 61, 0, ts(2026, 1, 14, 14, 0), ts(2026, 1, 19, 9, 0))
-    assert usage_clock.usage_text(u, 75, NOW) + ' · ' + usage_clock.time_text(NOW) == (
+    assert usage_clock.usage_text(u, th(75), NOW) + ' · ' + usage_clock.time_text(NOW) == (
         'Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago · '
         'Now: Wed 14 Jan 2026 10:05')
 
@@ -121,51 +126,122 @@ def test_reset_times_use_the_time_zone_of_the_clock_not_utc():
 
 
 def test_missing_reset_times_leave_the_values_bare_and_a_missing_week_is_a_question_mark():
-    assert usage_clock.usage_text(usage(40, 61, 3), 75, NOW) == 'Usage: 5h 40 % · week 61 % · measured 3 min ago'
-    assert usage_clock.usage_text(usage(40, None, 1), 75, NOW) == 'Usage: 5h 40 % · week ? · measured 1 min ago'
+    assert usage_clock.usage_text(usage(40, 61, 3), th(75), NOW) == 'Usage: 5h 40 % · week 61 % · measured 3 min ago'
+    assert usage_clock.usage_text(usage(40, None, 1), th(75), NOW) == 'Usage: 5h 40 % · week ? · measured 1 min ago'
 
 
 def test_percentages_and_age_are_rounded_to_whole_numbers():
-    assert usage_clock.usage_text(usage(40.6, 61.4, 2.4), 75, NOW) == 'Usage: 5h 41 % · week 61 % · measured 2 min ago'
+    assert usage_clock.usage_text(usage(40.6, 61.4, 2.4), th(75), NOW) == 'Usage: 5h 41 % · week 61 % · measured 2 min ago'
 
 
 # --- Threshold note ------------------------------------------------------------------------------
 
 def test_threshold_note_appears_at_the_configured_value_and_not_below():
-    assert usage_clock.usage_text(usage(74, None, 0), 75, NOW).endswith('measured 0 min ago')
-    at = usage_clock.usage_text(usage(75, None, 0), 75, NOW)
+    assert usage_clock.usage_text(usage(74, None, 0), th(75), NOW).endswith('measured 0 min ago')
+    at = usage_clock.usage_text(usage(75, None, 0), th(75), NOW)
     assert at.endswith('measured 0 min ago — from 75 % on, no new blocks')
 
 
 def test_threshold_note_uses_the_configured_number_not_a_fixed_one():
-    assert usage_clock.usage_text(usage(65, None, 0), 60, NOW).endswith('— from 60 % on, no new blocks')
-    assert usage_clock.usage_text(usage(65, None, 0), 75, NOW).endswith('measured 0 min ago')
-    assert usage_clock.usage_text(usage(90, None, 0), 92.5, NOW).endswith('measured 0 min ago')
-    assert usage_clock.usage_text(usage(93, None, 0), 92.5, NOW).endswith('— from 92.5 % on, no new blocks')
+    assert usage_clock.usage_text(usage(65, None, 0), th(60), NOW).endswith('— from 60 % on, no new blocks')
+    assert usage_clock.usage_text(usage(65, None, 0), th(75), NOW).endswith('measured 0 min ago')
+    assert usage_clock.usage_text(usage(90, None, 0), th(92.5), NOW).endswith('measured 0 min ago')
+    assert usage_clock.usage_text(usage(93, None, 0), th(92.5), NOW).endswith('— from 92.5 % on, no new blocks')
 
 
 def test_threshold_note_comes_before_nothing_else_and_only_once():
-    line = usage_clock.usage_text(usage(80, 20, 1, ts(2026, 1, 14, 14, 0)), 75, NOW)
+    line = usage_clock.usage_text(usage(80, 20, 1, ts(2026, 1, 14, 14, 0)), th(75), NOW)
     assert line == 'Usage: 5h 80 % (resets 14:00) · week 20 % · measured 1 min ago — from 75 % on, no new blocks'
+
+
+# --- Weekly note -----------------------------------------------------------------------------------
+
+WEEK_TEXT = {'warn': 'agents start with a warning', 'ask': "new agents need the user's approval",
+             'deny': 'no new agents without --week-ok-until'}
+
+
+@pytest.mark.parametrize('action', ['warn', 'ask', 'deny'])
+def test_weekly_note_per_week_action_at_the_threshold(action):
+    line = usage_clock.usage_text(usage(10, 75, 0), th(week=75, action=action), NOW)
+    assert line == f'Usage: 5h 10 % · week 75 % · measured 0 min ago — week at or above 75 %: {WEEK_TEXT[action]}'
+
+
+@pytest.mark.parametrize('action', ['warn', 'ask', 'deny'])
+def test_weekly_note_is_absent_below_the_threshold(action):
+    line = usage_clock.usage_text(usage(10, 74.9, 0), th(week=75, action=action), NOW)
+    assert line == 'Usage: 5h 10 % · week 75 % · measured 0 min ago'      # 74.9 is shown as 75 but is below it
+
+
+def test_weekly_note_is_exact_at_the_boundary_on_the_unrounded_value():
+    assert 'at or above' not in usage_clock.usage_text(usage(10, 74.6, 0), th(week=75), NOW)     # shows 75 %, below 75
+    assert 'week at or above 75 %' in usage_clock.usage_text(usage(10, 75.0, 0), th(week=75), NOW)
+    assert 'week at or above 75 %' in usage_clock.usage_text(usage(10, 99, 0), th(week=75), NOW)
+
+
+def test_weekly_note_names_the_configured_threshold_not_a_fixed_one():
+    line = usage_clock.usage_text(usage(10, 62, 0), th(week=60, action='ask'), NOW)
+    assert line.endswith("— week at or above 60 %: new agents need the user's approval")
+    assert usage_clock.usage_text(usage(10, 62, 0), th(week=62.5), NOW).count('at or above') == 0
+    assert 'week at or above 62.5 %' in usage_clock.usage_text(usage(10, 63, 0), th(week=62.5), NOW)
+
+
+def test_weekly_note_comes_after_the_five_hour_note_and_both_can_stand_together():
+    line = usage_clock.usage_text(usage(80, 80, 1, ts(2026, 1, 14, 14, 0), ts(2026, 1, 19, 9, 0)),
+                                  th(five=75, week=75, action='deny'), NOW)
+    assert line == ('Usage: 5h 80 % (resets 14:00) · week 80 % (resets Mon 19 Jan 09:00) · measured 1 min ago'
+                    ' — from 75 % on, no new blocks — week at or above 75 %: no new agents without --week-ok-until')
+
+
+def test_five_hour_note_alone_stays_as_it_was_and_week_note_alone_has_no_five_hour_note():
+    assert usage_clock.usage_text(usage(80, 20, 1), th(), NOW).endswith('measured 1 min ago — from 75 % on, no new blocks')
+    line = usage_clock.usage_text(usage(20, 80, 1), th(), NOW)
+    assert 'no new blocks' not in line and line.endswith('— week at or above 75 %: agents start with a warning')
+
+
+def test_no_weekly_note_without_a_weekly_value():
+    assert 'at or above' not in usage_clock.usage_text(usage(10, None, 0), th(week=0), NOW)
+
+
+def test_no_weekly_note_when_the_measurement_is_stale_or_unknown():
+    stale = usage_clock.usage_text(usage(10, 90, 40, max_age=15), th(), NOW)
+    assert 'STALE' in stale and 'at or above' not in stale
+    assert 'at or above' not in usage_clock.usage_text(usage(None, None, None), th(), NOW)
+
+
+def test_weekly_note_through_the_hook_follows_the_config(tmp_path):
+    write_usage(tmp_path / 'usage.json', five=10, week=80)
+    assert 'week at or above 75 %: agents start with a warning' in run_hook()
+    env = write_config(tmp_path, {'thresholds': {'week_action': 'ask', 'start_block_week': 70}})
+    assert "week at or above 70 %: new agents need the user's approval" in run_hook(env)
+    env = write_config(tmp_path, {'thresholds': {'week_action': 'deny', 'start_block_week': 85}})
+    assert 'at or above' not in run_hook(env)
+    env = write_config(tmp_path, {'thresholds': {'week_action': 'deny'}})
+    assert 'week at or above 75 %: no new agents without --week-ok-until' in run_hook(env)
+
+
+def test_both_notes_through_the_hook(tmp_path):
+    write_usage(tmp_path / 'usage.json', five=80, week=80)
+    context = run_hook()
+    assert ' — from 75 % on, no new blocks — week at or above 75 %: agents start with a warning · Now:' in context
 
 
 # --- Unknown and stale ---------------------------------------------------------------------------
 
 def test_unknown_usage_says_larger_blocks_wait_for_a_fresh_measurement():
-    line = usage_clock.usage_text(usage(None, None, None), 75, NOW)
+    line = usage_clock.usage_text(usage(None, None, None), th(75), NOW)
     assert line == ('Usage: unknown (no valid measurement in the usage file) — '
                     'start larger blocks only after a fresh measurement.')
 
 
 def test_stale_usage_shows_the_old_values_and_the_same_advice():
-    line = usage_clock.usage_text(usage(80, 20, 40, max_age=15), 75, NOW)
+    line = usage_clock.usage_text(usage(80, 20, 40, max_age=15), th(75), NOW)
     assert line == ('Usage: 5h 80 % · week 20 % · measured 40 min ago — STALE, counts as unknown; '
                     'start larger blocks only after a fresh measurement')
     assert 'no new blocks' not in line       # a stale value does not also trigger the threshold note
 
 
 def test_measurement_from_the_future_is_stale_and_not_shown_as_negative_minutes():
-    line = usage_clock.usage_text(usage(10, 20, -5), 75, NOW)
+    line = usage_clock.usage_text(usage(10, 20, -5), th(75), NOW)
     assert 'measured in the future' in line and '-5' not in line and 'STALE' in line
 
 

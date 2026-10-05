@@ -93,7 +93,10 @@ With every prompt:
 Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago · Now: Wed 14 Jan 2026 10:05
 ```
 
-Above the start threshold the line says so; with a missing or old measurement it says `unknown` or `STALE` and
+At or above `start_block_5h` the line says so (`— from 75 % on, no new blocks`). At or above `start_block_week` it
+adds a weekly note that follows `thresholds.week_action`: `week at or above 75 %: agents start with a warning`
+(`warn`), `…: new agents need the user's approval` (`ask`) or `…: no new agents without --week-ok-until` (`deny`).
+Both notes can stand together. With a missing or old measurement it says `unknown` or `STALE` and
 asks to start larger blocks only after a fresh measurement. The texts are English; the model relays them to
 you in your language.
 
