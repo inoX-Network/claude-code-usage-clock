@@ -181,6 +181,11 @@ What you need for this:
 Opus | 5h 40% ↻14:00 | week 61% ↻Mon 09:00 | ctx 231k/1000k 23% | cache 54m
 ```
 
+![The status line with the five-hour window in red at 82 %](docs/images/statusline-red.png)
+
+Later the same evening: the five-hour window has passed 75 % and turns red. With the default thresholds the
+spawn gate now starts no new agent blocks until the window resets at 22:40.
+
 - `5h` and `week` come from `rate_limits` (yellow from 50 %, red from 75 %); at the weekly threshold
   `<- weekly limit reached` follows.
 - `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday and appears only
