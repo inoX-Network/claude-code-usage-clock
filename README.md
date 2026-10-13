@@ -87,7 +87,7 @@ the installer did. What stays, and how to remove it:
 | What stays | How to remove it |
 |---|---|
 | The `--target` folder (default `~/.claude/hooks/usage-clock/`) with the scripts and your `config.json` | `rm -r ~/.claude/hooks/usage-clock` (or the folder you gave with `--target`) |
-| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters, the per-session context files and the lock of the usage file (`rate-limit.json.lock`) | `rm -r ~/.cache/claude-usage-clock` |
+| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters, the per-session context files, the measurement history (`usage-history.jsonl` and `usage-history.jsonl.1`) and the lock of the usage file (`rate-limit.json.lock`) | `rm -r ~/.cache/claude-usage-clock` |
 | The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
@@ -206,6 +206,16 @@ used tokens, time, and while the prompt cache is warm its lifetime and expiry) f
 (mode 0600) and cleaned up after 7 days. The context reporter and the wake-up watcher read that file; without the
 status line there is nothing for them to read.
 
+It also keeps a **measurement history** of the usage numbers, `<log_dir>/usage-history.jsonl`, for reports over
+days, weeks and months. One line per measurement, numbers only (no session, no path):
+`{"t":"2026-01-14T10:05:00Z","five":40,"week":61,"five_resets":1768399200,"week_resets":1768813200}`. A line is
+added when `five`, `week` or a reset time changed since the last line, or when the last line is
+`history.heartbeat_min` old (15 minutes), so an idle stretch shows up as a stretch and not as a gap. The numbers are
+the merged ones that all your sessions share, written under the lock of the usage file, so parallel sessions never
+add the same measurement twice. Above `history.max_kb` (1024 KB, about 40 days) the file becomes
+`usage-history.jsonl.1` and an older `.1` goes. The file is private to you (mode 0600). `history.enabled: false`
+switches it off.
+
 ## The two gates
 
 **Spawn gate** (Agent, Workflow and forked Skill starts, in the main session and in subagents):
@@ -292,13 +302,14 @@ that key and writes one line to the log.
 | Key | Default | Meaning |
 |---|---|---|
 | `usage_file` | `~/.claude/rate-limit.json` | Shared usage file written by the status line. |
-| `log_dir` | `~/.cache/claude-usage-clock` | Log, per-agent counters and per-session context files. |
+| `log_dir` | `~/.cache/claude-usage-clock` | Log, per-agent counters, per-session context files and the measurement history. |
 | `display.show_usage` / `show_time` | `true` / `true` | Parts of the prompt line. |
 | `statusline.yellow_from` / `red_from` | `50` / `75` | Colours. |
 | `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |
 | `statusline.show_reset` | `true` | Show when the windows reset (`↻14:00`; the weekly one from yellow on). |
 | `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
+| `history.enabled` / `heartbeat_min` / `max_kb` | `true` / `15` / `1024` | Measurement history of the status line: on or off; minutes after which an unchanged measurement is written anyway; size in KB above which the file is rotated to `.1`. |
 | `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |
 | `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
 | `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
@@ -398,7 +409,7 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
 | `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
 | `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
-| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
+| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, measurement history, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
 
 List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
 nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is

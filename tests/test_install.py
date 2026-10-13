@@ -1374,3 +1374,23 @@ def test_installed_command_finds_our_entry_in_any_event_of_the_component(tmp_pat
     assert module.installed_command(only_post, 'context-reporter', target) == command
     assert module.installed_command(only_post, 'context-reporter', str(tmp_path / 'elsewhere')) is None
     assert module.installed_command({}, 'context-reporter', target) is None
+
+
+def test_the_history_module_is_required_and_copied(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert '_history.py' in load_module().REQUIRED_FILES
+    (repo / 'hooks' / '_history.py').unlink()
+    r = run_in(repo, '--settings', settings, '--target', target)
+    assert r.returncode == 1 and '_history.py' in r.stdout and not target.exists()
+    (repo / 'hooks' / '_history.py').write_text('', encoding='utf-8')
+    assert run_in(repo, '--settings', settings, '--target', target).returncode == 0
+    assert (target / '_history.py').is_file()
+
+
+def test_a_broken_history_module_fails_the_status_line_smoke_test(repo, tmp_path):
+    settings = write_settings(tmp_path)
+    (repo / 'hooks' / '_history.py').write_text('def (:\n', encoding='utf-8')
+    r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'statusline')
+    assert r.returncode == 1 and 'SMOKE TEST FAILED' in r.stdout and 'statusline.py' in r.stdout, r.stdout
+    assert read(settings) == {}

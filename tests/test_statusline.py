@@ -527,3 +527,82 @@ def test_config_file_switches_the_reset_times_off(tmp_path):
     r = run({'rate_limits': {'five_hour': b(7, now + 3600), 'seven_day': b(80, now + 86400)}}, tmp_path,
             {'CCUC_CONFIG': str(config), 'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
     assert plain(r.stdout).strip() == 'Claude | 5h 7% | week 80% <- weekly limit reached'
+
+
+# --- Measurement history: appended after a successful merge ------------------------------------------
+
+def history_lines(tmp_path):
+    path = tmp_path / 'log' / 'usage-history.jsonl'
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
+
+
+def test_script_appends_the_merged_values_to_the_history(tmp_path):
+    now = time.time()
+    status = {'rate_limits': {'five_hour': b(79, now + 3600), 'seven_day': b(48.5, now + 86400)}}
+    assert run(status, tmp_path).returncode == 0
+    (line,) = history_lines(tmp_path)
+    assert (line['five'], line['week'], line['five_resets'], line['week_resets']) == (79, 48.5, now + 3600, now + 86400)
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', line['t'])
+
+
+def test_an_idle_session_with_old_numbers_adds_no_line_and_a_repeat_adds_none(tmp_path):
+    now = time.time()
+    active = {'rate_limits': {'five_hour': b(79, now + 3600), 'seven_day': b(48, now + 86400)}}
+    run(active, tmp_path)
+    run(active, tmp_path)
+    run({'rate_limits': {'five_hour': None, 'seven_day': b(19, now + 86400)}}, tmp_path)    # idle: merged stays
+    assert len(history_lines(tmp_path)) == 1
+
+
+def test_the_history_holds_the_merged_values_not_the_own_ones_of_the_session(tmp_path):
+    now = time.time()
+    run({'rate_limits': {'five_hour': b(79, now + 3600), 'seven_day': b(48, now + 86400)}}, tmp_path)
+    run({'rate_limits': {'five_hour': b(10, now + 3600), 'seven_day': b(19, now + 86400)}}, tmp_path)
+    assert [(line['five'], line['week']) for line in history_lines(tmp_path)] == [(79, 48)]
+
+
+def test_a_failed_merge_appends_nothing(tmp_path):
+    blocker = tmp_path / 'blocker'
+    blocker.write_text('x', encoding='utf-8')
+    now = time.time()
+    r = run({'rate_limits': {'five_hour': b(23, now + 3600)}}, tmp_path, {'CCUC_USAGE_FILE': str(blocker / 'usage.json')})
+    assert r.returncode == 0 and history_lines(tmp_path) == []
+
+
+def test_without_rate_limits_nothing_is_appended(tmp_path):
+    assert run({'model': {'display_name': 'M'}}, tmp_path).returncode == 0
+    assert history_lines(tmp_path) == []
+
+
+def test_history_enabled_false_in_the_config_switches_it_off(tmp_path):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'history': {'enabled': False}}), encoding='utf-8')
+    now = time.time()
+    r = run({'rate_limits': {'five_hour': b(79, now + 3600)}}, tmp_path, {'CCUC_CONFIG': str(config)})
+    assert r.returncode == 0 and '5h 79%' in plain(r.stdout)
+    assert history_lines(tmp_path) == []
+    assert json.loads((tmp_path / 'usage.json').read_text(encoding='utf-8'))['five_hour']['used_percentage'] == 79
+
+
+def test_the_heartbeat_and_the_size_limit_come_from_the_config(monkeypatch, tmp_path, capsys):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'history': {'heartbeat_min': 3, 'max_kb': 7}}), encoding='utf-8')
+    monkeypatch.setenv('CCUC_CONFIG', str(config))
+    seen = []
+    monkeypatch.setattr(statusline._history, 'append', lambda *args: seen.append(args))
+    now = time.time()
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'rate_limits': {'five_hour': b(40, now + 600)}})))
+    assert statusline.main() == 0
+    (log_dir, merged, stamp, heartbeat, max_kb) = seen[0]
+    assert log_dir == str(tmp_path / 'log') and merged['five_hour']['used_percentage'] == 40
+    assert abs(stamp - now) < 60 and (heartbeat, max_kb) == (3, 7)
+
+
+def test_a_failing_history_does_not_touch_the_line_or_the_exit_code(monkeypatch, capsys):
+    def boom(*_a):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(statusline._history, 'append', boom)
+    now = time.time()
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'rate_limits': {'five_hour': b(40, now + 600)}})))
+    assert statusline.main() == 0
+    assert '5h 40%' in plain(capsys.readouterr().out)

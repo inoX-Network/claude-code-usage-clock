@@ -14,6 +14,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   wake_watcher.py         background task, no hook: wakes an idle session shortly before its prompt cache expires
   _config.py              loads config.json next to the scripts, falls back to defaults
   _usage.py               reads and merges the shared usage file
+  _history.py             appends the merged usage numbers to the measurement history (<log_dir>/usage-history.jsonl)
   _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json); the reporter reads it
   _wake.py                what reporter and watcher share: ALIVE_MIN, REST_AFTER_FIRE_MIN, the heartbeat file
   _hookio.py              hook input/output, JSONL log, directory discovery
@@ -50,7 +51,8 @@ Default path `~/.claude/rate-limit.json` (config `usage_file`, env override `CCU
 - Write under an exclusive `fcntl.flock` on `<log_dir>/<file name>.lock` (the tool's own folder, so a guard that
   protects it covers the lock; whoever holds the lock stops the updates), atomically via `<file>.tmp.<pid>` +
   `os.replace` (next to the file: the rename is atomic only within one file system).
-  Write only when something changed.
+  Write only when something changed. The status line appends to the measurement history under the same lock
+  (see Status line).
 - A file in any other format counts as empty and is rebuilt on the next status line tick.
 
 Readers classify the measurement as `ok`, `stale` (older than `max_age_min`, or more than 1 min in the future)
@@ -98,6 +100,36 @@ seconds, an integer). Both keys are written together or not at all: a cold cache
   of a live watcher is rewritten every minute, so only leftovers go.
 - Any error is ignored: the line is shown regardless.
 
+### Measurement history
+
+For reports over days, weeks and months the status line appends the merged usage numbers to
+`<log_dir>/usage-history.jsonl` (`_history.append`). One JSON line per measurement:
+
+```json
+{"t":"2026-01-14T10:05:00Z","five":40,"week":61,"five_resets":1768399200,"week_resets":1768813200}
+```
+
+`t` is UTC as `measured_at` in the usage file. `five` and `week` are the `used_percentage` of the two blocks,
+`five_resets` and `week_resets` their `resets_at` (Unix seconds). Numbers are taken over as they come, whole or
+decimal. A block that is missing or whose reset is not in the future is `null`; with no valid block nothing is
+written. No session id, no path, nothing else.
+
+- **Source and lock:** the content `_usage.update_file` returns, not the session's own input. `update_file`
+  takes an optional `after_merge(merged)`, which the status line uses for the append, and calls it under the lock
+  of the usage file after the merge and the write, also if the file did not change. One writer at a time reads the
+  last line and decides, so parallel sessions never write the same measurement twice. If the merge or the write of
+  the usage file fails, nothing is appended; an error in the callback is ignored.
+- **When:** if `five`, `week`, `five_resets` or `week_resets` differs from the last line, or if the last line is at
+  least `history.heartbeat_min` old (default 15) or from the future, or if there is no readable last line. The last
+  line is read from the tail of the file (4096 bytes).
+- **Rotation:** if the file is larger than `history.max_kb` (default 1024) before a write, it is renamed to
+  `usage-history.jsonl.1` (a previous `.1` is replaced; a link there is replaced, not followed) and the new file
+  starts with the line being written.
+- **Files:** opened `O_APPEND|O_NOFOLLOW`, mode 0600 (`fchmod` on every open, so a file of an earlier umask
+  becomes private), folder and the log folder above it 0700. A link as the file is never written through, a link as
+  the folder is not followed.
+- `history.enabled: false` switches the append off. Any error is ignored: the line is shown regardless.
+
 ## Configuration
 
 `config.json` next to the scripts (env override `CCUC_CONFIG`). Missing file: defaults. Unreadable file,
@@ -107,6 +139,9 @@ listed in `config.example.json`.
 `context_reporter.after_tool_from` must be a number from 0 to 100 and `context_reporter.max_age_min` a finite
 number above 0; anything else (also NaN and infinity) falls back to the default and writes the usual one log line.
 The context reporter itself does not write that line (see `context_reporter.py`), the other hooks do.
+
+`history.heartbeat_min` and `history.max_kb` must be finite numbers above 0; anything else falls back to the
+default and writes the usual one log line. `history.enabled` must be a boolean.
 
 `wake_watcher.from_k` must be a finite number of at least 0 (0 = off, the default) and `wake_watcher.lead_min` a
 finite number above 0 (default 10); anything else falls back to the default with the usual log line (the watcher
@@ -342,7 +377,7 @@ The log folder is created 0700 and `log.jsonl` 0600 (`fchmod` on every write, so
 becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log_dir>/counters/<agent_id>.json`
 (written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
-`<log_dir>/context/<session_id>.watch`. The context reporter and the watcher log nothing. A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
 
 ## Known limits

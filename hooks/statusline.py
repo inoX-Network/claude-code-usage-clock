@@ -8,11 +8,12 @@ rate_limits.seven_day (used_percentage, resets_at) without any network call: the
 The second purpose is the reason this script exists: the values are also written to the shared usage file
 (see _usage.py), so the model and the hooks can read their own usage instead of guessing it. Several sessions
 share that file; the merge makes sure an idle session cannot overwrite fresh values with old ones, and the
-line shows the merged values, so every session shows the same.
+line shows the merged values, so every session shows the same. Each merge also appends to the measurement
+history while the lock is held (see _history.py).
 
 If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent instead of claiming 0 %: a
 missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
-fails, the session's own values are shown and nothing is written. The exit code is always 0.
+fails, the session's own values are shown and nothing is written, not even to the history. The exit code is always 0.
 
 Output: <model> | 5h NN% ↻HH:MM | week NN% | ctx 231k/1000k 23% | cache 54m (the weekly reset time from yellow on)
 """
@@ -27,6 +28,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _config  # noqa: E402
 import _context_state  # noqa: E402
+import _history  # noqa: E402
 import _hookio  # noqa: E402
 import _usage  # noqa: E402
 
@@ -199,16 +201,19 @@ def main() -> int:
             status_input = {}
         five, week = _own_value(status_input, 'five_hour'), _own_value(status_input, 'seven_day')
         source = status_input.get('rate_limits')
+        cfg = _config.load(log_problems=False)
         try:
-            merged = _usage.update_file(_usage.usage_path(), status_input, now, _hookio.log_dir())
+            log_dir, history = _hookio.log_dir(), cfg['history']
+            record = ((lambda merged: _history.append(log_dir, merged, now, history['heartbeat_min'], history['max_kb']))
+                      if history['enabled'] else None)
+            merged = _usage.update_file(_usage.usage_path(), status_input, now, log_dir, record)
             five, week = _merged_value(merged, 'five_hour'), _merged_value(merged, 'seven_day')
             source = merged
         except Exception:  # merge failed: show the own values, write nothing
             pass
         _save_context(status_input, now)
         resets = (_reset_of(source, 'five_hour'), _reset_of(source, 'seven_day'))
-        line = render(_model_name(status_input), five, week, _config.load(log_problems=False), status_input, now,
-                      resets)
+        line = render(_model_name(status_input), five, week, cfg, status_input, now, resets)
         # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
         sys.stdout.reconfigure(encoding='utf-8')
         print(line)
