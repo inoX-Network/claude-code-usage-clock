@@ -34,6 +34,11 @@
     "from_k": 0,
     "lead_min": 10
   },
+  "history": {
+    "enabled": true,
+    "heartbeat_min": 15,
+    "max_kb": 1024
+  },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
     "model_effort_action": "warn",

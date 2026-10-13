@@ -55,9 +55,9 @@ SMOKE_TIMEOUT_S = 15  # generous: the smoke test may run on a loaded machine, th
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
-REQUIRED_FILES = ('_config.py', '_context_state.py', '_hookio.py', '_spawn_check.py', '_usage.py', '_wake.py',
-                  'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py', 'soft_stop.py',
-                  'wake_watcher.py')
+REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_spawn_check.py', '_usage.py',
+                  '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
+                  'soft_stop.py', 'wake_watcher.py')
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
 NEVER_BLOCK = ' || true'

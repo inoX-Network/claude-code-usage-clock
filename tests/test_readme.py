@@ -145,6 +145,7 @@ def test_the_readme_says_that_week_ok_until_is_not_kept_but_the_mode_is():
 def test_the_uninstall_section_names_everything_that_stays():
     body = section(readme_text(), '### Uninstall completely')
     for needle in ('--target', 'config.json', '~/.cache/claude-usage-clock', 'rate-limit.json', 'rate-limit.json.lock',
+                   'usage-history.jsonl', 'usage-history.jsonl.1',
                    'autoContinueAtUsageLimit', '--replace-statusline', 'settings.json.bak-usage-clock-', 'rm -r'):
         assert needle in body, needle
 
@@ -295,3 +296,21 @@ def test_the_architecture_lists_the_reporter_in_layout_and_hook_table_and_the_in
     row = next(line for line in section(text, '## Hooks').splitlines() if line.startswith('| `context_reporter.py`'))
     assert 'UserPromptSubmit, PostToolUse `*`' in row and 'exit 0, no output' in row
     assert 'one entry per event' in flat(section(text, '## Configuration'))
+
+
+# --- Measurement history: the text must match the code -----------------------------------------------------------
+
+def test_the_documents_describe_the_history_file_its_fields_and_its_limits():
+    import _config
+    import _history
+    assert _config.DEFAULTS['history'] == {'enabled': True, 'heartbeat_min': 15, 'max_kb': 1024}
+    readme = flat(section(readme_text(), '## What the status line shows'))
+    architecture = flat(section(architecture_text(), '### Measurement history'))
+    for text in (readme, architecture):
+        for needle in ('usage-history.jsonl', 'history.enabled', 'history.heartbeat_min', 'history.max_kb', 'usage-history.jsonl.1'):
+            assert needle in text, needle
+    for field in ('t', 'five', 'week', 'five_resets', 'week_resets'):
+        assert f'`{field}`' in architecture, field
+    assert _history.FILE_NAME == 'usage-history.jsonl'
+    assert '_history.py' in section(architecture_text(), '## Layout')
+    assert '0600' in architecture and 'O_NOFOLLOW' in architecture and 'under the lock of the usage file' in architecture

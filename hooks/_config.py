@@ -47,6 +47,11 @@ DEFAULTS: dict = {
         'from_k': 0,
         'lead_min': 10,
     },
+    'history': {
+        'enabled': True,
+        'heartbeat_min': 15,
+        'max_kb': 1024,
+    },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
         'model_effort_action': 'warn',
@@ -172,6 +177,12 @@ def load(log_problems: bool = True) -> dict:
     if not (math.isfinite(waker['lead_min']) and waker['lead_min'] > 0):
         problems.append('wake_watcher.lead_min: must be a positive number, using default')
         waker['lead_min'] = DEFAULTS['wake_watcher']['lead_min']
+    history = cfg['history']
+    # Zero, negative or infinite would write a line every time, never again, or rotate on every line.
+    for key in ('heartbeat_min', 'max_kb'):
+        if not (math.isfinite(history[key]) and history[key] > 0):
+            problems.append(f'history.{key}: must be a positive number, using default')
+            history[key] = DEFAULTS['history'][key]
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')

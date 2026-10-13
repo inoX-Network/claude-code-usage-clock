@@ -341,3 +341,52 @@ def test_wake_watcher_section_with_another_type_or_unknown_key(tmp_path):
     write_config(tmp_path, {'wake_watcher': {'bogus': 1}})
     assert _config.load()['wake_watcher'] == _config.DEFAULTS['wake_watcher']
     assert 'wake_watcher.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']
+
+
+# --- history ----------------------------------------------------------------------------------------------------
+
+def test_history_keys_have_their_defaults_and_are_overridable(tmp_path):
+    assert _config.load()['history'] == {'enabled': True, 'heartbeat_min': 15, 'max_kb': 1024}
+    write_config(tmp_path, {'history': {'enabled': False, 'heartbeat_min': 5.5, 'max_kb': 64}})
+    assert _config.load()['history'] == {'enabled': False, 'heartbeat_min': 5.5, 'max_kb': 64}
+    write_config(tmp_path, {'history': {'max_kb': 2048}})
+    assert _config.load()['history'] == {'enabled': True, 'heartbeat_min': 15, 'max_kb': 2048}
+    assert log_lines(tmp_path) == []
+
+
+@pytest.mark.parametrize('value', ['10', None, [10], {}])
+def test_history_numbers_with_wrong_types_fall_back_and_log(tmp_path, value):
+    write_config(tmp_path, {'history': {'heartbeat_min': value, 'max_kb': value}})
+    assert _config.load()['history'] == _config.DEFAULTS['history']
+    reason = log_lines(tmp_path)[0]['reason']
+    assert 'history.heartbeat_min: wrong type' in reason and 'history.max_kb: wrong type' in reason
+
+
+@pytest.mark.parametrize('value', [1, 0, 'yes', None])
+def test_history_enabled_must_be_a_boolean(tmp_path, value):
+    write_config(tmp_path, {'history': {'enabled': value}})
+    assert _config.load()['history']['enabled'] is True
+    assert 'history.enabled: wrong type' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('value', [True, False])
+def test_history_numbers_are_never_booleans(tmp_path, value):
+    write_config(tmp_path, {'history': {'heartbeat_min': value, 'max_kb': value}})
+    assert _config.load()['history'] == _config.DEFAULTS['history']
+
+
+@pytest.mark.parametrize('value', [0, -1, -0.5, float('nan'), float('inf'), float('-inf')])
+def test_history_numbers_that_are_not_positive_and_finite_fall_back_and_log(tmp_path, value):
+    write_config(tmp_path, '{"history": {"heartbeat_min": %s, "max_kb": %s}}' % (json.dumps(value), json.dumps(value)))
+    assert _config.load()['history'] == _config.DEFAULTS['history']
+    reason = log_lines(tmp_path)[0]['reason']
+    assert 'history.heartbeat_min: must be a positive number, using default' in reason
+    assert 'history.max_kb: must be a positive number, using default' in reason
+
+
+def test_history_section_with_another_type_or_unknown_key(tmp_path):
+    write_config(tmp_path, {'history': 'on'})
+    assert _config.load()['history'] == _config.DEFAULTS['history']
+    write_config(tmp_path, {'history': {'bogus': 1}})
+    assert _config.load()['history'] == _config.DEFAULTS['history']
+    assert 'history.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']

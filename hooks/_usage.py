@@ -12,6 +12,8 @@ seeing "unknown". The merge rules below prevent that:
 - Writing happens under an exclusive flock, atomically via a temporary file, and only when something changed.
   The lock lives in the tool's log folder, the temporary file next to the usage file. Both are opened without
   following links, so a planted link never redirects the write.
+- The caller may hand in a function that runs on the merged content under the same lock (the history, see
+  _history.py).
 
 File format: {"five_hour": {"used_percentage", "resets_at"}, "seven_day": {...}, "measured_at": "<UTC ISO>"}.
 A file in any other format counts as empty.
@@ -80,8 +82,13 @@ def _read_dict(path: str) -> dict:
         return {}
 
 
-def update_file(path: str, status_input: dict, now: float, lock_dir: str) -> dict:
+def update_file(path: str, status_input: dict, now: float, lock_dir: str, after_merge=None) -> dict:
     """Reads, merges and writes the usage file under an exclusive lock; returns the merged content.
+
+    `after_merge(merged)` is called with the merged content while the lock is still held, also when the file did
+    not change (the measurement history appends there, see _history.py: one writer at a time, so no measurement
+    is written twice). It is not called if the file could not be written; an error in it is ignored, the usage
+    file matters more.
 
     The lock is `<lock_dir>/<file name>.lock`, in the tool's own folder (the log folder) rather than next to the
     file: a guard that protects that folder covers it, and no extra path next to the usage file needs protecting
@@ -115,6 +122,11 @@ def update_file(path: str, status_input: dict, now: float, lock_dir: str) -> dic
                 except OSError:
                     pass
                 raise
+        if after_merge is not None:
+            try:
+                after_merge(merged)
+            except Exception:
+                pass
     return merged
 
 
