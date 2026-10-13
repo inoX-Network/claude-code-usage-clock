@@ -1662,10 +1662,35 @@ def test_a_small_fall_with_recorded_reset_times_is_still_a_reset(world):
 
 
 def test_noise_is_judged_against_the_last_value_that_counted(world):
-    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:10:00Z', 15, 39),
-                   row('2026-10-13T08:20:00Z', 14, 38), row('2026-10-13T08:30:00Z', 22, 41)])
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 39),
+                   row('2026-10-13T08:10:00Z', 14, 38), row('2026-10-13T08:15:00Z', 22, 41)])
     five = world.report('--day', DAY)['allocation']['five']
     assert five['counted_points'] == 2 and five['skipped_sections'] == 0       # 15 and 14 are noise next to 20
+
+
+def test_an_archived_day_in_the_old_window_format_is_unreadable_and_written_again(world):
+    three_days(world)
+    old_window = {'resets': None, 'first': 1.0, 'peak': 5, 'peak_at': 1.0}
+    old = json.dumps({'v': 1, 'day': '2026-10-12', 'stats': {'requests': 7, 'abo': {'five_windows': [old_window]}}})
+    world.log.mkdir(parents=True)
+    (world.log / ARCHIVE).write_text(old + '\n', encoding='utf-8')
+    data = world.report('--day', '2026-10-12')
+    assert data['coverage']['archive_days'] == [] and data['coverage']['unreadable_archive_lines'] == 1
+    assert data['total']['requests'] == 1                                          # computed from the transcript
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    assert archive_days(world) == ['2026-10-12', '2026-10-12', '2026-10-13']
+    again = world.report('--day', '2026-10-12')
+    assert again['coverage']['archive_days'] == ['2026-10-12'] and again['total']['requests'] == 1
+
+
+def test_an_archived_day_that_does_not_fit_the_live_figures_is_computed_live(world):
+    spend(world, ('2026-10-12T10:00:00Z', 1.0), ('2026-10-13T10:00:00Z', 2.0))
+    world.log.mkdir(parents=True)
+    conflict = {'models': {'Opus 5.5': 5}}                 # well formed alone, but the live figures have a dict there
+    (world.log / ARCHIVE).write_text(json.dumps({'v': 1, 'day': '2026-10-12', 'stats': conflict}) + '\n', encoding='utf-8')
+    data = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert data['total']['requests'] == 2 and data['total']['cost_usd'] == pytest.approx(3.0)
+    assert data['coverage']['archive_days'] == [] and data['coverage']['unreadable_archive_lines'] == 1
 
 
 @pytest.mark.parametrize('bad_line', [
@@ -1728,6 +1753,138 @@ def test_a_huge_number_in_the_history_is_unreadable_not_a_crash(world):
     assert world.report('--day', DAY)['coverage']['unreadable_history_lines'] == 1
 
 
+def test_a_real_window_change_without_reset_times_is_not_taken_for_noise_and_does_not_cascade(world):
+    world.history([row('2026-10-13T08:00:00Z', 10, 40), row('2026-10-13T08:10:00Z', 14, 41),
+                   row('2026-10-13T14:10:00Z', 8, 42), row('2026-10-13T14:20:00Z', 9, 43),
+                   row('2026-10-13T14:30:00Z', 10, 44), row('2026-10-13T14:40:00Z', 13, 45),
+                   row('2026-10-13T14:50:00Z', 16, 46)])
+    data = world.report('--day', DAY)
+    five, week = data['allocation']['five'], data['allocation']['week']
+    assert (five['counted_points'], five['skipped_sections']) == (4 + 1 + 1 + 3 + 3, 1)
+    assert (week['counted_points'], week['skipped_sections'], week['skipped_points']) == (1 + 4, 1, 1)
+    assert [w['peak'] for w in data['subscription']['five_windows']] == [14, 16]
+    assert segments(data) == [(40, 46, None)]
+
+
+def test_a_fall_that_nothing_recovers_from_is_a_new_window(world):
+    world.history([row('2026-10-13T08:00:00Z', 14, 40), row('2026-10-13T08:10:00Z', 8, 41),
+                   row('2026-10-13T08:20:00Z', 9, 42), row('2026-10-13T08:30:00Z', 10, 43)])
+    data = world.report('--day', DAY)
+    assert data['allocation']['five']['counted_points'] == 2 and data['allocation']['five']['skipped_sections'] == 1
+    assert [w['peak'] for w in data['subscription']['five_windows']] == [14, 10]
+
+
+def test_a_fall_in_the_last_measurement_has_nothing_coming_back_and_a_missing_value_does_not_count_as_coming_back(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 41)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 2
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 41),
+                   row('2026-10-13T08:06:00Z', None, 42), row('2026-10-13T08:07:00Z', 22, 43)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 1
+
+
+def test_a_fall_of_the_weekly_value_inside_a_known_weekly_window_is_always_stale(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-13T08:00:00Z', 10, 60), row('2026-10-13T08:30:00Z', 11, 40),
+                   row('2026-10-13T09:00:00Z', 12, 61)])
+    data = world.report('--day', DAY)
+    assert segments(data) == [(60, 61, T('2026-10-19T07:00:00Z'))] and data['allocation']['week']['counted_points'] == 1
+    assert data['allocation']['five']['counted_points'] == 2
+    (world.root / 'usage.json').unlink()                     # without the known window the fall is a window change
+    assert segments(world.report('--day', DAY)) == [(60, 60, None), (40, 61, None)]
+
+
+def test_a_measurement_whose_weekly_value_is_certainly_stale_is_stale_as_a_whole(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-13T08:00:00Z', 20, 60), row('2026-10-13T08:30:00Z', 5, 40),
+                   row('2026-10-13T09:00:00Z', 22, 61)])
+    data = world.report('--day', DAY)
+    assert len(data['subscription']['five_windows']) == 1 and data['allocation']['five']['counted_points'] == 2
+
+
+def test_a_real_five_hour_reset_is_a_new_window_also_where_the_weekly_window_is_known(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-13T08:00:00Z', 20, 60), row('2026-10-13T08:05:00Z', 8, 61),
+                   row('2026-10-13T08:10:00Z', 9, 62)])
+    data = world.report('--day', DAY)
+    assert len(data['subscription']['five_windows']) == 2 and segments(data) == [(60, 62, T('2026-10-19T07:00:00Z'))]
+
+
+def test_a_fall_of_the_weekly_value_across_a_known_weekly_reset_is_real(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-19T06:50:00Z', 10, 90), row('2026-10-19T07:10:00Z', 11, 70)])
+    assert segments(world.report('--day', '2026-10-19')) == [(90, 90, T('2026-10-19T07:00:00Z')),
+                                                              (70, 70, T('2026-10-26T07:00:00Z'))]
+
+
+def test_the_value_coming_back_may_be_just_as_high_as_before(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 41),
+                   row('2026-10-13T08:10:00Z', 20, 42)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 1
+
+
+def test_a_measurement_without_the_value_is_not_the_value_coming_back(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 41),
+                   row('2026-10-13T08:06:00Z', None, 42)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 2
+
+
+def test_a_real_weekly_reset_is_kept_when_the_five_hour_value_of_that_measurement_is_stale(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 60), row('2026-10-13T08:05:00Z', 15, 3),
+                   row('2026-10-13T08:10:00Z', 22, 5)])
+    data = world.report('--day', DAY)
+    assert segments(data) == [(60, 60, None), (3, 5, None)] and len(data['subscription']['five_windows']) == 1
+
+
+def test_a_real_five_hour_reset_is_kept_when_the_weekly_value_of_that_measurement_is_stale(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 60), row('2026-10-13T08:05:00Z', 8, 55),
+                   row('2026-10-13T08:10:00Z', 9, 61)])
+    data = world.report('--day', DAY)
+    assert len(data['subscription']['five_windows']) == 2 and segments(data) == [(60, 61, None)]
+
+
+def test_a_measurement_with_only_stale_values_is_left_out_so_that_the_requests_around_it_share_the_rise(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 35),
+                   row('2026-10-13T08:10:00Z', 22, 41)])
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T08:01:00Z', 'a', 3.0)])
+    world.transcript('-home-u-proj-b', 'bbbbbbbb-2', [paid('2026-10-13T08:07:00Z', 'b', 1.0, cwd='/home/u/b')])
+    shares = {c['id']: c['estimated_share']['five'] for c in world.report('--day', DAY)['clis']}
+    assert shares == {'aaaaaaaa': pytest.approx(1.5), 'bbbbbbbb': pytest.approx(0.5)}
+
+
+def test_the_age_of_the_last_good_value_is_that_of_the_last_good_measurement_not_of_a_stale_one(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:59:00Z', 15, 41),
+                   row('2026-10-13T09:02:00Z', 14, 42), row('2026-10-13T09:10:00Z', 22, 43)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 2
+
+
+@pytest.mark.parametrize('recovery_s, noise', [(900, True), (901, False)])
+def test_a_value_has_15_minutes_to_come_back(world, recovery_s, noise):
+    after = iso(T('2026-10-13T08:05:00Z') + recovery_s)
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 41), row(after, 22, 42)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == (1 if noise else 2)
+
+
+@pytest.mark.parametrize('gap_s, noise', [(3600, True), (3601, False)])
+def test_a_fall_after_more_than_an_hour_is_never_noise(world, gap_s, noise):
+    start = T('2026-10-13T08:00:00Z')
+    world.history([row(iso(start), 20, 40), row(iso(start + gap_s), 15, 41), row(iso(start + gap_s + 60), 22, 42)])
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == (1 if noise else 2)
+
+
+def test_the_weekly_value_of_a_measurement_with_a_stale_five_hour_value_is_kept(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 15, 43),
+                   row('2026-10-13T08:10:00Z', 22, 44)])
+    allocation = world.report('--day', DAY)['allocation']
+    assert allocation['five']['counted_points'] == 2 and allocation['week']['counted_points'] == 4
+
+
+def test_the_five_hour_value_of_a_measurement_with_a_stale_weekly_value_is_kept(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:05:00Z', 24, 30),
+                   row('2026-10-13T08:10:00Z', 26, 44)])
+    allocation = world.report('--day', DAY)['allocation']
+    assert allocation['five']['counted_points'] == 6 and allocation['week']['counted_points'] == 4
+
+
 def test_a_fall_next_to_a_measurement_with_a_reset_time_but_none_of_its_own_is_still_noise(world):
     world.history([row('2026-10-13T08:00:00Z', 20, 40, T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')),
                    row('2026-10-13T08:10:00Z', 15, 39), row('2026-10-13T08:20:00Z', 22, 41)])
@@ -1748,8 +1905,9 @@ def test_windows_join_one_after_the_other_and_the_last_value_is_that_of_the_chai
 
 
 def test_a_fall_to_exactly_half_is_a_new_window_and_a_five_hour_span_is_two_windows(world):
-    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:10:00Z', 10, 20)])
-    assert segments(world.report('--day', DAY)) == [(40, 40, None), (20, 20, None)]
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:10:00Z', 10, 20),
+                   row('2026-10-13T08:15:00Z', 22, 45)])         # a value as high comes back, but half is a reset
+    assert segments(world.report('--day', DAY)) == [(40, 40, None), (20, 45, None)]
     assert len(world.report('--day', DAY)['subscription']['five_windows']) == 2
     world.history([row('2026-10-13T08:00:00Z', 10, 0), row('2026-10-13T12:59:59Z', 20, 0),
                    row('2026-10-13T13:00:00Z', 30, 0)])

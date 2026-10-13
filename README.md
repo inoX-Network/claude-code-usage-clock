@@ -394,8 +394,11 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
   some points; that rise is shared between the CLIs that made requests in between, by their cost weight. A rise
   with no request in between is **unexplained** (another app, a request without a transcript) and is not shared.
   Stretches that contain a reset, or last longer than 60 minutes, do not count. Attributed plus unexplained is
-  always the counted rise. A fall of a value without reset times counts as a new window only if it falls to half or
-  less; a smaller fall is a stale number of an idle session and the measurement is left out. In the 5h windows without
+  always the counted rise. A fall of a value without reset times is taken for a stale number of an idle session
+  (and that value is replaced by the last good one) only if it does not fall to half or less, a value as high as before
+  comes back within 15 minutes and the last good value is at most an hour old; any other fall is a new window. Where a
+  weekly reset time is known (the history's or the usage file's), any fall of the weekly value inside one weekly window is
+  stale, and the whole measurement is left out. In the 5h windows without
   reset times, a window lasts five hours at most.
 - **Calibration:** USD per point, a regression through zero over the stretches in which only one CLI was active. It
   regresses the rise on the cost and inverts the slope, because the rounding to whole points is in the rise, not in
@@ -408,7 +411,8 @@ Claude Code deletes old transcripts (after 30 days by default). `--archive` keep
 writes every finished day that is not in `<log_dir>/usage-days.jsonl` yet, never overwrites a day, and prints
 nothing. Run it once a day, for example from cron (`5 0 * * * python3 /path/to/tools/usage_report.py --archive`)
 or a systemd user timer. A finished day that the archive has is always reported from the archive (the transcripts of that day may be partly
-deleted by now), so a month stays whole. The
+deleted by now), so a month stays whole; a line of another format, or one that does not fit the figures, is not
+an archive line (it is counted as unreadable and its day is computed from the transcripts). The
 archive holds the figures only (no text), is private to you (mode 0600, folder 0700) and is opened without
 following links.
 

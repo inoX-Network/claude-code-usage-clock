@@ -349,5 +349,6 @@ def test_the_report_section_names_the_limits_the_code_has():
         assert needle in body, needle
     for needle in ('O_APPEND|O_NOFOLLOW', 'flock', 'half merged', 'attributed + rest', 'spawnedAgentType', 'customAgentType',
                    'thinking_tokens', 'web_search_requests', 'thinking_out', 'abo.weeks', 'week_segments', 'drop_noise',
-                   'hook_additional_context', 'unreadable_transcript_lines', 'modified first'):
+                   'hook_additional_context', 'unreadable_transcript_lines', 'modified first', 'RECOVERY_S',
+                   'parse_archive_line'):
         assert needle in architecture, needle

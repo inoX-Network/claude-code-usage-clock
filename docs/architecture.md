@@ -401,8 +401,12 @@ type is `unknown`; the value must match `[A-Za-z0-9_.:-]{1,64}`, else `other`; n
 unreadable lines are skipped and counted. For the time before the history began, the usage line of the usage clock in
 the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1, and
 only in an attachment of type `hook_additional_context`) stands in; it carries no reset times. Measurements without
-reset times pass `drop_noise`: a fall that stays above half of the last kept value is a stale number of an idle session
-and the measurement is left out. A request that stands in two transcripts (a continued session) is counted once and
+reset times pass `drop_noise`, 5h and week judged apart: a fall that stays above half of the last good value is a stale
+number of an idle session if a value at least as high comes back within 15 minutes (`RECOVERY_S`) and the last good value
+is at most `MAX_GAP_S` old; it is then replaced by the last good value (a measurement with only stale values is left
+out). Any other fall is a new window, so a real reset without reset times does not cascade. Where the anchor (a known weekly
+reset time) puts two measurements in one weekly window, any fall of the weekly value is stale at once and the whole
+measurement is left out. A request that stands in two transcripts (a continued session) is counted once and
 belongs to the file modified first, then the one that sorts first. A line that has the shape of a request but a
 `requestId` that is not text, or a number above 10^12, is left out and counted (`unreadable_transcript_lines`). (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
 by hook, mode and decision. (4) The day archive. Nothing else of a transcript is read, and no text is printed.
@@ -451,8 +455,9 @@ shown from 50 sections (`MIN_SECTIONS`), per model only from 50 sections of that
 several days add up (`merge_stats`). `<log_dir>/usage-days.jsonl` has one line per finished local day:
 `{"v":1,"day":"YYYY-MM-DD","stats":{...}}` with those figures (session ids cut to 8 characters, no text). A report
 takes every whole finished day (before today) from the archive if the archive has it, whatever the transcripts still hold; the rest of the
-period is computed from the transcripts. A malformed archived day (merging it raises) is skipped and counted, never
-half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
+period is computed from the transcripts. `parse_archive_line` accepts a line only if its figures merge into empty figures, so a line in another format is
+unreadable (counted, and `--archive` writes its day again). A day whose figures do not fit the live figures when merged is
+computed from the transcripts instead and counted; a day is never half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
 and appends them under an exclusive `flock` of the file, re-reading the file's days first (two runs never write a day
 twice, a day is never overwritten). Like the measurement history the file is 0600 in a 0700 folder, opened
 `O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import copy
 import fcntl
 import json
 import math
@@ -58,6 +57,7 @@ COLD_START_TOKENS = 50_000  # a request that writes at least this much cache, af
 MIN_SECTIONS = 50           # sections with a single CLI needed before a cost per point is shown
 FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
 WEEK_S = 7 * 86400
+RECOVERY_S = 900           # a stale number is followed by the real one within this time
 FIVE_HOURS_S = 5 * 3600     # a five hour window cannot span more than this
 MAX_COUNT = 10 ** 12        # a larger token count or percentage is not a measurement: the line is not read
 MAX_TIME = 4_102_444_800    # Unix seconds of 2100-01-01: a later reset time is not a measurement
@@ -278,26 +278,52 @@ def agent_type_of(transcript: str) -> str:
     return value if isinstance(value, str) and AGENT_TYPE.fullmatch(value) else 'other'
 
 
-def drop_noise(measurements: list[Measurement]) -> list[Measurement]:
-    """Measurements without a fall that is no reset. Sessions that sat idle keep showing old numbers (before the usage
-    file merged them), which look like falls. Without reset times a fall counts as a new window only if the value falls to
-    half or less; a smaller one is such a stale number and the measurement is left out. Where both measurements carry
-    reset times, those decide and nothing is left out."""
+def _comes_back(measurements: list[Measurement], index: int, metric: str, reference: float) -> bool:
+    """Whether a measurement within RECOVERY_S after `measurements[index]` has the value again, at least `reference`."""
+    for later in measurements[index + 1:]:
+        if later.t - measurements[index].t > RECOVERY_S:
+            return False
+        value = getattr(later, metric)
+        if value is not None and value >= reference:
+            return True
+    return False
+
+
+def drop_noise(measurements: list[Measurement], anchor: float | None = None) -> list[Measurement]:
+    """Measurements without stale numbers. Sessions that sat idle keep showing old numbers (before the usage file merged
+    them), which look like short falls. Without reset times a value that fell, but not to half or less, is such a stale
+    number if a value at least as high as before comes back within RECOVERY_S and the last good value is not more than
+    MAX_GAP_S old; everything else is a new window. The weekly value is stale at any fall if the measurements are in
+    one weekly window that `anchor` (a known weekly reset time) tells: usage does not fall inside a window, so that
+    measurement comes from an idle session as a whole and is left out. Otherwise the stale value is replaced by the last
+    good one (the other value of the measurement stays, 5h and week are judged apart); a measurement with only stale
+    values is left out. Where both
+    measurements carry reset times, those decide and nothing is changed."""
     kept: list[Measurement] = []
     last: dict[str, Measurement] = {}
-    for m in measurements:
-        noisy = False
+    for index, m in enumerate(measurements):
+        stale, certain = set(), False
         for metric in METRICS:
             value, earlier = getattr(m, metric), last.get(metric)
             if value is None or earlier is None:
                 continue
             reference = getattr(earlier, metric)
             both_known = getattr(m, metric + '_resets') is not None and getattr(earlier, metric + '_resets') is not None
-            noisy = noisy or (not both_known and reference / 2 < value < reference)
-        if noisy:
+            if both_known or value >= reference:
+                continue
+            if metric == 'week' and anchor is not None and _week_reset(m, anchor) == _week_reset(earlier, anchor):
+                certain = True
+            elif (reference / 2 < value and m.t - earlier.t <= MAX_GAP_S
+                  and _comes_back(measurements, index, metric, reference)):
+                stale.add(metric)
+        present = {metric for metric in METRICS if getattr(m, metric) is not None}
+        if certain or (stale and stale == present):
             continue
+        for metric in stale:
+            earlier = last[metric]
+            m = m._replace(**{metric: getattr(earlier, metric), metric + '_resets': getattr(earlier, metric + '_resets')})
         kept.append(m)
-        last.update({metric: m for metric in METRICS if getattr(m, metric) is not None})
+        last.update({metric: m for metric in present - stale})
     return kept
 
 
@@ -333,7 +359,7 @@ class Data:
                 self.first_main.setdefault(request.session, index)
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
-        self.measurements = drop_noise(sorted(measurements, key=lambda m: m.t))
+        self.measurements = drop_noise(sorted(measurements, key=lambda m: m.t), self.week_anchor)
         self.measurement_times = [m.t for m in self.measurements]
 
 
@@ -449,13 +475,18 @@ def _word(value, fallback: str) -> str:
 
 
 def parse_archive_line(raw: str) -> tuple[str, dict]:
-    """(day, figures) of a line of the day archive; raises for a line the archive does not accept."""
+    """(day, figures) of a line of the day archive; raises ValueError (or TypeError, KeyError) for a line the archive does
+    not accept: another version, a wrong shape, figures that do not fit the format."""
     row = json.loads(raw)
     day, stats = row['day'], row['stats']
     # a day that is not text makes fullmatch raise, which the callers treat like any other bad line
     if row['v'] != ARCHIVE_VERSION or not isinstance(stats, dict) or not DAY_TEXT.fullmatch(day):
         raise ValueError('shape')
     date.fromisoformat(day)
+    try:
+        merge_stats(new_stats(), stats)       # figures in another format (or damaged) do not merge: not an archive line
+    except (TypeError, ValueError, KeyError, AttributeError) as error:
+        raise ValueError('figures') from error
     return day, stats
 
 
@@ -1187,10 +1218,12 @@ def _whole_days(start: float, end: float) -> list[date]:
     return days
 
 
-def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float) -> Data:
+def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
+              anchor: float | None = None) -> Data:
     """Requests from the transcripts; for the time before the history began, the usage lines in the transcripts stand in
     for it."""
     data = Data()
+    data.week_anchor = anchor
     first_history = min((m.t for m in history), default=math.inf)
     requests, fresh = [], {}
     if os.path.isdir(projects_dir):
@@ -1238,8 +1271,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print(period['error'])
         return 1
     start, end = period['start'], period['end']
-    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start)
-    data.week_anchor = anchor
+    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start, anchor)
     if args.archive:
         return archive_finished_days(data, prices, archive, log_dir, projects_dir, today)
 
@@ -1247,17 +1279,20 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     if not data.files and not archived and not os.path.isdir(projects_dir):
         print(f'No transcripts found at {projects_dir} - pass --projects-dir.')
         return 1
-    stats = compute_stats(data, prices, _cut(start, end, archived))
-    used = []
-    for day in archived:
-        try:
-            candidate = copy.deepcopy(stats)
-            merge_stats(candidate, archive[day.isoformat()])
-        except (TypeError, ValueError, KeyError, AttributeError):
-            broken_archive += 1
-            continue
-        stats = candidate
-        used.append(day.isoformat())
+    while True:
+        stats = compute_stats(data, prices, _cut(start, end, archived))
+        used, unfit = [], None
+        for day in archived:
+            try:
+                merge_stats(stats, archive[day.isoformat()])
+            except (TypeError, ValueError, KeyError, AttributeError):
+                unfit = day       # does not fit the live figures: all is computed again with this day from the transcripts
+                break
+            used.append(day.isoformat())
+        if unfit is None:
+            break
+        archived.remove(unfit)
+        broken_archive += 1
     coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
