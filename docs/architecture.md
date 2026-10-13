@@ -125,6 +125,8 @@ written. No session id, no path, nothing else.
 - **Rotation:** if the file is larger than `history.max_kb` (default 1024) before a write, it is renamed to
   `usage-history.jsonl.1` (a previous `.1` is replaced; a link there is replaced, not followed) and the new file
   starts with the line being written.
+- **Cut-off line:** if the file is not empty and its last byte is not a line break, a line break is written in front of
+  the new line (in the same write), so the new line stands alone and readers skip the cut-off one.
 - **Files:** opened `O_APPEND|O_NOFOLLOW`, mode 0600 (`fchmod` on every open, so a file of an earlier umask
   becomes private), folder and the log folder above it 0700. A link as the file is never written through, a link as
   the folder is not followed.

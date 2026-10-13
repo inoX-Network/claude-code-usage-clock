@@ -13,7 +13,8 @@ running side by side never write the same measurement twice. A line is written o
 - the last line is at least `heartbeat_min` old (an idle stretch stays visible as a stretch, not as a gap),
 
 and only if at least one block is valid. Above `max_kb` the file becomes `usage-history.jsonl.1` (an older
-`.1` goes); the new file starts with the next line. The file is 0600 in a 0700 folder, opened with `O_NOFOLLOW`
+`.1` goes); the new file starts with the next line. A last line cut off without its line break (a crash
+mid-write) gets one before the new line, so the new line stands alone. The file is 0600 in a 0700 folder, opened with `O_NOFOLLOW`
 (a planted link is never written through, a link as the folder is not followed). `append` never raises: the
 status line must never fail because of the history.
 """
@@ -96,6 +97,9 @@ def append(log_dir: str, merged, now: float, heartbeat_min: float = _config.DEFA
                 renewed = _open(path)
                 os.close(descriptor)
                 descriptor = renewed
+            size = os.fstat(descriptor).st_size      # after a rotation the file is new
+            if size and os.pread(descriptor, 1, size - 1) != b'\n':
+                line = '\n' + line      # a cut-off last line stays its own line, the new one stands alone
             os.write(descriptor, line.encode('utf-8'))
         finally:
             os.close(descriptor)

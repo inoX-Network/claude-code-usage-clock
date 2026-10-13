@@ -20,7 +20,7 @@ STATUSLINE = os.path.join(HOOKS, 'statusline.py')
 NOT_ROOT = pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can write everywhere')
 
 
-def merged(five=40, week=61, five_reset=FIVE_RESET, week_reset=WEEK_RESET):
+def merged(five: object = 40, week: object = 61, five_reset: object = FIVE_RESET, week_reset: object = WEEK_RESET):
     """What _usage.update_file returns; None for a block that is missing."""
     return {'five_hour': {'used_percentage': five, 'resets_at': five_reset} if five is not None else None,
             'seven_day': {'used_percentage': week, 'resets_at': week_reset} if week is not None else None,
@@ -190,6 +190,28 @@ def test_only_the_tail_is_read_and_a_long_file_still_gets_its_change_detection(t
     count = len(lines(tmp_path))
     add(tmp_path, merged(five=299 % 100, five_reset=FIVE_RESET + 299), now=NOW + 300)
     assert len(lines(tmp_path)) == count
+
+
+def test_a_truncated_last_line_gets_a_line_break_so_the_new_line_stands_alone(tmp_path):
+    (tmp_path / 'log').mkdir()
+    history(tmp_path).write_text('{"t":"2027-01-15T07:00:00Z","five":3,"we', encoding='utf-8')
+    add(tmp_path, merged())
+    rows = history(tmp_path).read_text(encoding='utf-8').splitlines()
+    assert rows[0] == '{"t":"2027-01-15T07:00:00Z","five":3,"we' and json.loads(rows[1])['five'] == 40 and len(rows) == 2
+
+
+def test_complete_lines_get_no_extra_line_break(tmp_path):
+    add(tmp_path, merged())
+    add(tmp_path, merged(five=41), now=NOW + 30)
+    raw = history(tmp_path).read_text(encoding='utf-8')
+    assert '\n\n' not in raw and raw.count('\n') == 2 and raw.endswith('\n') and not raw.startswith('\n')
+
+
+def test_an_empty_file_gets_no_line_break_either(tmp_path):
+    (tmp_path / 'log').mkdir()
+    history(tmp_path).write_text('', encoding='utf-8')
+    add(tmp_path, merged())
+    assert not history(tmp_path).read_text(encoding='utf-8').startswith('\n') and len(lines(tmp_path)) == 1
 
 
 # --- Rotation ---------------------------------------------------------------------------------------------------
