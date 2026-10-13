@@ -58,9 +58,14 @@ WEEK_S = 7 * 86400
 WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 
+# Counts of the optional details, kept apart from the sums so that "not reported" is not a zero: how many requests report
+# the detail (`_n`), its sum, and for thinking the output tokens of those requests (the denominator of its share).
+DETAIL_KEYS = ('thinking_n', 'thinking', 'thinking_out', 'search_n', 'search', 'fetch_n', 'fetch')
+
 NUMBER = r'(\d+(?:\.\d+)?)'
 USAGE_LINES = (re.compile(rf'Usage: 5h {NUMBER} %[^·]*· week {NUMBER} %[^·]*· measured (\d+) min ago'),
                re.compile(rf'Nutzung: 5h {NUMBER} %[^·]*· 7T {NUMBER} %[^·]*· Messung vor (\d+) min'))
+AGENT_TYPE_KEYS = ('spawnedAgentType', 'customAgentType', 'agentType')     # the first one present is the type
 AGENT_TYPE = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
 MODEL_NAME = re.compile(r'[A-Za-z0-9_.:/-]{1,64}')
 WORD = re.compile(r'[a-z_]{1,20}')
@@ -158,6 +163,9 @@ class Request(NamedTuple):
     model: str
     tokens: tuple          # in KINDS order
     cwd: str | None
+    thinking: int | None = None    # part of the output tokens; None = the transcript does not say
+    searches: int | None = None
+    fetches: int | None = None
 
 
 class Measurement(NamedTuple):
@@ -183,8 +191,21 @@ def usage_tokens(usage: dict) -> tuple:
             _count(usage.get('output_tokens')))
 
 
+def _known(value) -> int | None:
+    return int(value) if _is_number(value) and value >= 0 else None
+
+
+def usage_details(usage: dict, output: int) -> tuple:
+    """(thinking tokens, web searches, web fetches); None for what the line does not say. Thinking is part of the output."""
+    details = usage.get('output_tokens_details') if isinstance(usage.get('output_tokens_details'), dict) else {}
+    tools = usage.get('server_tool_use') if isinstance(usage.get('server_tool_use'), dict) else {}
+    thinking = _known(details.get('thinking_tokens'))
+    return (None if thinking is None else min(thinking, output), _known(tools.get('web_search_requests')),
+            _known(tools.get('web_fetch_requests')))
+
+
 def parse_request(raw: str) -> tuple | None:
-    """(message id, request id, time, tokens, model, cwd) of an assistant line with usage numbers, else None."""
+    """(message id, request id, time, tokens, model, cwd, details) of an assistant line with usage numbers, else None."""
     try:
         line = json.loads(raw)
     except (ValueError, RecursionError):
@@ -199,7 +220,7 @@ def parse_request(raw: str) -> tuple | None:
         return None
     model = message.get('model') if isinstance(message.get('model'), str) else '?'
     cwd = line.get('cwd') if isinstance(line.get('cwd'), str) else None
-    return message.get('id'), line.get('requestId'), ts, tokens, model, cwd
+    return message.get('id'), line.get('requestId'), ts, tokens, model, cwd, usage_details(usage, tokens[4])
 
 
 def parse_usage_line(raw: str) -> tuple | None:
@@ -219,13 +240,15 @@ def parse_usage_line(raw: str) -> tuple | None:
 
 
 def agent_type_of(transcript: str) -> str:
-    """The agentType of agent-<id>.meta.json next to a subagent transcript; nothing else of that file is read."""
+    """The type of a subagent from agent-<id>.meta.json next to its transcript: `spawnedAgentType`, else
+    `customAgentType`, else `agentType` (for a named subagent that one holds the name, which is never read)."""
     try:
         with open(transcript[:-len('.jsonl')] + '.meta.json', encoding='utf-8') as f:
             data = json.loads(f.read(65536))
     except (OSError, ValueError, RecursionError):
         return 'unknown'
-    value = data.get('agentType') if isinstance(data, dict) else None
+    data = data if isinstance(data, dict) else {}
+    value = next((data[key] for key in AGENT_TYPE_KEYS if data.get(key) is not None), None)
     if value is None:
         return 'unknown'
     return value if isinstance(value, str) and AGENT_TYPE.fullmatch(value) else 'other'
@@ -296,10 +319,10 @@ def read_transcripts(projects_dir: str, modified_since: float, want_usage_lines:
                 if '"usage"' in raw:
                     parsed = parse_request(raw)
                     if parsed is not None:
-                        message_id, request_id, ts, tokens, model, cwd = parsed
+                        message_id, request_id, ts, tokens, model, cwd, details = parsed
                         key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
                         if key not in best or tokens[4] >= best[key][0]:
-                            best[key] = (tokens[4], Request(ts, session, sub, agent_type, model, tokens, cwd))
+                            best[key] = (tokens[4], Request(ts, session, sub, agent_type, model, tokens, cwd, *details))
                 if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
                     parsed = parse_usage_line(raw)
                     if parsed is not None:
@@ -391,7 +414,8 @@ def new_cli(label: str, start: float) -> dict:
 
 
 def new_stats() -> dict:
-    return {'requests': 0, 'cost': 0.0, 'tokens': dict.fromkeys(KINDS, 0), 'main': {'requests': 0, 'cost': 0.0},
+    return {'requests': 0, 'cost': 0.0, 'cold_starts': 0, 'extra': {}, 'tokens': dict.fromkeys(KINDS, 0),
+            'main': {'requests': 0, 'cost': 0.0},
             'sub': {'requests': 0, 'cost': 0.0}, 'agent_types': {}, 'models': {}, 'unpriced': {}, 'clis': {},
             'abo': {'week_start': None, 'week_end': None, 'week_resets': None, 'five_windows': []},
             'alloc': {m: {'counted': 0.0, 'attributed': 0.0, 'rest': 0.0, 'skipped_sections': 0, 'skipped_points': 0.0}
@@ -441,7 +465,8 @@ def _merge_abo(target: dict, extra) -> None:
         target['week_resets'] = max(target['week_resets'] or 0, extra['week_resets'])
     for window in extra.get('five_windows', []):
         resets = window['resets']
-        if not all(_is_number(window[k]) for k in ('first', 'peak', 'peak_at')) or not (resets is None or _is_number(resets)):
+        numbers = all(_is_number(window[k]) for k in ('first', 'peak', 'peak_at'))
+        if not numbers or not (resets is None or _is_number(resets)):
             raise TypeError('window')
         _merge_window(target['five_windows'], {k: window[k] for k in ('resets', 'first', 'peak', 'peak_at')})
     target['five_windows'].sort(key=lambda w: w['first'])
@@ -452,7 +477,8 @@ def merge_stats(target: dict, extra) -> None:
     caller merges into a copy then."""
     target['requests'] += extra.get('requests', 0)
     target['cost'] += extra.get('cost', 0)
-    for key in ('tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards'):
+    target['cold_starts'] += extra.get('cold_starts', 0)
+    for key in ('extra', 'tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards'):
         _add_counts(target[key], extra.get(key, {}))
     for ident, cli in extra.get('clis', {}).items():
         if not (isinstance(cli['label'], str) and _is_number(cli['start'])):
@@ -463,6 +489,7 @@ def merge_stats(target: dict, extra) -> None:
             mine[key] += cli.get(key, 0)
         for key in ('tokens', 'models', 'subs'):
             _add_counts(mine[key], cli.get(key, {}))
+        _add_counts(mine, {key: cli[key] for key in DETAIL_KEYS if key in cli})
     _merge_abo(target['abo'], extra.get('abo', {}))
 
 
@@ -474,25 +501,41 @@ def _price_of(data: Data, prices: list[dict], model: str) -> dict | None:
     return data.price_cache[model]
 
 
+def request_details(request: Request) -> dict:
+    """The details a request reports, as counts for DETAIL_KEYS; a detail it does not report adds nothing."""
+    counts = {}
+    if request.thinking is not None:
+        counts.update(thinking_n=1, thinking=request.thinking, thinking_out=request.tokens[4])
+    if request.searches is not None:
+        counts.update(search_n=1, search=request.searches)
+    if request.fetches is not None:
+        counts.update(fetch_n=1, fetch=request.fetches)
+    return counts
+
+
 def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> None:
     request = data.requests[index]
     entry = _price_of(data, prices, request.model)
     cost = request_cost(entry, request.tokens) if entry else 0.0
     name = entry['name'] if entry else (request.model if MODEL_NAME.fullmatch(request.model) else '?')
+    details = request_details(request)
+    tokens = dict(zip(KINDS, request.tokens))
     stats['requests'] += 1
     stats['cost'] += cost
+    _add_counts(stats['extra'], details)
     side = stats['sub' if request.sub else 'main']
     side['requests'] += 1
     side['cost'] += cost
     for kind, count in zip(KINDS, request.tokens):
         stats['tokens'][kind] += count
     if entry:
-        _add_counts(stats['models'], {name: {'requests': 1, 'cost': cost}})
+        _add_counts(stats['models'], {name: {'requests': 1, 'cost': cost, 'tokens': tokens, **details}})
     else:
-        _add_counts(stats['unpriced'], {name: {'requests': 1, 'tokens': sum(request.tokens)}})
+        _add_counts(stats['unpriced'], {name: {'requests': 1, 'tokens': tokens, **details}})
     if request.sub:
         _add_counts(stats['agent_types'], {request.agent_type: {'requests': 1, 'cost': cost}})
     cli = _cli(stats, data, request.session)
+    _add_counts(cli, details)
     cli['requests'] += 1
     cli['cost'] += cost
     for kind, count in zip(KINDS, request.tokens):
@@ -502,6 +545,7 @@ def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> N
         _add_counts(cli['subs'], {request.agent_type: {'requests': 1, 'cost': cost}})
     elif index != data.first_main[request.session] and request.tokens[1] + request.tokens[2] >= COLD_START_TOKENS:
         cli['cold_starts'] += 1
+        stats['cold_starts'] += 1
 
 
 def _cli(stats: dict, data: Data, session: str) -> dict:
@@ -649,6 +693,27 @@ def _by_cost(table: dict) -> list:
     return sorted(table.items(), key=lambda item: (-item[1]['cost'], item[0]))
 
 
+def _hit_rate(tokens: dict) -> float | None:
+    everything = sum(tokens[kind] for kind in KINDS[:4])
+    return tokens['cache_read'] / everything if everything else None
+
+
+def _details_report(counts: dict) -> dict:
+    """Thinking and web figures; None where no request reported them. The share is of the output of the requests that
+    report thinking."""
+    reported = counts.get('thinking_n', 0) > 0
+    return {'thinking_tokens': counts['thinking'] if reported else None,
+            'thinking_share': counts['thinking'] / counts['thinking_out'] if reported and counts['thinking_out'] else None,
+            'web_searches': counts['search'] if counts.get('search_n') else None,
+            'web_fetches': counts['fetch'] if counts.get('fetch_n') else None}
+
+
+def _models_report(table: dict, priced: bool) -> dict:
+    items = _by_cost(table) if priced else sorted(table.items())
+    return {name: {'requests': v['requests'], **({'cost_usd': v['cost']} if priced else {}), 'tokens': v['tokens'],
+                   'cache_hit_rate': _hit_rate(v['tokens']), **_details_report(v)} for name, v in items}
+
+
 def _requests_and_cost(table: dict) -> dict:
     return {name: {'requests': v['requests'], 'cost_usd': v['cost']} for name, v in _by_cost(table)}
 
@@ -658,14 +723,12 @@ def _point(entry: dict | None) -> dict | None:
 
 
 def _cli_report(ident: str, cli: dict) -> dict:
-    everything = sum(cli['tokens'][kind] for kind in KINDS[:4])
     return {'id': ident, 'label': cli['label'], 'start': iso(cli['start']), 'requests': cli['requests'],
             'cost_usd': cli['cost'], 'tokens': cli['tokens'],
             'models': dict(sorted(cli['models'].items(), key=lambda item: -item[1])),
             'subagents': _requests_and_cost(cli['subs']),
-            'cache_hit_rate': cli['tokens']['cache_read'] / everything if everything else None,
-            'cold_starts': cli['cold_starts'],
-            'estimated_share': {'five': cli['five_pts'], 'week': cli['week_pts']}}
+            'cache_hit_rate': _hit_rate(cli['tokens']), 'cold_starts': cli['cold_starts'],
+            'estimated_share': {'five': cli['five_pts'], 'week': cli['week_pts']}, **_details_report(cli)}
 
 
 def _allocation(alloc: dict) -> dict:
@@ -687,8 +750,9 @@ def build_report(stats: dict, period: dict, coverage: dict) -> dict:
                          'week_resets': abo['week_resets'], 'five_windows': windows},
         'total': {'requests': stats['requests'], 'tokens': stats['tokens'], 'cost_usd': stats['cost'],
                   'main': {'requests': stats['main']['requests'], 'cost_usd': stats['main']['cost']},
-                  'subagents': subagents, 'models': _requests_and_cost(stats['models']),
-                  'unpriced': {name: dict(v) for name, v in sorted(stats['unpriced'].items())}},
+                  'subagents': subagents, 'models': _models_report(stats['models'], True),
+                  'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
+                  'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
         'clis': [_cli_report(ident, cli) for ident, cli in _by_cost(stats['clis'])],
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
@@ -724,19 +788,39 @@ def _subscription_lines(abo: dict) -> list[str]:
     return lines
 
 
+def _percent(share: float | None) -> str:
+    return 'n/a' if share is None else f'{100 * share:.0f} %'
+
+
+def _count_text(count: int | None) -> str:
+    return 'n/a' if count is None else str(count)
+
+
+def _details_text(block: dict) -> str:
+    thinking = ('thinking n/a' if block['thinking_tokens'] is None
+                else f'thinking {tokens_text(block["thinking_tokens"])} ({_percent(block["thinking_share"])})')
+    return (f'{thinking}, web searches {_count_text(block["web_searches"])}, '
+            f'web fetches {_count_text(block["web_fetches"])}')
+
+
 def _total_lines(total: dict) -> list[str]:
     lines = ['Total', f'  Requests: {total["requests"]} (main {total["main"]["requests"]}, '
                       f'subagents {total["subagents"]["requests"]})',
              f'  Tokens: {_kinds_text(total["tokens"])}',
              f'  Cost weight: {total["cost_usd"]:.2f} USD at API prices (main {total["main"]["cost_usd"]:.2f}, '
              f'subagents {total["subagents"]["cost_usd"]:.2f})']
-    for name, value in total['unpriced'].items():
-        lines.append(f'  Model with no price (not in the cost weight): {name}: {value["requests"]} request(s), '
-                     f'{tokens_text(value["tokens"])} tokens')
+    lines += [f'  Output: {_details_text(total)}',
+              f'  Cache: hit rate {_percent(total["cache_hit_rate"])}, cold starts {total["cold_starts"]}']
     if total['subagents']['by_type']:
         lines.append(f'  Subagents by type: {_costs_text(total["subagents"]["by_type"])}')
-    if total['models']:
-        lines.append(f'  Models: {_costs_text(total["models"])}')
+    if total['models'] or total['unpriced']:
+        lines.append('  Models:')
+    for name, model in total['models'].items():
+        lines.append(f'    model {name}: {model["cost_usd"]:.2f} USD, {model["requests"]} requests; '
+                     f'{_details_text(model)}; cache hits {_percent(model["cache_hit_rate"])}')
+    for name, model in total['unpriced'].items():
+        lines.append(f'    model {name}: no price (not in the cost weight), {model["requests"]} request(s), '
+                     f'{tokens_text(sum(model["tokens"].values()))} tokens; {_details_text(model)}')
     return lines
 
 
@@ -749,6 +833,7 @@ def _cli_lines(clis: list[dict]) -> list[str]:
                      f'~{share["week"]:.2f} week points')
         lines.append(f'    tokens {_kinds_text(cli["tokens"])}')
         lines.append('    models ' + ', '.join(f'{name} {cost:.2f}' for name, cost in cli['models'].items()))
+        lines.append(f'    output {_details_text(cli)}')
         if cli['subagents']:
             lines.append(f'    subagents {_costs_text(cli["subagents"])}')
         rate = 'n/a' if cli['cache_hit_rate'] is None else f'{100 * cli["cache_hit_rate"]:.1f} %'

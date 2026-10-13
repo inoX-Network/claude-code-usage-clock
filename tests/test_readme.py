@@ -322,7 +322,8 @@ def test_the_documents_describe_the_history_file_its_fields_and_its_limits():
 def test_every_usage_report_option_is_in_the_readme_section_and_the_architecture_names_the_tool():
     with open(USAGE_REPORT, encoding='utf-8') as f:
         options = set(re.findall(r"add_argument\('(--[a-z-]+)'", f.read()))
-    assert options >= {'--day', '--week', '--month', '--since', '--until', '--json', '--archive', '--projects-dir', '--config'}
+    assert options >= {'--day', '--week', '--month', '--since', '--until', '--json', '--archive', '--projects-dir',
+                       '--config'}
     body = section(readme_text(), '## Reports: what was used')
     assert [o for o in sorted(options) if o not in body] == []
     architecture = architecture_text()
@@ -337,10 +338,14 @@ def test_the_report_section_names_the_limits_the_code_has():
     body = flat(section(readme_text(), '## Reports: what was used'))
     architecture = flat(section(architecture_text(), '## Usage report'))
     assert f'{usage_report.COLD_START_TOKENS:,}'.replace(',', ' ') in body
-    assert f'{usage_report.MIN_SECTIONS} such stretches' in body and f'{usage_report.MIN_SECTIONS} stretches of its own' in body
+    assert f'{usage_report.MIN_SECTIONS} such stretches' in body
+    assert f'{usage_report.MIN_SECTIONS} stretches of its own' in body
     assert f'longer than {usage_report.MAX_GAP_S // 60} minutes' in body
-    assert f'{usage_report.MIN_SECTIONS} sections (`MIN_SECTIONS`)' in architecture and f'{usage_report.MAX_GAP_S} s' in architecture
-    for needle in ('usage-days.jsonl', '0600', '0700', 'never overwrites a day', 'prices.json', 'no price', 'unexplained'):
+    assert f'{usage_report.MIN_SECTIONS} sections (`MIN_SECTIONS`)' in architecture
+    assert f'{usage_report.MAX_GAP_S} s' in architecture
+    for needle in ('usage-days.jsonl', '0600', '0700', 'never overwrites a day', 'prices.json', 'no price', 'unexplained',
+                   'spawned type', 'thinking', '`n/a`', '`null`', 'never added to the cost weight'):
         assert needle in body, needle
-    for needle in ('O_APPEND|O_NOFOLLOW', 'flock', 'half merged', 'attributed + rest'):
+    for needle in ('O_APPEND|O_NOFOLLOW', 'flock', 'half merged', 'attributed + rest', 'spawnedAgentType', 'customAgentType',
+                   'thinking_tokens', 'web_search_requests', 'thinking_out'):
         assert needle in architecture, needle

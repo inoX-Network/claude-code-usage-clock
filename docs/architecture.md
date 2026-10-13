@@ -392,10 +392,12 @@ archive. Python 3.10+, standard library only. It reuses `log_summary.resolve_log
 
 **Sources.** (1) Transcripts `<projects>/<project>/<session>.jsonl` and `<project>/<session>/subagents/agent-*.jsonl`
 (links are not followed; files not modified since the start of the period minus 60 minutes are not opened). Per
-assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.model` and `message.usage` are used; of
+assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.model` and `message.usage` (with
+`output_tokens_details.thinking_tokens` and `server_tool_use.web_search_requests` / `web_fetch_requests`) are used; of
 the lines with one `(message.id, requestId)` the last counts (it has the complete `output_tokens`; with equal output the
-later one). A subagent belongs to the session whose folder it is in; its type is `agentType` of `agent-*.meta.json`
-(`[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
+later one). A subagent belongs to the session whose folder it is in; its type is `spawnedAgentType`, else `customAgentType`, else
+`agentType` of `agent-*.meta.json` (for a named subagent `agentType` holds the name, which is never read; the value
+must match `[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
 unreadable lines are skipped and counted. For the time before the history began, the usage line of the usage clock in
 the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1)
 stands in; it carries no reset times. (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
@@ -406,6 +408,12 @@ by hook, mode and decision. (4) The day archive. Nothing else of a transcript is
 (`cache_creation_input_tokens` minus `cache_creation.ephemeral_1h_input_tokens` is the 5 minute part). An entry with
 `long_context` uses those prices when input, cache write and cache read together exceed `above_tokens` (Haiku 5.5:
 100 000). No matching entry: the request has no price; its tokens are listed, its cost is not estimated.
+
+**Thinking and web calls.** `thinking_tokens` (part of `output_tokens`, capped at them), `web_search_requests` and
+`web_fetch_requests` are optional. A request that lacks one does not report it; it is unknown, not zero. The figures
+keep, per level (period, model, CLI), how many requests report each detail (`*_n`), its sum, and for thinking the output
+tokens of the reporting requests (`thinking_out`); the share is `thinking / thinking_out`. No reporting request: `null`
+in the JSON, `n/a` in the text. They never enter the cost weight (thinking is part of the output price).
 
 **Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
 day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the

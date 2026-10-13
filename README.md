@@ -329,17 +329,24 @@ Total
   Requests: 49 (main 43, subagents 6)
   Tokens: input 1680, cache write 5m 44k, cache write 1h 120k, cache read 5.1M, output 178k
   Cost weight: 5.39 USD at API prices (main 5.39, subagents 0.01)
+  Output: thinking 46k (30 %), web searches 3, web fetches 0
+  Cache: hit rate 97 %, cold starts 1
   Subagents by type: reviewer 0.01 USD (6)
-  Models: Opus 5.5 5.11 USD (37), Sonnet 5.x 0.28 USD (6), Haiku 5.5 0.01 USD (6)
+  Models:
+    model Opus 5.5: 5.11 USD, 37 requests; thinking 46k (30 %), web searches 3, web fetches 0; cache hits 97 %
+    model Sonnet 5.x: 0.28 USD, 6 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 98 %
+    model Haiku 5.5: 0.01 USD, 6 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 97 %
 
 By CLI (main session and its subagents, most expensive first; ~ = estimate)
   shop  5f3a9c21  started Wed 14 Jan 08:02  5.11 USD  37 requests  ~50.9 5h points  ~3.65 week points
     tokens input 1470, cache write 5m 30k, cache write 1h 120k, cache read 4.5M, output 155k
     models Opus 5.5 5.11
+    output thinking 46k (30 %), web searches 3, web fetches 0
     cache hits 96.7 %, cold starts 1
   docs-site  c81e04d7  started Wed 14 Jan 08:26  0.28 USD  12 requests  ~3.1 5h points  ~0.35 week points
     tokens input 210, cache write 5m 14k, cache write 1h 0, cache read 555k, output 23k
     models Sonnet 5.x 0.28, Haiku 5.5 0.01
+    output thinking n/a, web searches n/a, web fetches n/a
     subagents reviewer 0.01 USD (6)
     cache hits 97.5 %, cold starts 0
 
@@ -358,16 +365,22 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
   soft stop (shadow): warnings 1, denied 0
 ```
 
-- **Measured:** requests, tokens by kind, and the **cost weight**: what the tokens would cost at API prices
+- **Measured:** requests, tokens by kind (cache writes of 5 minutes and 1 hour apart), the share of the output that
+  was thinking, web searches and web fetches, the cache hit rate, the cold starts, and the **cost weight**: what the tokens would cost at API prices
   (`tools/prices.json`, with its source and the date the prices were read). It compares sessions and models with
   each other; on a subscription it is not your bill. A model without an entry in the price file is listed as "no
   price" with its tokens, never estimated. Of the lines of one request (same message id and request id) only the
-  last counts: it carries the complete output tokens.
+  last counts: it carries the complete output tokens. Thinking tokens are part of the output and already in its
+  price, so they are shown but never added to the cost weight. The same figures are given per period, per model and
+  per CLI. Where a transcript does not report a detail (older Claude Code versions), it is unknown, not zero: `n/a`
+  in the text, `null` in the JSON; a total adds up only the requests that report it, and the thinking share is
+  taken of the output of those requests.
 - **Subscription:** the weekly value at the start and at the end of the period, and the 5h windows with their
   peak. They come from the measurement history; for the time before the history began, from the usage line of
   the usage clock in the transcripts. A weekly difference across a weekly reset means nothing.
 - **Per CLI:** a CLI is a main session with its subagents, named by the folder, the first 8 characters of the
-  session id and its start. Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
+  session id and its start. A subagent is listed under its agent type: the spawned type, else the custom type, else
+  the plain `agentType` of its `agent-*.meta.json`; a name given to a subagent is never shown. Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
   cold starts (a request of the main session, after the first, that writes at least 50 000 cache tokens).
 - **Allocation (marked with `~`, an estimate):** between two measurements the subscription percentages rose by
   some points; that rise is shared between the CLIs that made requests in between, by their cost weight. A rise

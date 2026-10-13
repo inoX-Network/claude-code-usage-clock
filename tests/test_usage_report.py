@@ -78,6 +78,18 @@ def paid(ts, message, cost, **more):
     return req(ts, message=message, request='r-' + message, out=dollars(cost), **more)
 
 
+def extras(line, thinking=None, searches=None, fetches=None):
+    """The optional usage details of a request: thinking tokens (part of the output) and web tool calls."""
+    usage = line['message']['usage']
+    if thinking is not None:
+        usage['output_tokens_details'] = {'thinking_tokens': thinking}
+    if searches is not None or fetches is not None:
+        usage['server_tool_use'] = {key: value for key, value in
+                                    (('web_search_requests', searches),
+                                     ('web_fetch_requests', fetches)) if value is not None}
+    return line
+
+
 def spend(world, *entries, session='aaaaaaaa-1', project='-home-u-proj-a'):
     """A transcript with one request per (time, dollars) pair."""
     world.transcript(project, session, [paid(ts, f'{session}-{i}', cost) for i, (ts, cost) in enumerate(entries)])
@@ -198,7 +210,10 @@ def test_cost_of_every_kind_of_token(world):
     assert data['total']['cost_usd'] == pytest.approx(37.2)
     assert data['total']['tokens'] == {'input': 1_000_000, 'cache_write_5m': 1_000_000, 'cache_write_1h': 1_000_000,
                                        'cache_read': 1_000_000, 'output': 1_000_000}
-    assert data['total']['models'] == {'Opus 5.5': {'requests': 1, 'cost_usd': pytest.approx(37.2)}}
+    opus = data['total']['models']['Opus 5.5']
+    assert (opus['requests'], opus['cost_usd']) == (1,
+                                                    pytest.approx(37.2)) and opus['tokens'] == data['total']['tokens']
+    assert list(data['total']['models']) == ['Opus 5.5']
 
 
 @pytest.mark.parametrize('model, price', [
@@ -235,7 +250,9 @@ def test_a_model_without_a_price_is_shown_with_its_tokens_and_never_estimated(wo
     data = day_report(world, req('2026-10-13T10:00:00Z', 'm1', model='claude-mystery-9', inp=1000, out=500),
                       paid('2026-10-13T10:01:00Z', 'm2', 1.0))
     assert data['total']['cost_usd'] == pytest.approx(1.0)
-    assert data['total']['unpriced'] == {'claude-mystery-9': {'requests': 1, 'tokens': 1500}}
+    assert list(data['total']['unpriced']) == ['claude-mystery-9']
+    mystery = data['total']['unpriced']['claude-mystery-9']
+    assert mystery['requests'] == 1 and mystery['tokens']['input'] == 1000 and mystery['tokens']['output'] == 500
     assert data['clis'][0]['cost_usd'] == pytest.approx(1.0)
     assert data['clis'][0]['tokens']['input'] == 1000
     assert 'no price' in world.text('--day', DAY) and 'claude-mystery-9' in world.text('--day', DAY)
@@ -253,6 +270,168 @@ def test_strange_token_numbers_count_as_zero(world):
 def test_a_line_without_any_tokens_is_no_request(world):
     data = day_report(world, req('2026-10-13T10:00:00Z', model='<synthetic>'), req('2026-10-13T10:01:00Z', 'm2', out=1))
     assert data['total']['requests'] == 1 and data['total']['unpriced'] == {}
+
+
+# --- Thinking tokens, web tools, cache ----------------------------------------------------------------------------------
+
+def test_thinking_tokens_and_web_calls_are_summed_per_period_model_and_cli(world):
+    data = day_report(world,
+                      extras(req('2026-10-13T10:00:00Z', 'm1', out=400, request='r1'), thinking=100, searches=2,
+                             fetches=1),
+                      extras(req('2026-10-13T10:01:00Z', 'm2', out=100, request='r2'), thinking=50, searches=1,
+                             fetches=0),
+                      # an older transcript: no details at all
+                      req('2026-10-13T10:02:00Z', 'm3', out=200, request='r3'))
+    for block in (data['total'], data['total']['models']['Opus 5.5'], data['clis'][0]):
+        assert block['thinking_tokens'] == 150 and block['web_searches'] == 3 and block['web_fetches'] == 1
+        assert block['thinking_share'] == pytest.approx(150 / 500)       # of the output of the requests that report it
+    assert data['total']['tokens']['output'] == 700
+
+
+def test_a_field_that_is_missing_everywhere_is_unknown_not_zero(world):
+    data = day_report(world, req('2026-10-13T10:00:00Z', 'm1', out=400))
+    for block in (data['total'], data['total']['models']['Opus 5.5'], data['clis'][0]):
+        assert (block['thinking_tokens'], block['thinking_share'], block['web_searches'],
+                block['web_fetches']) == (None,) * 4
+    text = world.text('--day', DAY)
+    assert 'thinking n/a' in text and 'web searches n/a' in text and 'web fetches n/a' in text
+
+
+def test_a_reported_zero_is_a_zero(world):
+    data = day_report(world, extras(req('2026-10-13T10:00:00Z', 'm1', out=400), thinking=0, searches=0, fetches=0))
+    assert (data['total']['thinking_tokens'], data['total']['thinking_share']) == (0, 0.0)
+    assert (data['total']['web_searches'], data['total']['web_fetches']) == (0, 0)
+    assert 'thinking 0 (0 %)' in world.text('--day', DAY)
+
+
+def test_the_fields_are_known_one_by_one(world):
+    data = day_report(world, extras(req('2026-10-13T10:00:00Z', 'm1', out=400), searches=4))
+    assert (data['total']['thinking_tokens'], data['total']['web_searches'], data['total']['web_fetches']) == (None, 4,
+                                                                                                               None)
+
+
+@pytest.mark.parametrize('bad', ['many', -3, True, None, [1]])
+def test_a_strange_value_is_unknown(world, bad):
+    line = req('2026-10-13T10:00:00Z', 'm1', out=400)
+    line['message']['usage']['output_tokens_details'] = {'thinking_tokens': bad}
+    line['message']['usage']['server_tool_use'] = {'web_search_requests': bad, 'web_fetch_requests': bad}
+    data = day_report(world, line)
+    assert (data['total']['thinking_tokens'], data['total']['web_searches'], data['total']['web_fetches']) == (None,
+                                                                                                               ) * 3
+
+
+def test_the_details_of_a_wrong_shape_are_unknown(world):
+    first, second = req('2026-10-13T10:00:00Z', 'm1', out=400), req('2026-10-13T10:01:00Z', 'm2', out=400, request='r2')
+    first['message']['usage'].update(output_tokens_details='x', server_tool_use=[1])
+    second['message']['usage'].update(output_tokens_details={'other': 1}, server_tool_use={})
+    data = day_report(world, first, second)
+    assert (data['total']['thinking_tokens'], data['total']['web_searches'], data['total']['web_fetches']) == (None,
+                                                                                                               ) * 3
+
+
+def test_thinking_cannot_exceed_the_output(world):
+    data = day_report(world, extras(req('2026-10-13T10:00:00Z', 'm1', out=400), thinking=900))
+    assert data['total']['thinking_tokens'] == 400 and data['total']['thinking_share'] == 1.0
+
+
+def test_the_details_of_the_last_line_of_a_request_count(world):
+    data = day_report(world,
+                      extras(req('2026-10-13T10:00:00Z', 'm1', out=10), thinking=5, searches=1),
+                      extras(req('2026-10-13T10:00:01Z', 'm1', out=400), thinking=300, searches=2, fetches=3),
+                      req('2026-10-13T10:01:00Z', 'm2', out=10, request='r2'),
+                      extras(req('2026-10-13T10:01:01Z', 'm2', out=300, request='r2'), thinking=7))
+    assert (data['total']['thinking_tokens'], data['total']['web_searches'], data['total']['web_fetches']) == (307, 2,
+                                                                                                               3)
+    last_lacks = day_report_other(world, extras(req('2026-10-13T11:00:00Z', 'm9', out=10, request='r9'), thinking=5),
+                                  req('2026-10-13T11:00:01Z', 'm9', out=400, request='r9'))
+    assert last_lacks['total']['thinking_tokens'] == 307         # the unfinished line with details lost to the complete one
+
+
+def day_report_other(world, *lines):
+    world.transcript('-home-u-proj-a', 'bbbbbbbb-2', list(lines))
+    return world.report('--day', DAY)
+
+
+def test_thinking_and_web_calls_do_not_change_the_cost_weight(world):
+    plain = day_report(world, req('2026-10-13T10:00:00Z', 'm1', out=1_000_000))
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1111-2222-3333-444444444444',
+                     [extras(req('2026-10-13T10:00:00Z', 'm1', out=1_000_000), thinking=900_000, searches=5,
+                             fetches=5)])
+    detailed = world.report('--day', DAY)
+    assert detailed['total']['cost_usd'] == plain['total']['cost_usd'] == pytest.approx(20.0)
+
+
+def test_unpriced_models_report_their_details_too(world):
+    data = day_report(world,
+                      extras(req('2026-10-13T10:00:00Z', 'm1', model='claude-mystery-9', out=400, cr=100), thinking=40,
+                             fetches=2))
+    mystery = data['total']['unpriced']['claude-mystery-9']
+    assert (mystery['thinking_tokens'], mystery['web_fetches'], mystery['web_searches']) == (40, 2, None)
+    assert mystery['cache_hit_rate'] == 1.0
+
+
+def test_each_model_has_its_tokens_and_cache_hit_rate(world):
+    data = day_report(world,
+                      req('2026-10-13T10:00:00Z', 'm1', inp=10, cr=90, out=1, request='r1'),
+                      req('2026-10-13T10:01:00Z', 'm2', model='claude-sonnet-5-5', inp=50, cw=50, out=1, request='r2'))
+    models = data['total']['models']
+    assert models['Opus 5.5']['tokens'] == {'input': 10, 'cache_write_5m': 0, 'cache_write_1h': 0, 'cache_read': 90,
+                                            'output': 1}
+    assert models['Opus 5.5']['cache_hit_rate'] == pytest.approx(0.9)
+    assert models['Sonnet 5.x']['cache_hit_rate'] == 0.0
+    assert data['total']['cache_hit_rate'] == pytest.approx(90 / 200)
+
+
+def test_the_cold_starts_of_the_period_are_the_sum_of_those_of_the_clis(world):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [req('2026-10-13T10:00:00Z', 'a1', out=1),
+                                                      req('2026-10-13T10:01:00Z', 'a2', cw=60_000, out=1, request='r2')])
+    world.transcript('-home-u-proj-b', 'bbbbbbbb-2', [req('2026-10-13T10:00:00Z', 'b1', out=1, cwd='/home/u/b'),
+                                                      req('2026-10-13T10:01:00Z', 'b2', cw1=60_000, out=1, request='r2',
+                                                          cwd='/home/u/b'),
+                                                      req('2026-10-13T10:02:00Z', 'b3', cw1=60_000, out=1, request='r3',
+                                                          cwd='/home/u/b')])
+    data = world.report('--day', DAY)
+    assert data['total']['cold_starts'] == 3 and sorted(c['cold_starts'] for c in data['clis']) == [1, 2]
+
+
+def test_the_cold_starts_survive_the_archive(world):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [req('2026-10-13T10:00:00Z', 'a', out=1),
+                                                      req('2026-10-13T10:01:00Z', 'b', cw=60_000, out=1, request='r2')])
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    data = world.report('--day', DAY)
+    assert data['coverage']['archive_days'] == [DAY]
+    assert data['total']['cold_starts'] == 1 and data['clis'][0]['cold_starts'] == 1
+
+
+def test_the_details_survive_the_archive_and_unknown_stays_unknown_over_days(world):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1',
+                     [extras(req('2026-10-12T10:00:00Z', 'a', out=100), thinking=40, searches=3),
+                      req('2026-10-13T10:00:00Z', 'b', out=100, request='r2')])
+    live = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    archived = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert archived['coverage']['archive_days'] == ['2026-10-12', '2026-10-13']
+    assert archived['total'] == live['total'] and archived['clis'] == live['clis']
+    assert archived['total']['thinking_tokens'] == 40 and archived['total']['web_searches'] == 3
+    assert archived['total']['web_fetches'] is None
+    assert archived['total']['thinking_share'] == pytest.approx(40 / 100)      # only the day that reports it is in the share
+
+
+def test_the_text_names_thinking_web_cache_and_cold_starts(world):
+    text = day_report_text(world)
+    for needle in ('Output: thinking 40 (40 %), web searches 3, web fetches n/a', 'Cache: hit rate', 'cold starts 0',
+                   'model Opus 5.5:', 'thinking 40 (40 %)'):
+        assert needle in text, needle
+
+
+def day_report_text(world):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1',
+                     [extras(req('2026-10-13T10:00:00Z', 'a', inp=1, out=100), thinking=40, searches=3)])
+    return world.text('--day', DAY)
 
 
 # --- Sessions, subagents, CLIs ----------------------------------------------------------------------------------
@@ -274,6 +453,26 @@ def test_subagents_belong_to_their_main_session_and_are_split_by_type(world):
     assert cli['id'] == 'aaaaaaaa' and cli['cost_usd'] == pytest.approx(3.75) and cli['requests'] == 4
     assert cli['subagents'] == {'arbeiter-bauen': {'requests': 2, 'cost_usd': pytest.approx(2.5)},
                                 'unknown': {'requests': 1, 'cost_usd': pytest.approx(0.25)}}
+
+
+@pytest.mark.parametrize('meta, expected', [
+    ({'agentType': 'bau-bericht', 'name': 'bau-bericht', 'customAgentType': 'arbeiter-bauen',
+      'spawnedAgentType': 'arbeiter-bauen'}, 'arbeiter-bauen'),
+    ({'agentType': 'bau-bericht', 'name': 'bau-bericht', 'customAgentType': 'architekt'}, 'architekt'),
+    ({'agentType': 'general-purpose'}, 'general-purpose'),
+    ({'name': 'only-a-name', 'description': 'x'}, 'unknown'),
+    ({'agentType': 'bau-bericht', 'customAgentType': 'architekt', 'spawnedAgentType': 'arbeiter-bauen'},
+     'arbeiter-bauen'),
+    ({'agentType': 'general-purpose', 'customAgentType': None, 'spawnedAgentType': None}, 'general-purpose')])
+def test_the_agent_type_is_the_spawned_then_the_custom_then_the_plain_type_and_never_the_name(world, meta, expected):
+    session = 'aaaaaaaa-1111'
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:00:00Z', 'm1', 1.0)])
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:01:00Z', 'm2', 1.0)], sub='x1', meta=meta)
+    data = world.report('--day', DAY)
+    assert list(data['total']['subagents']['by_type']) == [expected]
+    assert list(data['clis'][0]['subagents']) == [expected]
+    assert 'bau-bericht' not in json.dumps(data) or expected == 'bau-bericht'
+    assert 'only-a-name' not in json.dumps(data)
 
 
 def test_an_odd_agent_type_is_not_taken_over(world):
@@ -461,7 +660,8 @@ def test_the_rise_is_shared_by_cost_between_the_clis_and_a_section_without_reque
     assert five == {'counted_points': 5, 'attributed_points': pytest.approx(4.0), 'unexplained_points': pytest.approx(1.0),
                     'skipped_sections': 0, 'skipped_points': 0}
     week = data['allocation']['week']
-    assert (week['counted_points'], week['unexplained_points']) == (1, 0) and week['attributed_points'] == pytest.approx(1.0)
+    assert (week['counted_points'], week['unexplained_points']) == (1,
+                                                                    0) and week['attributed_points'] == pytest.approx(1.0)
     assert 'unexplained' in world.text('--day', DAY) and '~' in world.text('--day', DAY)
 
 
@@ -472,7 +672,8 @@ def test_attributed_and_unexplained_add_up_to_the_measured_rise(world):
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1',
                      [paid(iso(base + i * 600 + 300), f'a{i}', 1.0 + i % 3) for i in range(0, 40, 3)])
     world.transcript('-home-u-proj-b', 'bbbbbbbb-2',
-                     [paid(iso(base + i * 600 + 200), f'b{i}', 0.5 + i % 4, cwd='/home/u/proj-b') for i in range(0, 40, 2)])
+                     [paid(iso(base + i * 600 + 200), f'b{i}', 0.5 + i % 4, cwd='/home/u/proj-b') for i in range(0, 40,
+                                                                                                                 2)])
     data = world.report('--day', DAY)
     for metric in ('five', 'week'):
         alloc = data['allocation'][metric]
@@ -997,7 +1198,7 @@ def test_broken_transcript_lines_are_skipped(world):
         '', paid('2026-10-13T10:01:00Z', 'good', 1.0)])
     data = world.report('--day', DAY)
     assert data['total']['requests'] == 2 and data['total']['cost_usd'] == pytest.approx(1.0)
-    assert data['total']['unpriced'] == {'?': {'requests': 1, 'tokens': 4}}
+    assert list(data['total']['unpriced']) == ['?'] and data['total']['unpriced']['?']['tokens']['output'] == 4
 
 
 def test_a_linked_transcript_is_not_followed(world):
@@ -1109,7 +1310,8 @@ def test_the_shipped_price_file_has_the_agreed_prices():
     assert rates('Sonnet 5.x') == (2, 2.5, 4, 0.20, 10) and rates('Haiku 4.5') == (1, 1.25, 2, 0.10, 5)
     assert rates('Haiku 5.5') == (0.10, 0.125, 0.20, 0.01, 0.50) and rates('Fable') == (10, 12.5, 20, 0.25, 50)
     tier = prices['Haiku 5.5']['long_context']
-    assert tier['above_tokens'] == 100_000 and tuple(tier[k] for k in report_module.KINDS) == (0.50, 0.625, 1.0, 0.05, 2.50)
+    assert tier['above_tokens'] == 100_000 and tuple(tier[k] for k in report_module.KINDS) == (0.50, 0.625, 1.0, 0.05,
+                                                                                               2.50)
 
 
 # --- Output ---------------------------------------------------------------------------------------------------------------
@@ -1120,10 +1322,13 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
     assert set(data['coverage']) == {'transcript_files', 'archive_days', 'unreadable_history_lines',
                                      'unreadable_archive_lines'}
-    assert set(data['total']) == {'requests', 'tokens', 'cost_usd', 'main', 'subagents', 'models', 'unpriced'}
+    assert set(data['total']) == {'requests', 'tokens', 'cost_usd', 'main', 'subagents', 'models', 'unpriced',
+                                  'cache_hit_rate', 'cold_starts', 'thinking_tokens', 'thinking_share', 'web_searches',
+                                  'web_fetches'}
     assert set(data['total']['subagents']) == {'requests', 'cost_usd', 'by_type'}
     assert set(data['clis'][0]) == {'id', 'label', 'start', 'requests', 'cost_usd', 'tokens', 'models', 'subagents',
-                                    'cache_hit_rate', 'cold_starts', 'estimated_share'}
+                                    'cache_hit_rate', 'cold_starts', 'estimated_share', 'thinking_tokens', 'thinking_share',
+                                    'web_searches', 'web_fetches'}
     assert set(data['calibration']) == {'five', 'week'}
     assert set(data['calibration']['five']) == {'status', 'sections', 'usd_per_point', 'per_day', 'per_model'}
 
@@ -1151,7 +1356,8 @@ def test_the_example_in_the_readme_has_the_shape_of_the_real_report(world):
     r1, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
     world.history([row('2026-10-13T10:00:00Z', 10, 20, r1, week), row('2026-10-13T10:10:00Z', 14, 21, r1, week)])
     world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:05:00Z', 'a', 3.0, cwd='/home/u/Projekte/proj-a')])
-    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:06:00Z', 'b', 1.0)], sub='x1', meta={'agentType': 'reviewer'})
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:06:00Z', 'b', 1.0)], sub='x1',
+                     meta={'agentType': 'reviewer'})
     world.guard_log([{'time': '2026-10-13T10:00:00Z', 'hook': 'spawn_gate', 'mode': 'shadow', 'decision': 'allow'},
                      {'time': '2026-10-13T10:00:01Z', 'hook': 'soft_stop', 'mode': 'shadow', 'decision': 'warn'}])
     real = world.text('--day', DAY).splitlines()
