@@ -1,10 +1,11 @@
 """What the wake-up watcher (wake_watcher.py) and the context reporter share: two times and the heartbeat file.
 
-`<log_dir>/context/<session_id>.watch` holds {"session_id", "state": "watching"|"fired", "at": "<UTC ISO>"}.
-The watcher writes "watching" on every poll and "fired" once, right before it wakes the model. The reporter
-reads it to offer the watcher only when none lives and none has fired lately: a watcher counts as alive while its
-last heartbeat is at most ALIVE_MIN minutes old, and a fire rests the offer for REST_AFTER_FIRE_MIN minutes
-(the routine it triggers would otherwise start the next watcher at once).
+`<log_dir>/context/<session_id>.watch` holds {"session_id", "state": "watching"|"fired"|"ended", "at": "<UTC ISO>"}.
+The watcher writes "watching" on every poll, "fired" once right before it wakes the model, and "ended" when it
+stops after its maximum run time. The reporter reads it to offer the watcher only when none lives and none has
+fired lately: a watcher counts as alive while its last heartbeat is at most ALIVE_MIN minutes old, and a fire rests
+the offer for REST_AFTER_FIRE_MIN minutes (the routine it triggers would otherwise start the next watcher at once).
+"ended" blocks nothing, so the turn that delivers the end message already offers the next watcher.
 
 The file is written like the state file (atomic, private, never through a link) and read like it (no link, no
 named pipe, size limit). Every unusable file reads as "no heartbeat".
@@ -19,7 +20,7 @@ import _usage
 
 ALIVE_MIN = 3
 REST_AFTER_FIRE_MIN = 60
-STATES = ('watching', 'fired')
+STATES = ('watching', 'fired', 'ended')
 
 
 def write_heartbeat(directory: str, session_id, state: str, now: float) -> None:
@@ -48,7 +49,7 @@ def read_heartbeat(directory: str, session_id) -> dict | None:
 def blocks_hint(beat: dict | None, now: float) -> bool:
     """True while the offer to start a watcher would be wrong: a watcher is alive, or one fired lately. A time up to
     one minute ahead counts like the present (as the state file does), more than that is a broken file."""
-    if beat is None:
+    if beat is None or beat['state'] == 'ended':
         return False
     age_min = (now - beat['at']) / 60
     if age_min < _usage.MIN_AGE_MIN:

@@ -612,7 +612,8 @@ def test_a_subagent_gets_no_offer(tmp_path, agent_id):
     ('watching', 0, False), ('watching', 60, False), ('watching', 180, False),      # a living watcher
     ('watching', 181, True), ('watching', 3600, True),                              # one that has stopped
     ('fired', 0, False), ('fired', 59 * 60, False), ('fired', 60 * 60, False),      # the rest after a fire
-    ('fired', 60 * 60 + 1, True), ('fired', 5 * 3600, True)])
+    ('fired', 60 * 60 + 1, True), ('fired', 5 * 3600, True),
+    ('ended', 0, True), ('ended', 60, True)])                                       # ended after its run time
 def test_no_offer_while_a_watcher_lives_or_has_fired_within_the_hour(tmp_path, state, age_s, offered):
     save(tmp_path, used=250_000)
     beat(tmp_path, state, age_s)
