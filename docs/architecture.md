@@ -338,7 +338,9 @@ tool input; both are read from every tool input, in practice only an Agent call 
 values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` carries quoted values masked:
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
-Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session context state in
+The log folder is created 0700 and `log.jsonl` 0600 (`fchmod` on every write, so a log of an earlier version
+becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log_dir>/counters/<agent_id>.json`
+(written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
 `<log_dir>/context/<session_id>.watch`. The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.

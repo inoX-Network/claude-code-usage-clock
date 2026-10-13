@@ -43,10 +43,12 @@ def _prune(directory: str, now: float, keep: str) -> None:
 
 def write_private(directory: str, name: str, content: str) -> bool:
     """Writes `<directory>/<name>` atomically (temporary file + os.replace, never through a link, mode 0600; the
-    folder is created with 0700). False, and nothing written, if the folder is a link. Raises OSError if the
-    file cannot be written. The caller has validated `name`."""
+    folder and its parent, the log folder, are created with 0700). False, and nothing written, if the folder is a
+    link. Raises OSError if the file cannot be written. The caller has validated `name`."""
     if os.path.islink(directory):
         return False      # a planted link as the folder: never write through it
+    # makedirs gives its mode only to the last folder; the log folder above it is created first, also private
+    os.makedirs(os.path.dirname(os.path.abspath(directory)), mode=0o700, exist_ok=True)
     os.makedirs(directory, mode=0o700, exist_ok=True)
     path = os.path.join(directory, name)
     tmp = f'{path}.tmp.{os.getpid()}'

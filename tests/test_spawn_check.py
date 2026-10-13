@@ -244,6 +244,7 @@ def test_template_with_several_expressions():
     assert p.allowed and p.agent_count == 1
 
 
+@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
 def test_unreadable_definition_file_is_skipped(agents):
     base, create = agents
     create('locked', 'model: opus\neffort: high')
@@ -437,7 +438,10 @@ def test_bracket_nesting_is_limited_too():
     assert not p.allowed and 'Nesting' in p.reason
 
 
-def test_large_script_with_allowed_depth_stays_linear():
+def test_large_script_with_allowed_depth_stays_linear(monkeypatch):
+    # Linear takes well under a second, exponential at depth 40 would take years. The test bound is generous so
+    # that a slow machine or coverage tracing cannot fail it; the budget of the hook itself stays unchanged.
+    monkeypatch.setattr(sc, 'TIME_BUDGET_S', 10.0)
     start = time.monotonic()
     p = script(_nested(40))
     duration = time.monotonic() - start
@@ -918,6 +922,7 @@ def test_protected_paths_of_the_skill_search(tmp_path):
     assert sc.find_skill('apps/missing:deploy', [], [str(tmp_path)], 1e12, cwd=str(tmp_path)) is None
 
 
+@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
 def test_unreadable_skill_file_and_unlistable_folder_are_skipped(tmp_path):
     base = tmp_path / 'skills'
     skill_file(base / 'locked' / 'SKILL.md', 'name: locked\ncontext: fork')

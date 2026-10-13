@@ -1107,9 +1107,12 @@ def test_the_context_state_module_is_required_and_copied(repo, tmp_path):
     r = run_in(repo, '--settings', settings, '--target', target)
     assert r.returncode == 1 and '_context_state.py' in r.stdout and not target.exists()
     (repo / 'hooks' / '_context_state.py').write_text('', encoding='utf-8')
-    # an empty module is enough for every part but the context reporter, which needs its SESSION_ID
+    # an empty module is enough for the parts that do not write through it: the context reporter needs its
+    # SESSION_ID, the soft stop writes its counters with write_private, and the smoke test catches that
+    broken = run_in(repo, '--settings', settings, '--target', target, '--components', 'soft-stop')
+    assert broken.returncode == 1 and 'soft_stop.py: failed internally' in broken.stdout and not target.exists()
     assert run_in(repo, '--settings', settings, '--target', target,
-                  '--components', 'statusline,usage-clock,spawn-gate,soft-stop').returncode == 0
+                  '--components', 'statusline,usage-clock,spawn-gate').returncode == 0
     assert (target / '_context_state.py').is_file()
 
 

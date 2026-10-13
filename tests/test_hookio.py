@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import stat
 import sys
 from datetime import date
 
@@ -157,6 +158,7 @@ def test_git_file_without_a_worktree_target_adds_nothing(tmp_path, content):
     assert _hookio._project_roots(str(tmp_path / 'wt')) == [str(tmp_path / 'wt')]
 
 
+@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
 def test_unreadable_git_file_gives_no_main_checkout_and_no_crash(tmp_path):
     wt = tmp_path / 'wt'
     wt.mkdir()
@@ -258,6 +260,35 @@ def test_log_rotates_above_five_megabytes(tmp_path):
     assert read_log(tmp_path) == [{'n': 1}]
     _hookio.write_log_line({'n': 2})                      # small file: no further rotation
     assert [line['n'] for line in read_log(tmp_path)] == [1, 2]
+
+
+def test_log_folder_and_file_are_private_whatever_the_umask(tmp_path):
+    old = os.umask(0o022)
+    try:
+        _hookio.write_log_line({'n': 1})
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((tmp_path / 'log').stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / 'log' / 'log.jsonl').stat().st_mode) == 0o600
+
+
+def test_a_log_left_readable_by_an_earlier_version_becomes_private(tmp_path):
+    log = tmp_path / 'log' / 'log.jsonl'
+    log.parent.mkdir()
+    log.write_text('{"n": 0}\n', encoding='utf-8')
+    log.chmod(0o644)
+    _hookio.write_log_line({'n': 1})
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert [line['n'] for line in read_log(tmp_path)] == [0, 1]
+
+
+def test_the_log_is_never_written_through_a_link(tmp_path):
+    (tmp_path / 'log').mkdir()
+    victim = tmp_path / 'victim.txt'
+    victim.write_text('keep me', encoding='utf-8')
+    (tmp_path / 'log' / 'log.jsonl').symlink_to(victim)
+    _hookio.write_log_line({'n': 1})
+    assert victim.read_text(encoding='utf-8') == 'keep me'
 
 
 def test_log_at_exactly_the_limit_does_not_rotate(tmp_path):

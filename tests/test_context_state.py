@@ -39,9 +39,14 @@ def test_the_file_has_exactly_the_documented_content(tmp_path):
 
 
 def test_the_file_is_private_and_so_is_the_folder(tmp_path):
-    save(tmp_path)
+    old = os.umask(0o022)
+    try:
+        save(tmp_path)
+    finally:
+        os.umask(old)
     assert stat.S_IMODE(os.stat(state_dir(tmp_path) / 'abc-123_X.json').st_mode) == 0o600
     assert stat.S_IMODE(os.stat(state_dir(tmp_path)).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(state_dir(tmp_path).parent).st_mode) == 0o700     # the log folder it creates
 
 
 def test_a_second_write_replaces_the_values_and_leaves_no_temporary_file(tmp_path):

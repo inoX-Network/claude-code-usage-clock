@@ -274,6 +274,8 @@ name, the agent id, the agent type (`agent_type`), the permission mode (`permiss
 *names* of the input fields, never with its values. In the reason every quoted value (between `"…"`, `'…'`,
 `„…“` or backticks) is replaced by `…`, so it says what was wrong, for example
 `agent call 1: model "…" unknown`, but not the value. The log never records prompts, commands or script text.
+The log folder is private to you (0700), and so are the log, the per-agent counters and the lock in it (0600),
+whatever your umask; a log left readable by an earlier version is made private on its next write.
 The answer to the model is not masked: the model sees the value it has to fix.
 
 ## Configuration
@@ -404,6 +406,9 @@ It stays next to the usage file because the final rename is atomic only within o
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest tests/ -q --cov=hooks --cov=tools
 ```
+
+Run the tests as a normal user. As root (for example in a container) the tests that need an unreadable file are
+skipped, because root can read every file.
 
 [`docs/architecture.md`](docs/architecture.md) is the contract between the parts.
 

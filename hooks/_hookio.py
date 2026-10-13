@@ -142,16 +142,20 @@ def log_dir() -> str:
 def write_log_line(record: dict, directory: str | None = None) -> None:
     """Appends one JSON line to <log_dir>/log.jsonl, rotating to log.jsonl.1 above 5 MB.
 
-    Errors while logging must never disturb a hook.
+    Folder 0700, file 0600 whatever the umask, and never written through a link. A log left readable by an
+    earlier version is made private on the next write. Errors while logging must never disturb a hook.
     """
     try:
         line = json.dumps(record, ensure_ascii=False) + '\n'
         directory = directory or log_dir()
-        os.makedirs(directory, exist_ok=True)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
         path = os.path.join(directory, 'log.jsonl')
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
             os.replace(path, path + '.1')
-        with open(path, 'a', encoding='utf-8') as f:
+        # O_NOFOLLOW here rather than from _usage: logging must not depend on the module it may have to report
+        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        with os.fdopen(descriptor, 'a', encoding='utf-8') as f:
+            os.fchmod(descriptor, 0o600)
             f.write(line)
     except (OSError, TypeError, ValueError):
         pass
