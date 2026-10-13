@@ -47,7 +47,9 @@ Default path `~/.claude/rate-limit.json` (config `usage_file`, env override `CCU
   - Later window: the new block wins, even with a lower value (after a reset).
   - `measured_at` is renewed only if this session contributed a valid five-hour block that did not lose.
     An idle session can therefore never make old data look fresh.
-- Write under an exclusive `fcntl.flock` on `<file>.lock`, atomically via `<file>.tmp.<pid>` + `os.replace`.
+- Write under an exclusive `fcntl.flock` on `<log_dir>/<file name>.lock` (the tool's own folder, so a guard that
+  protects it covers the lock; whoever holds the lock stops the updates), atomically via `<file>.tmp.<pid>` +
+  `os.replace` (next to the file: the rename is atomic only within one file system).
   Write only when something changed.
 - A file in any other format counts as empty and is rebuilt on the next status line tick.
 

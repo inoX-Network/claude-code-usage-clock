@@ -200,7 +200,7 @@ def main() -> int:
         five, week = _own_value(status_input, 'five_hour'), _own_value(status_input, 'seven_day')
         source = status_input.get('rate_limits')
         try:
-            merged = _usage.update_file(_usage.usage_path(), status_input, now)
+            merged = _usage.update_file(_usage.usage_path(), status_input, now, _hookio.log_dir())
             five, week = _merged_value(merged, 'five_hour'), _merged_value(merged, 'seven_day')
             source = merged
         except Exception:  # merge failed: show the own values, write nothing

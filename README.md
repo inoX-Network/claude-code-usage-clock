@@ -81,8 +81,8 @@ the installer did. What stays, and how to remove it:
 | What stays | How to remove it |
 |---|---|
 | The `--target` folder (default `~/.claude/hooks/usage-clock/`) with the scripts and your `config.json` | `rm -r ~/.claude/hooks/usage-clock` (or the folder you gave with `--target`) |
-| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters and the per-session context files | `rm -r ~/.cache/claude-usage-clock` |
-| The shared usage file `~/.claude/rate-limit.json` and its lock file `rate-limit.json.lock` (the `usage_file` in your config) | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
+| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters, the per-session context files and the lock of the usage file (`rate-limit.json.lock`) | `rm -r ~/.cache/claude-usage-clock` |
+| The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
 | The backups `settings.json.bak-usage-clock-*` | Delete them when you no longer need them. |
@@ -383,12 +383,12 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
 | `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
 | `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
-| `~/.claude/rate-limit.json.lock` | Held while the numbers are merged; a model that holds it keeps them from updating. |
-| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state and watcher heartbeats. |
+| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
 
 List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
 nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is
 created fresh for every write, a leftover or planted link there is removed first, and it is never written through.
+It stays next to the usage file because the final rename is atomic only within one file system.
 
 ## Development
 
