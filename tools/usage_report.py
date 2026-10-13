@@ -10,9 +10,10 @@ Usage: python3 usage_report.py [--day [YYYY-MM-DD] | --week | --month [YYYY-MM] 
        python3 usage_report.py --archive [--projects-dir DIR] [--config PATH]
 
 The default is today. Days are local days; --week is the subscription week that ends at the weekly reset time
-(not a calendar week); --since and --until are whole days, both included. --json prints the same figures as a
-stable JSON object. --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
-nothing: Claude Code deletes transcripts after about 30 days, the archive keeps the day figures (run it daily).
+(from the measurement history, else from the usage file; not a calendar week); --since and --until are whole days,
+both included. --json prints the same figures as a stable JSON object. --archive writes every finished day that is not
+in <log_dir>/usage-days.jsonl yet and prints nothing: Claude Code deletes transcripts after about 30 days, the archive
+keeps the day figures (run it daily).
 
 The cost weight is what the tokens would cost at API prices (tools/prices.json); a model without a price is shown
 with its tokens as "no price", never estimated. The subscription rise per CLI is an ESTIMATE (marked ~): the rise of
@@ -32,12 +33,14 @@ import os
 import re
 import sys
 import time
+from unittest import mock
 from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'hooks'))
 sys.path.insert(0, HERE)
+import _config  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
 
@@ -952,6 +955,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_usage_file(config: str | None) -> str:
+    """The shared usage file, found like `log_summary.resolve_log_dir` finds the log folder: --config, else
+    CCUC_USAGE_FILE, else `usage_file` of CCUC_CONFIG or of the configuration of the standard installation."""
+    if config is None and os.environ.get('CCUC_USAGE_FILE'):
+        return os.path.expanduser(os.environ['CCUC_USAGE_FILE'])
+    chosen = config or os.environ.get('CCUC_CONFIG') or os.path.expanduser(log_summary.STANDARD_CONFIG)
+    with mock.patch.dict(os.environ, {'CCUC_CONFIG': chosen}):
+        return _config.load(log_problems=False)['usage_file']
+
+
+def usage_file_week_reset(path: str) -> float | None:
+    """`seven_day.resets_at` of the usage file, if it has one."""
+    block = _usage._read_dict(path).get('seven_day')
+    reset = block.get('resets_at') if isinstance(block, dict) else None
+    return reset if _is_number(reset) else None
+
+
 def _day_arg(parser, text: str, name: str) -> date:
     try:
         if not DAY_TEXT.fullmatch(text):
@@ -961,12 +981,15 @@ def _day_arg(parser, text: str, name: str) -> date:
         parser.error(f'{name} must be a day like 2026-01-14')
 
 
-def _period(parser, args, today: date, history: list[Measurement], now: float) -> dict:
+def _period(parser, args, today: date, history: list[Measurement], now: float, usage_file: str) -> dict:
     """kind, label, start, end (Unix seconds) of the requested period; {'error': text} if --week has no reset time."""
     if args.week:
         resets = next((m.week_resets for m in reversed(history) if m.week_resets is not None), None)
         if resets is None:
-            return {'error': 'No weekly reset time in the measurement history: use --since and --until instead.'}
+            resets = usage_file_week_reset(usage_file)
+        if resets is None:
+            return {'error': 'No weekly reset time in the measurement history or the usage file: '
+                             'use --since and --until instead.'}
         while resets <= now:
             resets += WEEK_S      # the weekly windows follow each other every seven days
         return {'kind': 'week', 'label': f'week to {clock(resets, True)}', 'start': resets - WEEK_S, 'end': resets}
@@ -1053,7 +1076,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     if args.archive:
         period = {'kind': 'archive', 'start': 0.0, 'end': math.inf}
     else:
-        period = _period(parser, args, today, history, now)
+        period = _period(parser, args, today, history, now, resolve_usage_file(config))
     if 'error' in period:
         print(period['error'])
         return 1

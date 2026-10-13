@@ -604,7 +604,76 @@ def test_a_week_that_has_passed_since_the_last_measurement_rolls_forward(world):
 def test_the_week_needs_a_known_reset(world, capsys):
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-14T09:00:00Z', 'a', 1.0)])
     assert report_module.main(world.args('--week'), now=NOW) == 1
+    out = capsys.readouterr().out
+    assert '--since' in out and 'usage file' in out and 'history' in out
+
+
+def put_usage_file(world, resets, name='usage.json'):
+    (world.root / name).write_text(json.dumps({'five_hour': None, 'seven_day': {'used_percentage': 40, 'resets_at': resets},
+                                               'measured_at': '2026-10-14T11:00:00Z'}), encoding='utf-8')
+
+
+def test_without_a_history_the_week_ends_at_the_reset_time_of_the_usage_file(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    spend(world, ('2026-10-12T07:00:00Z', 1.0), ('2026-10-12T06:59:59Z', 2.0), ('2026-10-14T09:00:00Z', 4.0),
+          ('2026-10-19T07:00:00Z', 8.0))
+    data = world.report('--week')
+    assert data['total']['cost_usd'] == pytest.approx(5.0)
+    assert data['period']['start'] == '2026-10-12T07:00:00Z' and data['period']['end'] == '2026-10-19T07:00:00Z'
+
+
+def test_the_history_comes_before_the_usage_file(world):
+    put_usage_file(world, T('2026-10-20T07:00:00Z'))
+    world.history([row('2026-10-13T10:00:00Z', 10, 20, T('2026-10-13T15:00:00Z'), T('2026-10-19T07:00:00Z'))])
+    assert world.report('--week')['period']['end'] == '2026-10-19T07:00:00Z'
+
+
+def test_a_reset_of_the_usage_file_that_has_passed_rolls_forward(world):
+    put_usage_file(world, T('2026-10-05T07:00:00Z'))
+    assert world.report('--week')['period']['start'] == '2026-10-12T07:00:00Z'
+
+
+def test_a_history_without_weekly_reset_times_falls_back_to_the_usage_file(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-13T10:00:00Z', 10, 20)])
+    assert world.report('--week')['period']['end'] == '2026-10-19T07:00:00Z'
+
+
+def test_the_usage_file_comes_from_the_configuration_of_the_standard_installation(world, monkeypatch, tmp_path):
+    for name in ('CCUC_USAGE_FILE', 'CCUC_CONFIG'):
+        monkeypatch.delenv(name)
+    folder = tmp_path / 'home' / '.claude' / 'hooks' / 'usage-clock'
+    folder.mkdir(parents=True)
+    (folder / 'config.json').write_text(json.dumps({'usage_file': str(tmp_path / 'installed-usage.json')}), encoding='utf-8')
+    put_usage_file(world, T('2026-10-23T07:00:00Z'), name='installed-usage.json')
+    assert world.report('--week')['period']['end'] == '2026-10-23T07:00:00Z'
+
+
+@pytest.mark.parametrize('content', ['{broken', '[1]', '{"seven_day": null}', '{"seven_day": {"resets_at": "soon"}}',
+                                     '{"seven_day": {"resets_at": true}}', '{"seven_day": {"used_percentage": 3}}'])
+def test_a_usage_file_without_a_usable_reset_time_does_not_help(world, capsys, content):
+    (world.root / 'usage.json').write_text(content, encoding='utf-8')
+    world.projects.mkdir()
+    assert report_module.main(world.args('--week'), now=NOW) == 1
     assert '--since' in capsys.readouterr().out
+
+
+def test_the_usage_file_is_found_like_the_log_folder(world, monkeypatch, tmp_path):
+    world.projects.mkdir()
+    config = tmp_path / 'mine.json'
+    config.write_text(json.dumps({'usage_file': str(tmp_path / 'mine-usage.json')}), encoding='utf-8')
+    put_usage_file(world, T('2026-10-21T07:00:00Z'), name='mine-usage.json')
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))                 # the file of CCUC_USAGE_FILE
+    assert report_module.main(world.args('--json', '--week', '--config', str(config)), now=NOW) == 0
+    assert json.loads(world.capsys.readouterr().out)['period']['end'] == '2026-10-21T07:00:00Z'
+    assert report_module.main(world.args('--json', '--week'), now=NOW) == 0
+    assert json.loads(world.capsys.readouterr().out)['period']['end'] == '2026-10-19T07:00:00Z'
+    monkeypatch.delenv('CCUC_USAGE_FILE')
+    (tmp_path / 'home' / '.claude').mkdir(parents=True)
+    (tmp_path / 'home' / '.claude' / 'rate-limit.json').write_text(
+        json.dumps({'seven_day': {'resets_at': T('2026-10-22T07:00:00Z')}}), encoding='utf-8')
+    assert report_module.main(world.args('--json', '--week'), now=NOW) == 0
+    assert json.loads(world.capsys.readouterr().out)['period']['end'] == '2026-10-22T07:00:00Z'
 
 
 # --- Subscription: start and end values, windows ----------------------------------------------------------------------

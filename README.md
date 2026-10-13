@@ -311,7 +311,8 @@ python3 tools/usage_report.py --archive             # see below
 ```
 
 Days are local days. `--week` is the subscription week, not the calendar week: it ends at the weekly reset time
-that the measurement history last saw (and counts on in steps of seven days), so it needs the history.
+that the measurement history last saw, else the one in the shared usage file (`seven_day.resets_at`), and counts on in
+steps of seven days. With neither it stops with exit code 1 and asks for `--since`.
 `--since` and `--until` are whole days, both included. The log folder is found like `log_summary.py` finds it
 (`--config PATH`, else `CCUC_LOG_DIR`, else the config file of your installation). Exit code 0 is a report, 1 no
 transcripts (or a price file that cannot be read, or an archive that cannot be written), 2 bad arguments. An example, with invented numbers:

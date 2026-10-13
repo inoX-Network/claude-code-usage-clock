@@ -417,7 +417,8 @@ in the JSON, `n/a` in the text. They never enter the cost weight (thinking is pa
 
 **Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
 day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the
-history, moved on by whole weeks until it lies after now. Everything is computed on half open intervals of Unix seconds.
+history, else `seven_day.resets_at` of the usage file (found like the log folder: `--config`, `CCUC_USAGE_FILE`, `usage_file`
+of the configuration), moved on by whole weeks until it lies after now; with neither, exit 1. Everything is computed on half open intervals of Unix seconds.
 
 **Allocation.** A section is the time between two consecutive measurements (history rows, else usage lines); it
 belongs to the period of its end. For each metric (`five`, `week`) a section counts if both values exist, the value did
