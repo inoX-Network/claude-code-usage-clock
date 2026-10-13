@@ -23,6 +23,8 @@ tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
   log_summary.py          summarises the JSONL log
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
+  usage_report.py         what was used per day, week, month and CLI, from the transcripts (read only; --archive writes the day archive)
+  prices.json             API prices per million tokens for usage_report.py, with source and date
 docs/agents.md            how to give agents model and effort, for users and for the model
 tests/                    pytest, synthetic data only
 config.example.json       every key with its default
@@ -379,8 +381,64 @@ The log folder is created 0700 and `log.jsonl` 0600 (`fchmod` on every write, so
 becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log_dir>/counters/<agent_id>.json`
 (written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
-`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line), day archive of the usage report in `<log_dir>/usage-days.jsonl` (see Usage report). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
+
+## Usage report
+
+`tools/usage_report.py` is a separate tool, not a hook. It reads and counts; the only file it writes is the day
+archive. Python 3.10+, standard library only. It reuses `log_summary.resolve_log_dir` (where the log folder is) and
+`_usage.NO_FOLLOW`.
+
+**Sources.** (1) Transcripts `<projects>/<project>/<session>.jsonl` and `<project>/<session>/subagents/agent-*.jsonl`
+(links are not followed; files not modified since the start of the period minus 60 minutes are not opened). Per
+assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.model` and `message.usage` are used; of
+the lines with one `(message.id, requestId)` the last counts (it has the complete `output_tokens`; with equal output the
+later one). A subagent belongs to the session whose folder it is in; its type is `agentType` of `agent-*.meta.json`
+(`[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
+unreadable lines are skipped and counted. For the time before the history began, the usage line of the usage clock in
+the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1)
+stands in; it carries no reset times. (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
+by hook, mode and decision. (4) The day archive. Nothing else of a transcript is read, and no text is printed.
+
+**Cost weight.** Per request `sum(tokens x price) / 1e6` with the prices of the first `prices.json` entry whose
+`match` is part of the lower-case model name. Cache creation is split into 5 minute and 1 hour writes
+(`cache_creation_input_tokens` minus `cache_creation.ephemeral_1h_input_tokens` is the 5 minute part). An entry with
+`long_context` uses those prices when input, cache write and cache read together exceed `above_tokens` (Haiku 5.5:
+100 000). No matching entry: the request has no price; its tokens are listed, its cost is not estimated.
+
+**Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
+day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the
+history, moved on by whole weeks until it lies after now. Everything is computed on half open intervals of Unix seconds.
+
+**Allocation.** A section is the time between two consecutive measurements (history rows, else usage lines); it
+belongs to the period of its end. For each metric (`five`, `week`) a section counts if both values exist, the value did
+not fall, the reset times (if both known) differ by less than 60 s, and the section is at most 3600 s long. A section
+with a reset (or a fall) or longer than 3600 s adds to `skipped_sections` (a long one also its rise to `skipped_points`).
+A counted section adds its rise to `counted`. The requests after the first measurement up to the second are summed by
+CLI (cost weight, 8 character session prefix); with a total above zero the rise is shared by cost share
+(`attributed`, per CLI `five_pts`, `week_pts`), otherwise it goes to `rest` (`unexplained_points`). So `attributed + rest
+= counted` always.
+
+**Calibration.** A counted section with exactly one CLI, no unpriced request and a total above zero adds to the sums
+`n`, `c2 = sum(cost^2)`, `cd = sum(cost x rise)` of the whole period, of its day and, if all its requests have the same
+price entry, of that model. USD per point is `c2 / cd` (regression of the rise on the cost through zero, inverted); it is
+shown from 50 sections (`MIN_SECTIONS`), per model only from 50 sections of that model, per day always with its count.
+
+**Mergeable figures and the archive.** All figures of a period are one dict of numbers (`new_stats`), so the figures of
+several days add up (`merge_stats`). `<log_dir>/usage-days.jsonl` has one line per finished local day:
+`{"v":1,"day":"YYYY-MM-DD","stats":{...}}` with those figures (session ids cut to 8 characters, no text). A report
+takes a whole day from the archive if no transcript has a request that day and the archive has the day; the rest of the
+period is computed from the transcripts. A malformed archived day (merging it raises) is skipped and counted, never
+half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
+and appends them under an exclusive `flock` of the file, re-reading the file's days first (two runs never write a day
+twice, a day is never overwritten). Like the measurement history the file is 0600 in a 0700 folder, opened
+`O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off
+last line gets a line break first.
+
+**Output.** Text (English) or `--json` with the sections `period`, `coverage`, `subscription`, `total`, `clis`,
+`allocation`, `calibration`, `guards` in this order. Exit codes: 0 report, 1 no transcripts folder (and no archived day
+to use) or an unreadable `prices.json` or an archive that cannot be written, 2 bad arguments.
 
 ## Known limits
 

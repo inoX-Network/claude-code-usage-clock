@@ -11,6 +11,7 @@ README = os.path.join(ROOT, 'README.md')
 EXAMPLE = os.path.join(ROOT, 'config.example.json')
 INSTALL = os.path.join(ROOT, 'tools', 'install.py')
 LOG_SUMMARY = os.path.join(ROOT, 'tools', 'log_summary.py')
+USAGE_REPORT = os.path.join(ROOT, 'tools', 'usage_report.py')
 
 
 def readme_text():
@@ -145,7 +146,7 @@ def test_the_readme_says_that_week_ok_until_is_not_kept_but_the_mode_is():
 def test_the_uninstall_section_names_everything_that_stays():
     body = section(readme_text(), '### Uninstall completely')
     for needle in ('--target', 'config.json', '~/.cache/claude-usage-clock', 'rate-limit.json', 'rate-limit.json.lock',
-                   'usage-history.jsonl', 'usage-history.jsonl.1',
+                   'usage-history.jsonl', 'usage-history.jsonl.1', 'usage-days.jsonl',
                    'autoContinueAtUsageLimit', '--replace-statusline', 'settings.json.bak-usage-clock-', 'rm -r'):
         assert needle in body, needle
 
@@ -314,3 +315,32 @@ def test_the_documents_describe_the_history_file_its_fields_and_its_limits():
     assert _history.FILE_NAME == 'usage-history.jsonl'
     assert '_history.py' in section(architecture_text(), '## Layout')
     assert '0600' in architecture and 'O_NOFOLLOW' in architecture and 'under the lock of the usage file' in architecture
+
+
+# --- Usage report: the text must match the tool -------------------------------------------------------------------------
+
+def test_every_usage_report_option_is_in_the_readme_section_and_the_architecture_names_the_tool():
+    with open(USAGE_REPORT, encoding='utf-8') as f:
+        options = set(re.findall(r"add_argument\('(--[a-z-]+)'", f.read()))
+    assert options >= {'--day', '--week', '--month', '--since', '--until', '--json', '--archive', '--projects-dir', '--config'}
+    body = section(readme_text(), '## Reports: what was used')
+    assert [o for o in sorted(options) if o not in body] == []
+    architecture = architecture_text()
+    assert 'usage_report.py' in section(architecture, '## Layout') and 'prices.json' in section(architecture, '## Layout')
+    assert '## Usage report' in architecture
+
+
+def test_the_report_section_names_the_limits_the_code_has():
+    spec = importlib.util.spec_from_file_location('usage_report_for_readme_test', USAGE_REPORT)
+    usage_report = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(usage_report)
+    body = flat(section(readme_text(), '## Reports: what was used'))
+    architecture = flat(section(architecture_text(), '## Usage report'))
+    assert f'{usage_report.COLD_START_TOKENS:,}'.replace(',', ' ') in body
+    assert f'{usage_report.MIN_SECTIONS} such stretches' in body and f'{usage_report.MIN_SECTIONS} stretches of its own' in body
+    assert f'longer than {usage_report.MAX_GAP_S // 60} minutes' in body
+    assert f'{usage_report.MIN_SECTIONS} sections (`MIN_SECTIONS`)' in architecture and f'{usage_report.MAX_GAP_S} s' in architecture
+    for needle in ('usage-days.jsonl', '0600', '0700', 'never overwrites a day', 'prices.json', 'no price', 'unexplained'):
+        assert needle in body, needle
+    for needle in ('O_APPEND|O_NOFOLLOW', 'flock', 'half merged', 'attributed + rest'):
+        assert needle in architecture, needle
