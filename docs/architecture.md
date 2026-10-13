@@ -23,6 +23,8 @@ tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
   log_summary.py          summarises the JSONL log
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
+  usage_report.py         what was used per day, week, month and CLI, from the transcripts (read only; --archive writes the day archive)
+  prices.json             API prices per million tokens for usage_report.py, with source and date
 docs/agents.md            how to give agents model and effort, for users and for the model
 tests/                    pytest, synthetic data only
 config.example.json       every key with its default
@@ -379,8 +381,91 @@ The log folder is created 0700 and `log.jsonl` 0600 (`fchmod` on every write, so
 becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log_dir>/counters/<agent_id>.json`
 (written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
-`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line), day archive of the usage report in `<log_dir>/usage-days.jsonl` (see Usage report). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
+
+## Usage report
+
+`tools/usage_report.py` is a separate tool, not a hook. It reads and counts; the only file it writes is the day
+archive. Python 3.10+, standard library only. It reuses `log_summary.resolve_log_dir` (where the log folder is) and
+`_usage.NO_FOLLOW`.
+
+**Sources.** (1) Transcripts `<projects>/<project>/<session>.jsonl` and `<project>/<session>/subagents/agent-*.jsonl`
+(links are not followed; files not modified since the start of the period minus 60 minutes are not opened). Per
+assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.model` and `message.usage` (with
+`output_tokens_details.thinking_tokens` and `server_tool_use.web_search_requests` / `web_fetch_requests`) are used; of
+the lines with one `(message.id, requestId)` the last counts (it has the complete `output_tokens`; with equal output the
+later one). A subagent belongs to the session whose folder it is in; its type is `spawnedAgentType`, else `customAgentType`, else
+`agentType` of `agent-*.meta.json` (for a named subagent `agentType` holds only its name: if it equals `name` and no spawned or custom type is given, the
+type is `unknown`; the value must match `[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
+unreadable lines are skipped and counted. For the time before the history began, the usage line of the usage clock in
+the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1, and
+only in an attachment of type `hook_additional_context`) stands in; it carries no reset times. Measurements without
+reset times pass `drop_noise`, 5h and week judged apart: a fall that stays above half of the last good value is a stale
+number of an idle session if a value at least as high comes back within 15 minutes (`RECOVERY_S`) and the last good value
+is at most `MAX_GAP_S` old; it is then replaced by the last good value (a measurement with only stale values is left
+out). Any other fall is a new window, so a real reset without reset times does not cascade. Where the anchor (a known weekly
+reset time) puts two measurements in one weekly window, any fall of the weekly value is stale at once and the whole
+measurement is left out. A request that stands in two transcripts (a continued session) is counted once and
+belongs to the file modified first, then the one that sorts first. A line that has the shape of a request but a
+`requestId` that is not text, or a number above 10^12, is left out and counted (`unreadable_transcript_lines`). (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
+by hook, mode and decision. (4) The day archive. Nothing else of a transcript is read, and no text is printed.
+
+**Cost weight.** Per request `sum(tokens x price) / 1e6` with the prices of the first `prices.json` entry whose
+`match` is part of the lower-case model name. Cache creation is split into 5 minute and 1 hour writes
+(`cache_creation_input_tokens` minus `cache_creation.ephemeral_1h_input_tokens` is the 5 minute part). An entry with
+`long_context` uses those prices when input, cache write and cache read together exceed `above_tokens` (Haiku 5.5:
+100 000). No matching entry: the request has no price; its tokens are listed, its cost is not estimated.
+
+**Thinking and web calls.** `thinking_tokens` (part of `output_tokens`, capped at them), `web_search_requests` and
+`web_fetch_requests` are optional. A request that lacks one does not report it; it is unknown, not zero. The figures
+keep, per level (period, model, CLI), how many requests report each detail (`*_n`), its sum, and for thinking the output
+tokens of the reporting requests (`thinking_out`); the share is `thinking / thinking_out`. No reporting request: `null`
+in the JSON, `n/a` in the text. They never enter the cost weight (thinking is part of the output price).
+
+**Weekly windows.** The weekly value is shown per window, never as a difference across a weekly reset. A measurement's
+window ends at its `week_resets` if recorded, else at the next reset in the 7-day rhythm of the anchor (the latest
+`week_resets` of the history, else `seven_day.resets_at` of the usage file), else it is unknown. Consecutive measurements
+with a known value are in one window unless the value fell or the reset times differ by 60 s or more; the first window
+starts at the last value before the period if that is in the same window. Five hour windows without reset times are one window if together they last less than five hours and the value did not
+fall from one to the other; this is also how the windows of two archived days join. `subscription.week_segments` lists them as
+`start`, `end` (`at`, `value`) and `reset_at`. In the figures (`abo.weeks`) segments of several days join if they have
+the same reset time, or no reset time and no fall of the value between them.
+
+**Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
+day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the
+history, else `seven_day.resets_at` of the usage file (found like the log folder: `--config`, `CCUC_USAGE_FILE`, `usage_file`
+of the configuration), moved on by whole weeks until it lies after now; with neither, exit 1. Everything is computed on half open intervals of Unix seconds.
+
+**Allocation.** A section is the time between two consecutive measurements (history rows, else usage lines); it
+belongs to the period of its end. For each metric (`five`, `week`) a section counts if both values exist, the value did
+not fall, the reset times (if both known) differ by less than 60 s, and the section is at most 3600 s long. A section
+with a reset (or a fall) or longer than 3600 s adds to `skipped_sections` (a long one also its rise to `skipped_points`).
+A counted section adds its rise to `counted`. The requests after the first measurement up to the second are summed by
+CLI (cost weight, 8 character session prefix); with a total above zero the rise is shared by cost share
+(`attributed`, per CLI `five_pts`, `week_pts`), otherwise it goes to `rest` (`unexplained_points`). So `attributed + rest
+= counted` always.
+
+**Calibration.** A counted section with exactly one CLI, no unpriced request and a total above zero adds to the sums
+`n`, `c2 = sum(cost^2)`, `cd = sum(cost x rise)` of the whole period, of its day and, if all its requests have the same
+price entry, of that model. USD per point is `c2 / cd` (regression of the rise on the cost through zero, inverted: the noise of the whole points is in the rise); it is
+shown from 50 sections (`MIN_SECTIONS`), per model only from 50 sections of that model, per day always with its count.
+
+**Mergeable figures and the archive.** All figures of a period are one dict of numbers (`new_stats`), so the figures of
+several days add up (`merge_stats`). `<log_dir>/usage-days.jsonl` has one line per finished local day:
+`{"v":1,"day":"YYYY-MM-DD","stats":{...}}` with those figures (session ids cut to 8 characters, no text). A report
+takes every whole finished day (before today) from the archive if the archive has it, whatever the transcripts still hold; the rest of the
+period is computed from the transcripts. `parse_archive_line` accepts a line only if its figures merge into empty figures, so a line in another format is
+unreadable (counted, and `--archive` writes its day again). A day whose figures do not fit the live figures when merged is
+computed from the transcripts instead and counted; a day is never half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
+and appends them under an exclusive `flock` of the file, re-reading the file's days first (two runs never write a day
+twice, a day is never overwritten). Like the measurement history the file is 0600 in a 0700 folder, opened
+`O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off
+last line gets a line break first.
+
+**Output.** Text (English) or `--json` with the sections `period`, `coverage`, `subscription`, `total`, `clis`,
+`allocation`, `calibration`, `guards` in this order. Exit codes: 0 report, 1 no transcripts folder (and no archived day
+to use; an empty folder is an empty report) or an unreadable `prices.json` or an archive that cannot be written, 2 bad arguments.
 
 ## Known limits
 
