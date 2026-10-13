@@ -3,6 +3,12 @@
 Claude Code shows you your usage. This makes the model see it too, and lets two gates decide from those numbers
 whether new agents may start and running ones keep working.
 
+![The status line: model, 5h usage with reset time, weekly usage, context size and prompt cache clock](docs/images/statusline.png)
+
+The status line in a real session: the five-hour window at 57 % (yellow from 50 %) resets at 22:40, the week is
+at 23 %, the context holds 485k of 1000k tokens (yellow from 300k), and the prompt cache stays warm for another
+58 minutes.
+
 Claude Code knows your plan limits, but the model working for you does not. It cannot tell whether starting
 ten agents at 80 % of the five-hour window is a good idea, it does not know that it is 3 a.m., and an
 overnight run happily spends the whole window. It cannot see how full its own context window is either. This
@@ -41,8 +47,8 @@ python3 tools/install.py               # installs all five parts, gates in shado
 ```
 
 The installer copies the scripts to `~/.claude/hooks/usage-clock/`, creates `config.json` there if it does not
-exist yet, and adds the hooks and the status line to `~/.claude/settings.json`. Before writing it runs every
-hook once as a smoke test and keeps a backup (`settings.json.bak-usage-clock-<timestamp>`). Running it again
+exist yet, and adds the hooks and the status line to `~/.claude/settings.json`. Before writing it runs each
+hook it installs once as a smoke test and keeps a backup (`settings.json.bak-usage-clock-<timestamp>`). Running it again
 updates the entries instead of adding duplicates.
 
 The installer recognises its own entries by the full path of the script in `--target`, not by the file name.
@@ -180,8 +186,8 @@ Opus | 5h 40% ↻14:00 | week 61% ↻Mon 09:00 | ctx 231k/1000k 23% | cache 54m
 - `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday and appears only
   from yellow on; below that it is days away. A missing or past reset time is left out
   (`statusline.show_reset`).
-- `ctx` is the input context of the session: tokens used, window size, share of the window. It is always shown,
-  from the first prompt on; before the first answer it reads `ctx –/1000k` instead of a made-up zero. The colour
+- `ctx` is the input context of the session: tokens used, window size, share of the window. It is shown from
+  the first prompt on, as soon as Claude Code reports the window size; before the first answer it reads `ctx –/1000k` instead of a made-up zero. The colour
   depends on the absolute tokens, not on the percentage: yellow from 300k, red from 500k
   (`statusline.context_yellow_from_k`, `context_red_from_k`), because a long context costs the same on a small
   and on a large window.
@@ -236,7 +242,8 @@ A checkpoint write is a Write/Edit into a directory whose path ends with `checkp
 (default `/agent-checkpoints`), or a Bash command that is nothing but an append to a file there:
 `echo 'text' >> file`, `printf '%s\n' "line" >> file`, `echo 'text' | tee -a file` or `cat >> file <<'EOF'`.
 The arguments of `echo` and `printf` must be quoted (double quotes without `$`, backticks or `\`). `printf`
-counts only without options and only with `%s`, `%b` and `%%` in its format: an option such as `-v` or a
+counts only without options and only with `%s`, `%b` and `%%` in its format (flags, a width and a precision
+such as `%-8s` are fine, `*` is not): an option such as `-v` or a
 numeric conversion such as `%d` can run code in bash and zsh, so such a command is no checkpoint write.
 An agent that has saved once must save again at least every 15 calls, whatever the usage. Tell your agents in
 their prompt where their checkpoint file is. Unknown or stale usage never triggers the three levels above; the
@@ -262,8 +269,8 @@ of your installation (`--config PATH` for another file) and exits with 1 if it r
 
 The log (`~/.cache/claude-usage-clock/log.jsonl`) records, per decision: the time, the hook, the decision and
 its mode, and a reason. Values from the input appear only as short strings of at most 100 characters: the tool
-name, the agent id, the agent type (`agent_type`), the permission mode (`permission_mode`), and of an Agent call the subagent type (`subagent_type`) and
-the model in the call (`model_in_call`). Everything else from the input appears only as the
+name, the agent id, the agent type (`agent_type`), the permission mode (`permission_mode`), and the subagent type (`subagent_type`) and model
+(`model_in_call`) of the tool input, which in practice only an Agent call carries. Everything else from the input appears only as the
 *names* of the input fields, never with its values. In the reason every quoted value (between `"…"`, `'…'`,
 `„…“` or backticks) is replaced by `…`, so it says what was wrong, for example
 `agent call 1: model "…" unknown`, but not the value. The log never records prompts, commands or script text.
@@ -320,7 +327,8 @@ The spawn gate checks the `model` and `effort` of every agent. Two keys decide w
   agent definition the gate only requires that a `model:` is set.) The default accepts the
   aliases `sonnet`, `opus`, `haiku`, `fable` and `inherit` and any full name that starts with `claude-`. If a
   workflow script names a model the pattern does not match, for example a Bedrock or Vertex name with dots or a
-  colon, the gate denies it with `model "…" unknown`. Extend the pattern, for example
+  colon, the model rule reports it as `model "…" unknown` (and refuses the start with
+  `model_effort_action: deny`). Extend the pattern, for example
   `sonnet|opus|haiku|fable|inherit|claude-[a-z0-9-]+|my-proxy/[a-z0-9.-]+`.
 - `spawn_rules.effort_values` is the list of accepted `effort` values, in the frontmatter of agent definitions
   and in workflow calls. To allow only some, list only those, for example `["low", "medium", "high"]`.

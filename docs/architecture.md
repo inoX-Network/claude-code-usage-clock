@@ -325,7 +325,7 @@ Applies only to tool calls that carry an `agent_id` (subagents). The main sessio
 A checkpoint write is a Write/Edit/MultiEdit to an absolute path without `..` whose parent directory (also
 after resolving symlinks) ends with `checkpoint_dir_suffix`, or a Bash command that is nothing but an append:
 `echo` with quoted arguments `>> file`; `printf` likewise, but only without options and only with `%s`, `%b` and
-`%%` in the format, for example `printf '%s\n' "line" >> file` (an option like `-v` or a numeric conversion like
+`%%` in the format (flags, width and precision allowed, `*` not), for example `printf '%s\n' "line" >> file` (an option like `-v` or a numeric conversion like
 `%d` can run code in bash and zsh); either of them `| tee -a file`; `cat >> file <<'EOF'`. Double-quoted
 arguments must not contain `$`, backticks or `\`.
 
@@ -333,8 +333,8 @@ arguments must not contain `$`, backticks or `\`.
 
 `<log_dir>/log.jsonl`, rotated to `log.jsonl.1` above 5 MB. One line per decision: UTC time, hook, mode,
 decision, reason (max 300 chars). Values from the input only as short strings, cut to at most 100 characters
-(`_short_text`): `tool_name`, `agent_id`, `agent_type`, `permission_mode`, `subagent_type` and `model_in_call` (the `model` of an
-Agent call). Everything else from the input only as field names (`input_keys`, `tool_input_keys`), never its
+(`_short_text`): `tool_name`, `agent_id`, `agent_type`, `permission_mode`, `subagent_type` and `model_in_call` (the `model` of the
+tool input; both are read from every tool input, in practice only an Agent call carries them). Everything else from the input only as field names (`input_keys`, `tool_input_keys`), never its
 values. The soft stop adds its counter `calls_since_checkpoint`. The `reason` carries quoted values masked:
 every quoted part (`"…"`, `'…'`, `„…“`, backticks) is replaced by `…` before it is written (`mask_quoted` in
 `_hookio.py`); the deny text that goes to the model keeps the values. Never prompts, commands or script text.
@@ -345,7 +345,7 @@ Per-agent call counters in `<log_dir>/counters/<agent_id>.json`, per-session con
 
 ## Known limits
 
-- `rate_limits` in the status line input is not a documented stable interface; it may change or vanish
+- `rate_limits` in the status line input is documented, but not a versioned API; it may change or vanish
   (API key, Bedrock and Vertex sessions do not get it).
 - The usage file and the counters are not protected: a model with write access to them can fake them.
   Protect them with a guard if that matters to you.

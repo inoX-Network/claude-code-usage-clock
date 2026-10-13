@@ -201,6 +201,10 @@ def test_the_documented_append_examples_are_checkpoint_writes(tmp_path):
         assert not soft_stop.is_checkpoint_write('Bash', {'command': command}), command
     for needle in ('`%s`, `%b` and `%%`', 'without options'):
         assert needle in flat(readme_text()) and needle in flat(architecture_text()), needle
+    # flags, width and precision are documented as fine, `*` as not
+    assert soft_stop.is_checkpoint_write('Bash', {'command': f"printf '%-8s %.3b\\n' \"a\" \"b\" >> {target}"})
+    assert not soft_stop.is_checkpoint_write('Bash', {'command': f"printf '%*s' \"5\" >> {target}"})
+    assert '`%-8s` are fine, `*` is not' in flat(readme_text())
 
 
 def test_the_log_fields_with_values_are_named_with_their_length_limit():
