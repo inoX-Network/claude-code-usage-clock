@@ -185,11 +185,9 @@ class Counter:
     def book(self, agent_id: str, was_checkpoint: bool) -> None:
         since, has = self.read(agent_id)
         new = {'since': 0 if was_checkpoint else since + 1, 'has_checkpoint': has or was_checkpoint}
-        os.makedirs(self.directory, exist_ok=True)
-        tmp = f'{self._path(agent_id)}.tmp.{os.getpid()}'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(new, f)
-        os.replace(tmp, self._path(agent_id))
+        import _context_state   # here, like the imports in main(): a failed import must let the call through
+        # Private (0600 in a 0700 folder) and never written through a planted link, like the context files
+        _context_state.write_private(self.directory, os.path.basename(self._path(agent_id)), json.dumps(new))
 
 
 def main() -> int:

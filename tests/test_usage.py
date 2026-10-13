@@ -166,6 +166,15 @@ def test_the_lock_lives_in_the_lock_folder_not_next_to_the_file(tmp_path):
     assert not os.path.exists(f'{path}.lock')
 
 
+def test_the_lock_folder_is_private_whatever_the_umask(tmp_path):
+    old = os.umask(0o022)
+    try:
+        update(str(tmp_path / 'usage.json'), {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(lock_of(tmp_path).parent).st_mode) == 0o700
+
+
 def test_a_lock_held_at_the_old_place_next_to_the_file_does_not_stop_the_update(tmp_path):
     path = str(tmp_path / 'usage.json')
     with open(f'{path}.lock', 'wb') as old:

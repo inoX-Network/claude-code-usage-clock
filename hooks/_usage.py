@@ -91,7 +91,7 @@ def update_file(path: str, status_input: dict, now: float, lock_dir: str) -> dic
     Raises OSError if the file cannot be locked or written: the caller then shows its own values.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    os.makedirs(lock_dir, exist_ok=True)
+    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
     lock_fd = os.open(os.path.join(lock_dir, os.path.basename(path) + '.lock'), os.O_RDWR | os.O_CREAT | NO_FOLLOW,
                       0o600)
     with os.fdopen(lock_fd, 'r+b') as lock:

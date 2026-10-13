@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -328,6 +329,30 @@ def test_counter_keeps_agents_apart(tmp_path):
     c.book('a', True)
     c.book('a', False)
     assert c.read('a') == (1, True) and c.read('b') == (0, False)
+
+
+def test_counter_files_and_folders_are_private_whatever_the_umask(tmp_path):
+    directory = tmp_path / 'log' / 'counters'
+    old = os.umask(0o022)
+    try:
+        soft_stop.Counter(str(directory)).book('agent-1', was_checkpoint=False)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((directory / 'agent-1.json').stat().st_mode) == 0o600
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / 'log').stat().st_mode) == 0o700
+
+
+def test_the_counter_is_never_written_through_a_link(tmp_path):
+    directory = tmp_path / 'counters'
+    directory.mkdir()
+    victim = tmp_path / 'victim.txt'
+    victim.write_text('keep me', encoding='utf-8')
+    # the temporary file has a predictable name: a link planted there must be removed, not written through
+    (directory / f'agent-1.json.tmp.{os.getpid()}').symlink_to(victim)
+    soft_stop.Counter(str(directory)).book('agent-1', was_checkpoint=False)
+    assert victim.read_text(encoding='utf-8') == 'keep me'
+    assert soft_stop.Counter(str(directory)).read('agent-1') == (1, False)
 
 
 @pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"x"', 'null', '{"since": "x"}', '{"since": null}', '', '[' * 100000])
