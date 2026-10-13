@@ -1,7 +1,9 @@
 """Tests for hooks/_usage.py: block validity, merge rules, locked writing and reading."""
+import fcntl
 import json
 import os
 import random
+import stat
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -26,6 +28,15 @@ def write_json(path, data):
 
 def iso(dt):
     return dt.isoformat().replace('+00:00', 'Z')
+
+
+def update(path, status_input, now):
+    """update_file with the lock in the isolated log folder, as the status line passes it."""
+    return _usage.update_file(path, status_input, now, os.environ['CCUC_LOG_DIR'])
+
+
+def lock_of(tmp_path, name='usage.json'):
+    return tmp_path / 'log' / f'{name}.lock'
 
 
 # --- Validity and merge rules ------------------------------------------------------------
@@ -79,7 +90,7 @@ def test_merge_survives_garbage_input_and_garbage_old_content():
 
 def test_update_file_creates_the_file_and_its_folder(tmp_path):
     path = str(tmp_path / 'deep' / 'er' / 'usage.json')
-    merged = _usage.update_file(path, {'rate_limits': {'five_hour': b(40, WINDOW_5H)}}, NOW)
+    merged = update(path, {'rate_limits': {'five_hour': b(40, WINDOW_5H)}}, NOW)
     assert json.load(open(path, encoding='utf-8')) == merged
     assert merged['five_hour'] == b(40, WINDOW_5H) and merged['measured_at'] == '2026-01-14T10:00:00Z'
 
@@ -87,21 +98,21 @@ def test_update_file_creates_the_file_and_its_folder(tmp_path):
 def test_update_file_writes_only_on_change(tmp_path):
     path = tmp_path / 'usage.json'
     status = {'rate_limits': {'five_hour': b(40, WINDOW_5H), 'seven_day': b(60, WINDOW_7D)}}
-    _usage.update_file(str(path), status, NOW)
+    update(str(path), status, NOW)
     first = path.read_text(encoding='utf-8')
     os.utime(path, (1, 1))
-    _usage.update_file(str(path), {'rate_limits': {'five_hour': None, 'seven_day': b(10, WINDOW_7D)}}, NOW + 5)  # idle
-    _usage.update_file(str(path), {}, NOW + 6)
+    update(str(path), {'rate_limits': {'five_hour': None, 'seven_day': b(10, WINDOW_7D)}}, NOW + 5)  # idle
+    update(str(path), {}, NOW + 6)
     assert path.read_text(encoding='utf-8') == first and os.stat(path).st_mtime == 1
-    _usage.update_file(str(path), {'rate_limits': {'five_hour': b(41, WINDOW_5H)}}, NOW + 7)
+    update(str(path), {'rate_limits': {'five_hour': b(41, WINDOW_5H)}}, NOW + 7)
     assert path.read_text(encoding='utf-8') != first
 
 
 def test_update_file_leaves_no_temporary_files(tmp_path):
     path = str(tmp_path / 'usage.json')
     for i in range(5):
-        _usage.update_file(path, {'rate_limits': {'five_hour': b(10 + i, WINDOW_5H)}}, NOW + i)
-    assert sorted(os.listdir(tmp_path)) == ['usage.json', 'usage.json.lock']
+        update(path, {'rate_limits': {'five_hour': b(10 + i, WINDOW_5H)}}, NOW + i)
+    assert sorted(os.listdir(tmp_path)) == ['log', 'usage.json']
 
 
 def test_update_file_cleans_up_when_replace_fails(tmp_path, monkeypatch):
@@ -111,7 +122,7 @@ def test_update_file_cleans_up_when_replace_fails(tmp_path, monkeypatch):
         raise OSError('disk')
     monkeypatch.setattr(os, 'replace', broken)
     with pytest.raises(OSError):
-        _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+        update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
     assert not [p for p in os.listdir(tmp_path) if '.tmp.' in p] and not os.path.exists(path)
 
 
@@ -119,7 +130,7 @@ def test_update_file_reports_an_error_if_the_temporary_file_cannot_be_created(tm
     path = str(tmp_path / 'usage.json')
     os.mkdir(f'{path}.tmp.{os.getpid()}')      # a folder occupies the temporary name: creating and removing fail
     with pytest.raises(OSError):
-        _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+        update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
     assert not os.path.exists(path)
 
 
@@ -131,7 +142,7 @@ def test_update_file_raises_oserror_if_the_folder_is_not_writable(tmp_path):
         if os.access(locked, os.W_OK):
             pytest.skip('running as a user that ignores directory permissions')
         with pytest.raises(OSError):
-            _usage.update_file(str(locked / 'usage.json'), {'rate_limits': {'five_hour': b(1, WINDOW_5H)}}, NOW)
+            update(str(locked / 'usage.json'), {'rate_limits': {'five_hour': b(1, WINDOW_5H)}}, NOW)
     finally:
         locked.chmod(0o700)
 
@@ -141,19 +152,41 @@ def test_update_file_never_writes_through_a_planted_temporary_link(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
     os.symlink(victim, f'{path}.tmp.{os.getpid()}')
-    _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+    update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
     assert victim.read_text(encoding='utf-8') == 'keep me'
     assert not os.path.islink(path) and json.load(open(path, encoding='utf-8'))['five_hour'] == b(10, WINDOW_5H)
-    assert sorted(os.listdir(tmp_path)) == ['usage.json', 'usage.json.lock', 'victim.txt']
+    assert sorted(os.listdir(tmp_path)) == ['log', 'usage.json', 'victim.txt']
+
+
+def test_the_lock_lives_in_the_lock_folder_not_next_to_the_file(tmp_path):
+    """Next to the file a guard would have to know an extra path; in the tool's own folder it is covered."""
+    path = str(tmp_path / 'usage.json')
+    update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+    assert lock_of(tmp_path).is_file() and stat.S_IMODE(os.stat(lock_of(tmp_path)).st_mode) == 0o600
+    assert not os.path.exists(f'{path}.lock')
+
+
+def test_a_lock_held_at_the_old_place_next_to_the_file_does_not_stop_the_update(tmp_path):
+    path = str(tmp_path / 'usage.json')
+    with open(f'{path}.lock', 'wb') as old:
+        fcntl.flock(old, fcntl.LOCK_EX)
+        worker = threading.Thread(target=update, args=(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW))
+        worker.start()
+        worker.join(timeout=5)
+        alive = worker.is_alive()
+        fcntl.flock(old, fcntl.LOCK_UN)
+    worker.join()
+    assert not alive and json.load(open(path, encoding='utf-8'))['five_hour'] == b(10, WINDOW_5H)
 
 
 def test_update_file_refuses_a_planted_lock_link(tmp_path):
     path = str(tmp_path / 'usage.json')
     target = tmp_path / 'elsewhere' / 'created-by-link'
     target.parent.mkdir()
-    os.symlink(target, f'{path}.lock')
+    lock_of(tmp_path).parent.mkdir()
+    os.symlink(target, lock_of(tmp_path))
     with pytest.raises(OSError):
-        _usage.update_file(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
+        update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
     assert not target.exists() and not os.path.exists(path)
 
 
@@ -161,7 +194,7 @@ def test_update_file_refuses_a_planted_lock_link(tmp_path):
                                      json.dumps({'fuenf': b(90, WINDOW_5H), 'measured': 'old format'})])
 def test_file_in_another_format_counts_as_empty(tmp_path, content):
     path = write_json(tmp_path / 'usage.json', content)
-    merged = _usage.update_file(path, {'rate_limits': {'five_hour': b(5, WINDOW_5H)}}, NOW)
+    merged = update(path, {'rate_limits': {'five_hour': b(5, WINDOW_5H)}}, NOW)
     assert merged['five_hour'] == b(5, WINDOW_5H)
     assert _usage.read_usage(path, NOW_DT).state == 'ok'
 
@@ -173,7 +206,7 @@ def test_concurrent_writers_end_with_the_maximum(tmp_path):
     def worker(offset):
         try:
             for i in range(40):
-                _usage.update_file(path, {'rate_limits': {'five_hour': b(offset + i, WINDOW_5H)}}, NOW)
+                update(path, {'rate_limits': {'five_hour': b(offset + i, WINDOW_5H)}}, NOW)
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -184,7 +217,7 @@ def test_concurrent_writers_end_with_the_maximum(tmp_path):
         t.join()
     assert not errors
     assert json.load(open(path, encoding='utf-8'))['five_hour'] == b(15 + 39, WINDOW_5H)
-    assert sorted(os.listdir(tmp_path)) == ['usage.json', 'usage.json.lock']
+    assert sorted(os.listdir(tmp_path)) == ['log', 'usage.json']
 
 
 # --- Several sessions, one file (synthetic replacement for a recorded observation) ---------------
@@ -236,7 +269,7 @@ def test_many_sessions_writing_alternately_never_read_unknown_or_stale(tmp_path)
             expected_five = reported_five if expected_five is None else max(expected_five, reported_five)
         expected_week = reported_week if expected_week is None else max(expected_week, reported_week)
 
-        _usage.update_file(path, status, now)
+        update(path, status, now)
         usage = _usage.read_usage(path, datetime.fromtimestamp(now, timezone.utc), max_age_min=15)
 
         assert usage.state == 'ok', (step, who, usage)
@@ -253,11 +286,11 @@ def test_many_sessions_writing_alternately_never_read_unknown_or_stale(tmp_path)
 
 def test_idle_sessions_alone_cannot_keep_the_measurement_fresh(tmp_path):
     path = str(tmp_path / 'usage.json')
-    _usage.update_file(path, {'rate_limits': {'five_hour': b(60, WINDOW_5H), 'seven_day': b(48, WINDOW_7D)}}, NOW)
+    update(path, {'rate_limits': {'five_hour': b(60, WINDOW_5H), 'seven_day': b(48, WINDOW_7D)}}, NOW)
     idle = {'rate_limits': {'five_hour': None, 'seven_day': b(19, WINDOW_7D)}}
     for minute in range(1, 31):     # only an idle session keeps redrawing its status line
         now = NOW + minute * 60
-        _usage.update_file(path, idle, now)
+        update(path, idle, now)
         usage = _usage.read_usage(path, datetime.fromtimestamp(now, timezone.utc), max_age_min=15)
         assert usage.state == ('ok' if minute <= 15 else 'stale'), minute
         assert usage.five_hour == 60.0 and usage.week == 48.0

@@ -10,7 +10,8 @@ seeing "unknown". The merge rules below prevent that:
 - `measured_at` is renewed only if this session contributed a valid five-hour block that did not lose.
   An idle session can therefore never make old data look fresh.
 - Writing happens under an exclusive flock, atomically via a temporary file, and only when something changed.
-  Lock and temporary file are opened without following links, so a planted link never redirects the write.
+  The lock lives in the tool's log folder, the temporary file next to the usage file. Both are opened without
+  following links, so a planted link never redirects the write.
 
 File format: {"five_hour": {"used_percentage", "resets_at"}, "seven_day": {...}, "measured_at": "<UTC ISO>"}.
 A file in any other format counts as empty.
@@ -79,13 +80,20 @@ def _read_dict(path: str) -> dict:
         return {}
 
 
-def update_file(path: str, status_input: dict, now: float) -> dict:
+def update_file(path: str, status_input: dict, now: float, lock_dir: str) -> dict:
     """Reads, merges and writes the usage file under an exclusive lock; returns the merged content.
+
+    The lock is `<lock_dir>/<file name>.lock`, in the tool's own folder (the log folder) rather than next to the
+    file: a guard that protects that folder covers it, and no extra path next to the usage file needs protecting
+    (whoever holds the lock keeps the numbers from updating). The temporary file stays next to the file, because
+    os.replace is atomic only within one file system.
 
     Raises OSError if the file cannot be locked or written: the caller then shows its own values.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    lock_fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT | NO_FOLLOW, 0o600)
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_fd = os.open(os.path.join(lock_dir, os.path.basename(path) + '.lock'), os.O_RDWR | os.O_CREAT | NO_FOLLOW,
+                      0o600)
     with os.fdopen(lock_fd, 'r+b') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = _read_dict(path)

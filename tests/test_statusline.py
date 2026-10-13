@@ -116,6 +116,7 @@ def test_script_writes_the_file_and_shows_the_merged_values(tmp_path):
     saved = json.loads(usage.read_text(encoding='utf-8'))
     assert saved['five_hour']['used_percentage'] == 79 and saved['seven_day']['used_percentage'] == 48
     assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', saved['measured_at'])
+    assert (tmp_path / 'log' / 'usage.json.lock').is_file() and not (tmp_path / 'usage.json.lock').exists()
 
 
 def test_idle_session_shows_the_shared_values_and_does_not_write(tmp_path):
@@ -212,7 +213,7 @@ def test_broken_config_falls_back_to_defaults_without_logging(tmp_path):
     now = time.time()
     r = run({'rate_limits': {'five_hour': b(60, now + 3600)}}, tmp_path, {'CCUC_CONFIG': str(config)})
     assert r.returncode == 0 and f'{YELLOW}5h 60%' in r.stdout
-    assert not (tmp_path / 'log').exists()          # the status line runs every few seconds: it does not log
+    assert not (tmp_path / 'log' / 'log.jsonl').exists()   # the status line runs every few seconds: it does not log
 
 
 # --- main() in process: exit code is always 0 --------------------------------------------------------
