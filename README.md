@@ -314,8 +314,9 @@ Days are local days. `--week` is the subscription week, not the calendar week: i
 that the measurement history last saw, else the one in the shared usage file (`seven_day.resets_at`), and counts on in
 steps of seven days. With neither it stops with exit code 1 and asks for `--since`.
 `--since` and `--until` are whole days, both included. The log folder is found like `log_summary.py` finds it
-(`--config PATH`, else `CCUC_LOG_DIR`, else the config file of your installation). Exit code 0 is a report, 1 no
-transcripts (or a price file that cannot be read, or an archive that cannot be written), 2 bad arguments. An example, with invented numbers:
+(`--config PATH`, else `CCUC_LOG_DIR`, else the config file of your installation). Exit code 0 is a report (an empty
+transcripts folder gives an empty one), 1 the transcripts folder is missing (or a price file that cannot be read, or an
+archive that cannot be written), 2 bad arguments, also a day outside the years 2000 to 2999. An example, with invented numbers:
 
 ```
 Usage report 2026-01-14 (local time, UTC+00:00)
@@ -378,20 +379,24 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
   taken of the output of those requests.
 - **Subscription:** the weekly value at the start and at the end of the period, and the 5h windows with their
   peak. They come from the measurement history; for the time before the history began, from the usage line of
-  the usage clock in the transcripts. A weekly reset inside the period splits the week line into windows (`Week: 90 % ->
+  the usage clock in the transcripts (only what a hook added to the prompt counts: a file shown in the transcript
+  that quotes the line does not). A weekly reset inside the period splits the week line into windows (`Week: 90 % ->
   100 % (+10 points) until Tue 13 Oct 14:00, then 0 % -> 12 % (+12 points)`), nothing is subtracted across the reset.
   The reset time is the recorded one, else derived from a known weekly reset time (the history's or the usage file's)
   in steps of seven days; with none, a fall of the value starts a new window. The JSON lists the windows as
   `week_segments` with `start`, `end` and `reset_at`.
 - **Per CLI:** a CLI is a main session with its subagents, named by the folder, the first 8 characters of the
   session id and its start. A subagent is listed under its agent type: the spawned type, else the custom type, else
-  the plain `agentType` of its `agent-*.meta.json`; a name given to a subagent is never shown. Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
+  the plain `agentType` of its `agent-*.meta.json`; a name given to a subagent is never shown (where `agentType` is only that name,
+  the type is unknown). Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
   cold starts (a request of the main session, after the first, that writes at least 50 000 cache tokens).
 - **Allocation (marked with `~`, an estimate):** between two measurements the subscription percentages rose by
   some points; that rise is shared between the CLIs that made requests in between, by their cost weight. A rise
   with no request in between is **unexplained** (another app, a request without a transcript) and is not shared.
   Stretches that contain a reset, or last longer than 60 minutes, do not count. Attributed plus unexplained is
-  always the measured rise.
+  always the counted rise. A fall of a value without reset times counts as a new window only if it falls to half or
+  less; a smaller fall is a stale number of an idle session and the measurement is left out. In the 5h windows without
+  reset times, a window lasts five hours at most.
 - **Calibration:** USD per point, a regression through zero over the stretches in which only one CLI was active. It
   regresses the rise on the cost and inverts the slope, because the rounding to whole points is in the rise, not in
   the cost.
@@ -402,7 +407,8 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
 Claude Code deletes old transcripts (after 30 days by default). `--archive` keeps what a finished day showed: it
 writes every finished day that is not in `<log_dir>/usage-days.jsonl` yet, never overwrites a day, and prints
 nothing. Run it once a day, for example from cron (`5 0 * * * python3 /path/to/tools/usage_report.py --archive`)
-or a systemd user timer. A day without transcripts is then reported from the archive, so a month stays whole. The
+or a systemd user timer. A finished day that the archive has is always reported from the archive (the transcripts of that day may be partly
+deleted by now), so a month stays whole. The
 archive holds the figures only (no text), is private to you (mode 0600, folder 0700) and is opened without
 following links.
 

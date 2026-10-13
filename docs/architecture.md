@@ -396,11 +396,15 @@ assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.mode
 `output_tokens_details.thinking_tokens` and `server_tool_use.web_search_requests` / `web_fetch_requests`) are used; of
 the lines with one `(message.id, requestId)` the last counts (it has the complete `output_tokens`; with equal output the
 later one). A subagent belongs to the session whose folder it is in; its type is `spawnedAgentType`, else `customAgentType`, else
-`agentType` of `agent-*.meta.json` (for a named subagent `agentType` holds the name, which is never read; the value
-must match `[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
+`agentType` of `agent-*.meta.json` (for a named subagent `agentType` holds only its name: if it equals `name` and no spawned or custom type is given, the
+type is `unknown`; the value must match `[A-Za-z0-9_.:-]{1,64}`, else `other`; none: `unknown`). (2) The measurement history (`usage-history.jsonl` and `.1`);
 unreadable lines are skipped and counted. For the time before the history began, the usage line of the usage clock in
-the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1)
-stands in; it carries no reset times. (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
+the transcripts (`Usage: 5h N % ... week M % ... measured K min ago`, or the old German form, only with K at most 1, and
+only in an attachment of type `hook_additional_context`) stands in; it carries no reset times. Measurements without
+reset times pass `drop_noise`: a fall that stays above half of the last kept value is a stale number of an idle session
+and the measurement is left out. A request that stands in two transcripts (a continued session) is counted once and
+belongs to the file modified first, then the one that sorts first. A line that has the shape of a request but a
+`requestId` that is not text, or a number above 10^12, is left out and counted (`unreadable_transcript_lines`). (3) The gate log `log.jsonl` (`.1`): `spawn_gate` and `soft_stop` decisions
 by hook, mode and decision. (4) The day archive. Nothing else of a transcript is read, and no text is printed.
 
 **Cost weight.** Per request `sum(tokens x price) / 1e6` with the prices of the first `prices.json` entry whose
@@ -419,7 +423,8 @@ in the JSON, `n/a` in the text. They never enter the cost weight (thinking is pa
 window ends at its `week_resets` if recorded, else at the next reset in the 7-day rhythm of the anchor (the latest
 `week_resets` of the history, else `seven_day.resets_at` of the usage file), else it is unknown. Consecutive measurements
 with a known value are in one window unless the value fell or the reset times differ by 60 s or more; the first window
-starts at the last value before the period if that is in the same window. `subscription.week_segments` lists them as
+starts at the last value before the period if that is in the same window. Five hour windows without reset times are one window if together they last less than five hours and the value did not
+fall from one to the other; this is also how the windows of two archived days join. `subscription.week_segments` lists them as
 `start`, `end` (`at`, `value`) and `reset_at`. In the figures (`abo.weeks`) segments of several days join if they have
 the same reset time, or no reset time and no fall of the value between them.
 
@@ -445,7 +450,7 @@ shown from 50 sections (`MIN_SECTIONS`), per model only from 50 sections of that
 **Mergeable figures and the archive.** All figures of a period are one dict of numbers (`new_stats`), so the figures of
 several days add up (`merge_stats`). `<log_dir>/usage-days.jsonl` has one line per finished local day:
 `{"v":1,"day":"YYYY-MM-DD","stats":{...}}` with those figures (session ids cut to 8 characters, no text). A report
-takes a whole day from the archive if no transcript has a request that day and the archive has the day; the rest of the
+takes every whole finished day (before today) from the archive if the archive has it, whatever the transcripts still hold; the rest of the
 period is computed from the transcripts. A malformed archived day (merging it raises) is skipped and counted, never
 half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
 and appends them under an exclusive `flock` of the file, re-reading the file's days first (two runs never write a day
@@ -455,7 +460,7 @@ last line gets a line break first.
 
 **Output.** Text (English) or `--json` with the sections `period`, `coverage`, `subscription`, `total`, `clis`,
 `allocation`, `calibration`, `guards` in this order. Exit codes: 0 report, 1 no transcripts folder (and no archived day
-to use) or an unreadable `prices.json` or an archive that cannot be written, 2 bad arguments.
+to use; an empty folder is an empty report) or an unreadable `prices.json` or an archive that cannot be written, 2 bad arguments.
 
 ## Known limits
 

@@ -58,6 +58,10 @@ COLD_START_TOKENS = 50_000  # a request that writes at least this much cache, af
 MIN_SECTIONS = 50           # sections with a single CLI needed before a cost per point is shown
 FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
 WEEK_S = 7 * 86400
+FIVE_HOURS_S = 5 * 3600     # a five hour window cannot span more than this
+MAX_COUNT = 10 ** 12        # a larger token count or percentage is not a measurement: the line is not read
+MAX_TIME = 4_102_444_800    # Unix seconds of 2100-01-01: a later reset time is not a measurement
+MIN_YEAR, MAX_YEAR = 2000, 2999     # the days a period may name
 WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 
@@ -112,7 +116,13 @@ class PriceFileError(Exception):
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
+
+
+class BadLine(Exception):
+    """A transcript line that has the shape of a request but cannot be one (a wrong type, an impossible number)."""
 
 
 def _check_rates(rates, where: str) -> None:
@@ -180,6 +190,8 @@ class Measurement(NamedTuple):
 
 
 def _count(value) -> int:
+    if _is_number(value) and value > MAX_COUNT:
+        raise BadLine('count')
     return int(value) if _is_number(value) and value > 0 else 0
 
 
@@ -195,6 +207,8 @@ def usage_tokens(usage: dict) -> tuple:
 
 
 def _known(value) -> int | None:
+    if _is_number(value) and value > MAX_COUNT:
+        raise BadLine('count')
     return int(value) if _is_number(value) and value >= 0 else None
 
 
@@ -208,7 +222,8 @@ def usage_details(usage: dict, output: int) -> tuple:
 
 
 def parse_request(raw: str) -> tuple | None:
-    """(message id, request id, time, tokens, model, cwd, details) of an assistant line with usage numbers, else None."""
+    """(message id, request id, time, tokens, model, cwd, details) of an assistant line with usage numbers, else None.
+    Raises BadLine for a line that is one but has a request id of the wrong type or an impossible number."""
     try:
         line = json.loads(raw)
     except (ValueError, RecursionError):
@@ -223,6 +238,8 @@ def parse_request(raw: str) -> tuple | None:
         return None
     model = message.get('model') if isinstance(message.get('model'), str) else '?'
     cwd = line.get('cwd') if isinstance(line.get('cwd'), str) else None
+    if line.get('requestId') is not None and not isinstance(line['requestId'], str):
+        raise BadLine('requestId')
     return message.get('id'), line.get('requestId'), ts, tokens, model, cwd, usage_details(usage, tokens[4])
 
 
@@ -232,10 +249,13 @@ def parse_usage_line(raw: str) -> tuple | None:
         line = json.loads(raw)
     except (ValueError, RecursionError):
         return None
-    ts = parse_ts(line.get('timestamp')) if isinstance(line, dict) and line.get('type') == 'attachment' else None
+    attachment = line.get('attachment') if isinstance(line, dict) and line.get('type') == 'attachment' else None
+    if not isinstance(attachment, dict) or attachment.get('type') != 'hook_additional_context':
+        return None       # only what a hook added to the prompt: a file shown in the transcript may quote the line
+    ts = parse_ts(line.get('timestamp'))
     if ts is None:
         return None
-    text = json.dumps(line.get('attachment'), ensure_ascii=False)
+    text = json.dumps(attachment, ensure_ascii=False)
     found = next((match for match in (pattern.search(text) for pattern in USAGE_LINES) if match), None)
     if found is None or float(found.group(3)) > FRESH_MAX_MIN:
         return None
@@ -244,17 +264,41 @@ def parse_usage_line(raw: str) -> tuple | None:
 
 def agent_type_of(transcript: str) -> str:
     """The type of a subagent from agent-<id>.meta.json next to its transcript: `spawnedAgentType`, else
-    `customAgentType`, else `agentType` (for a named subagent that one holds the name, which is never read)."""
+    `customAgentType`, else `agentType`, which for a named subagent is only its name: then the type is unknown."""
     try:
         with open(transcript[:-len('.jsonl')] + '.meta.json', encoding='utf-8') as f:
             data = json.loads(f.read(65536))
     except (OSError, ValueError, RecursionError):
         return 'unknown'
     data = data if isinstance(data, dict) else {}
-    value = next((data[key] for key in AGENT_TYPE_KEYS if data.get(key) is not None), None)
-    if value is None:
-        return 'unknown'
+    key = next((key for key in AGENT_TYPE_KEYS if data.get(key) is not None), None)
+    value = data[key] if key else None
+    if value is None or (key == 'agentType' and value == data.get('name')):
+        return 'unknown'      # without a spawned or custom type, agentType of a named subagent is only its name
     return value if isinstance(value, str) and AGENT_TYPE.fullmatch(value) else 'other'
+
+
+def drop_noise(measurements: list[Measurement]) -> list[Measurement]:
+    """Measurements without a fall that is no reset. Sessions that sat idle keep showing old numbers (before the usage
+    file merged them), which look like falls. Without reset times a fall counts as a new window only if the value falls to
+    half or less; a smaller one is such a stale number and the measurement is left out. Where both measurements carry
+    reset times, those decide and nothing is left out."""
+    kept: list[Measurement] = []
+    last: dict[str, Measurement] = {}
+    for m in measurements:
+        noisy = False
+        for metric in METRICS:
+            value, earlier = getattr(m, metric), last.get(metric)
+            if value is None or earlier is None:
+                continue
+            reference = getattr(earlier, metric)
+            both_known = getattr(m, metric + '_resets') is not None and getattr(earlier, metric + '_resets') is not None
+            noisy = noisy or (not both_known and reference / 2 < value < reference)
+        if noisy:
+            continue
+        kept.append(m)
+        last.update({metric: m for metric in METRICS if getattr(m, metric) is not None})
+    return kept
 
 
 class Data:
@@ -267,6 +311,7 @@ class Data:
         self.measurement_times: list[float] = []
         self.guards: list[tuple] = []            # (time, hook, mode, decision)
         self.files = 0
+        self.unreadable_requests = 0             # request lines that were left out because they cannot be requests
         self.week_anchor: float | None = None     # a known weekly reset time: the weekly windows follow it every 7 days
         self.session_of: dict[str, str] = {}     # first 8 characters of a session id -> the session
         self.label: dict[str, str] = {}
@@ -288,13 +333,14 @@ class Data:
                 self.first_main.setdefault(request.session, index)
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
-        self.measurements = sorted(measurements, key=lambda m: m.t)
+        self.measurements = drop_noise(sorted(measurements, key=lambda m: m.t))
         self.measurement_times = [m.t for m in self.measurements]
 
 
 def find_transcripts(projects_dir: str):
     """(path, session, is_subagent) of every transcript below the folder, links not followed."""
-    for folder, _dirs, files in os.walk(projects_dir):
+    for folder, dirs, files in os.walk(projects_dir):
+        dirs.sort()
         for name in sorted(files):
             path = os.path.join(folder, name)
             parts = os.path.relpath(path, projects_dir).split(os.sep)
@@ -302,17 +348,25 @@ def find_transcripts(projects_dir: str):
                 yield path, parts[1][:-len('.jsonl')] if len(parts) == 2 else parts[1], len(parts) > 2
 
 
-def read_transcripts(projects_dir: str, modified_since: float, want_usage_lines: bool) -> tuple[list[Request], dict, int]:
-    """(requests, usage-line measurements by time, files read). Of the lines of one request (same message id and
-    request id) only the last one counts: it carries the complete output tokens. Files not modified since
-    `modified_since` cannot hold anything newer and are not opened."""
-    best: dict = {}
-    fresh: dict[float, tuple] = {}
-    files = 0
+def read_transcripts(projects_dir: str, modified_since: float,
+                     want_usage_lines: bool) -> tuple[list[Request], dict, int, int]:
+    """(requests, usage-line measurements by time, files read, unreadable request lines). Of the lines of one request (same
+    message id and request id) only the last one counts: it carries the complete output tokens. A request that stands in
+    two transcripts (a continued session) is counted once and belongs to the file modified first (then the one that
+    sorts first). Files not modified since `modified_since` cannot hold anything newer and are not opened."""
+    candidates = []
     for path, session, sub in find_transcripts(projects_dir):
         try:
-            if os.stat(path).st_mtime < modified_since:
-                continue
+            modified = os.stat(path).st_mtime
+        except OSError:
+            continue
+        if modified >= modified_since:
+            candidates.append((modified, path, session, sub))
+    best: dict = {}
+    fresh: dict[float, tuple] = {}
+    files = unreadable = 0
+    for _modified, path, session, sub in sorted(candidates):
+        try:
             handle = open(path, encoding='utf-8', errors='replace')
         except OSError:
             continue
@@ -321,22 +375,28 @@ def read_transcripts(projects_dir: str, modified_since: float, want_usage_lines:
         with handle:
             for number, raw in enumerate(handle):
                 if '"usage"' in raw:
-                    parsed = parse_request(raw)
+                    try:
+                        parsed = parse_request(raw)
+                    except BadLine:
+                        unreadable += 1
+                        continue
                     if parsed is not None:
                         message_id, request_id, ts, tokens, model, cwd, details = parsed
                         key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
-                        if key not in best or tokens[4] >= best[key][0]:
-                            best[key] = (tokens[4], Request(ts, session, sub, agent_type, model, tokens, cwd, *details))
+                        known = best.get(key)
+                        if known is None or tokens[4] > known[0] or (tokens[4] == known[0] and known[1] == path):
+                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details)
+                            best[key] = (tokens[4], path, request)
                 if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
                     parsed = parse_usage_line(raw)
                     if parsed is not None:
                         fresh[parsed[0]] = parsed[1:]
-    return [value[1] for value in best.values()], fresh, files
+    return [value[2] for value in best.values()], fresh, files, unreadable
 
 
-def _optional_number(row: dict, key: str):
+def _optional_number(row: dict, key: str, maximum: float = MAX_COUNT):
     value = row.get(key)
-    if value is not None and not _is_number(value):
+    if value is not None and not (_is_number(value) and abs(value) <= maximum):
         raise ValueError(key)
     return value
 
@@ -362,8 +422,9 @@ def read_history(log_dir: str) -> tuple[list[Measurement], int]:
                 ts = parse_ts(row['t'])
                 if ts is None:
                     raise ValueError('t')
-                rows.append(Measurement(ts, *(_optional_number(row, key) for key in
-                                              ('five', 'week', 'five_resets', 'week_resets'))))
+                rows.append(Measurement(ts, _optional_number(row, 'five'), _optional_number(row, 'week'),
+                                        _optional_number(row, 'five_resets', MAX_TIME),
+                                        _optional_number(row, 'week_resets', MAX_TIME)))
             except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
                 broken += 1
     return rows, broken
@@ -387,16 +448,23 @@ def _word(value, fallback: str) -> str:
     return value if isinstance(value, str) and WORD.fullmatch(value) else fallback
 
 
+def parse_archive_line(raw: str) -> tuple[str, dict]:
+    """(day, figures) of a line of the day archive; raises for a line the archive does not accept."""
+    row = json.loads(raw)
+    day, stats = row['day'], row['stats']
+    # a day that is not text makes fullmatch raise, which the callers treat like any other bad line
+    if row['v'] != ARCHIVE_VERSION or not isinstance(stats, dict) or not DAY_TEXT.fullmatch(day):
+        raise ValueError('shape')
+    date.fromisoformat(day)
+    return day, stats
+
+
 def read_archive(log_dir: str) -> tuple[dict[str, dict], int]:
     """({day: stats}, unreadable lines). The first line of a day counts."""
     days, broken = {}, 0
     for raw in read_lines(os.path.join(log_dir, ARCHIVE_FILE)):
         try:
-            row = json.loads(raw)
-            day, stats = row['day'], row['stats']
-            if row['v'] != ARCHIVE_VERSION or not isinstance(stats, dict) or not DAY_TEXT.fullmatch(day):
-                raise ValueError('shape')
-            date.fromisoformat(day)
+            day, stats = parse_archive_line(raw)
         except (ValueError, TypeError, KeyError, RecursionError):
             broken += 1
             continue
@@ -441,15 +509,36 @@ def _add_counts(target: dict, extra) -> None:
             raise TypeError(key)
 
 
-def _merge_window(windows: list[dict], window: dict) -> None:
-    resets = window['resets']
-    for known in windows:
-        if resets is not None and known['resets'] is not None and abs(known['resets'] - resets) < RESET_TOLERANCE_S:
-            known['first'] = min(known['first'], window['first'])
+WINDOW_KEYS = ('resets', 'first', 'peak', 'peak_at', 'last', 'first_value', 'last_value')
+
+
+def _same_window(earlier: dict, later: dict) -> bool:
+    """Whether two five hour windows (the later one not starting earlier) are one: the same reset time, or, if one has
+    none, together no longer than five hours and no fall of the value from the one to the other."""
+    if earlier['resets'] is not None and later['resets'] is not None:
+        return abs(later['resets'] - earlier['resets']) < RESET_TOLERANCE_S
+    return later['last'] - earlier['first'] < FIVE_HOURS_S and later['first_value'] >= earlier['last_value']
+
+
+def _merge_windows(target: list, extra: list) -> None:
+    windows = []
+    for window in extra:
+        numbers = all(_is_number(window[k]) for k in WINDOW_KEYS[1:])
+        if not numbers or not (window['resets'] is None or _is_number(window['resets'])):
+            raise TypeError('window')
+        windows.append({k: window[k] for k in WINDOW_KEYS})
+    merged: list[dict] = []
+    for window in sorted(target + windows, key=lambda w: (w['first'], w['last'])):
+        if merged and _same_window(merged[-1], window):
+            known = merged[-1]
             if (window['peak'], -window['peak_at']) > (known['peak'], -known['peak_at']):
                 known['peak'], known['peak_at'] = window['peak'], window['peak_at']
-            return
-    windows.append(dict(window))
+            if window['last'] >= known['last']:
+                known['last'], known['last_value'] = window['last'], window['last_value']
+            known['resets'] = known['resets'] if known['resets'] is not None else window['resets']
+        else:
+            merged.append(window)
+    target[:] = merged
 
 
 def _week_point(point) -> dict:
@@ -489,13 +578,7 @@ def _merge_abo(target: dict, extra) -> None:
     if not isinstance(extra, dict):
         raise TypeError('abo')
     _merge_weeks(target['weeks'], extra.get('weeks', []))
-    for window in extra.get('five_windows', []):
-        resets = window['resets']
-        numbers = all(_is_number(window[k]) for k in ('first', 'peak', 'peak_at'))
-        if not numbers or not (resets is None or _is_number(resets)):
-            raise TypeError('window')
-        _merge_window(target['five_windows'], {k: window[k] for k in ('resets', 'first', 'peak', 'peak_at')})
-    target['five_windows'].sort(key=lambda w: w['first'])
+    _merge_windows(target['five_windows'], extra.get('five_windows', []))
 
 
 def merge_stats(target: dict, extra) -> None:
@@ -689,14 +772,18 @@ def _subscription(data: Data, start: float, end: float) -> dict:
         if m.five is None:
             continue
         resets = (previous.five_resets, m.five_resets) if previous else (None, None)
+        window = piece['five_windows'][-1] if piece['five_windows'] else None
         renewed = previous is None or m.five < previous.five or (
-            None not in resets and abs(resets[1] - resets[0]) >= RESET_TOLERANCE_S)
+            None not in resets and abs(resets[1] - resets[0]) >= RESET_TOLERANCE_S) or (
+            None in resets and m.t - window['first'] >= FIVE_HOURS_S)      # without reset times: a window lasts five hours
         if renewed:
-            piece['five_windows'].append({'resets': m.five_resets, 'first': m.t, 'peak': m.five, 'peak_at': m.t})
+            piece['five_windows'].append({'resets': m.five_resets, 'first': m.t, 'peak': m.five, 'peak_at': m.t,
+                                          'last': m.t, 'first_value': m.five, 'last_value': m.five})
         else:
             window = piece['five_windows'][-1]
             if m.five > window['peak']:
                 window['peak'], window['peak_at'] = m.five, m.t
+            window['last'], window['last_value'] = m.t, m.five
             if window['resets'] is None:
                 window['resets'] = m.five_resets
         previous = m
@@ -907,8 +994,8 @@ def _allocation_lines(allocation: dict) -> list[str]:
     lines = ['Allocation of the subscription rise (estimate)']
     for metric, name in (('five', '5h'), ('week', 'week')):
         a = allocation[metric]
-        lines.append(f'  {name}: {a["counted_points"]:g} points measured, ~{a["attributed_points"]:.1f} shared by cost '
-                     f'between the CLIs, {a["unexplained_points"]:g} unexplained (no request in between)')
+        lines.append(f'  {name}: {a["counted_points"]:g} points counted, ~{a["attributed_points"]:.1f} shared by cost '
+                     f'between the CLIs, {a["unexplained_points"]:g} unexplained (no request with a price in between)')
         lines.append(f'      {a["skipped_sections"]} stretch(es) not counted (a reset, or over 60 minutes between '
                      f'measurements), {a["skipped_points"]:g} points rise in them')
     return lines
@@ -952,7 +1039,8 @@ def render(report: dict) -> str:
     sources = [f'{coverage["transcript_files"]} transcript file(s) read']
     if coverage['archive_days']:
         sources.append(f'{len(coverage["archive_days"])} day(s) from the archive: {", ".join(coverage["archive_days"])}')
-    for key, name in (('unreadable_history_lines', 'history'), ('unreadable_archive_lines', 'archive')):
+    for key, name in (('unreadable_history_lines', 'history'), ('unreadable_archive_lines', 'archive'),
+                      ('unreadable_transcript_lines', 'transcript')):
         if coverage[key]:
             sources.append(f'{coverage[key]} unreadable {name} line(s) skipped')
     head = [f'Usage report {period["label"]} (local time, UTC{offset[:3]}:{offset[3:]})', 'Sources: ' + '; '.join(sources)]
@@ -988,10 +1076,10 @@ def write_archive(log_dir: str, new_days: dict[str, dict]) -> None:
 
 
 def _archive_days(content: str):
+    """The days of the lines the archive accepts, the same lines `read_archive` takes."""
     for raw in content.splitlines():
         try:
-            row = json.loads(raw)
-            yield row['day'], row['stats']
+            yield parse_archive_line(raw)
         except (ValueError, TypeError, KeyError, RecursionError):
             continue
 
@@ -1034,16 +1122,19 @@ def usage_file_week_reset(path: str) -> float | None:
     """`seven_day.resets_at` of the usage file, if it has one."""
     block = _usage._read_dict(path).get('seven_day')
     reset = block.get('resets_at') if isinstance(block, dict) else None
-    return reset if _is_number(reset) else None
+    return reset if _is_number(reset) and 0 < reset < MAX_TIME else None
 
 
 def _day_arg(parser, text: str, name: str) -> date:
     try:
         if not DAY_TEXT.fullmatch(text):
             raise ValueError(text)
-        return date.fromisoformat(text)
+        day = date.fromisoformat(text)
     except ValueError:
         parser.error(f'{name} must be a day like 2026-01-14')
+    if not MIN_YEAR <= day.year <= MAX_YEAR:
+        parser.error(f'{name} must be a day from {MIN_YEAR} to {MAX_YEAR}')
+    return day
 
 
 def _period(parser, args, today: date, anchor: float | None, now: float) -> dict:
@@ -1057,8 +1148,9 @@ def _period(parser, args, today: date, anchor: float | None, now: float) -> dict
             resets += WEEK_S      # the weekly windows follow each other every seven days
         return {'kind': 'week', 'label': f'week to {clock(resets, True)}', 'start': resets - WEEK_S, 'end': resets}
     if args.month is not None:
-        if args.month and not (MONTH_TEXT.fullmatch(args.month) and 1 <= int(args.month[5:]) <= 12):
-            parser.error('--month must be a month like 2026-01')
+        if args.month and not (MONTH_TEXT.fullmatch(args.month) and 1 <= int(args.month[5:]) <= 12
+                               and MIN_YEAR <= int(args.month[:4]) <= MAX_YEAR):
+            parser.error(f'--month must be a month like 2026-01, from {MIN_YEAR} to {MAX_YEAR}')
         year, month = (int(args.month[:4]), int(args.month[5:])) if args.month else (today.year, today.month)
         first = date(year, month, 1)
         following = date(year + month // 12, month % 12 + 1, 1)
@@ -1102,7 +1194,8 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
     first_history = min((m.t for m in history), default=math.inf)
     requests, fresh = [], {}
     if os.path.isdir(projects_dir):
-        requests, fresh, data.files = read_transcripts(projects_dir, modified_since, want_usage_lines=start < first_history)
+        requests, fresh, data.files, data.unreadable_requests = read_transcripts(
+            projects_dir, modified_since, want_usage_lines=start < first_history)
     data.set_requests(requests)
     older = [Measurement(ts, five, week, None, None) for ts, (five, week) in fresh.items() if ts < first_history]
     data.set_measurements(history + older)
@@ -1150,8 +1243,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     if args.archive:
         return archive_finished_days(data, prices, archive, log_dir, projects_dir, today)
 
-    live_days = {local_day(r.ts) for r in data.requests}
-    archived = [d for d in _whole_days(start, end) if d not in live_days and d.isoformat() in archive]
+    archived = [d for d in _whole_days(start, end) if d < today and d.isoformat() in archive]
     if not data.files and not archived and not os.path.isdir(projects_dir):
         print(f'No transcripts found at {projects_dir} - pass --projects-dir.')
         return 1
@@ -1167,7 +1259,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         stats = candidate
         used.append(day.isoformat())
     coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
-                'unreadable_archive_lines': broken_archive}
+                'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
     report = build_report(stats, shown, coverage)
     print(json.dumps(report, indent=2) if args.json else render(report))

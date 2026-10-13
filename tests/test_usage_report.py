@@ -838,7 +838,9 @@ def test_the_rise_is_shared_by_cost_between_the_clis_and_a_section_without_reque
     week = data['allocation']['week']
     assert (week['counted_points'], week['unexplained_points']) == (1,
                                                                     0) and week['attributed_points'] == pytest.approx(1.0)
-    assert 'unexplained' in world.text('--day', DAY) and '~' in world.text('--day', DAY)
+    text = world.text('--day', DAY)
+    assert 'unexplained (no request with a price in between)' in text and '~' in text
+    assert 'points counted' in text and 'measured' not in text.split('Allocation')[1].split('Calibration')[0]
 
 
 def test_attributed_and_unexplained_add_up_to_the_measured_rise(world):
@@ -943,7 +945,8 @@ def test_unreadable_usage_lines_are_skipped(world):
                     'message': 'Usage: 5h 10 % · week 20 % · measured 0 min ago "attachment"'}),
         json.dumps({'type': 'attachment', 'timestamp': '2026-10-13T08:01:00Z',
                     'attachment': 'Usage: unknown, "attachment"'}),
-        usage_line('2026-10-13T08:10:00Z', 10, 20), usage_line('2026-10-13T08:20:00Z', 13, 20)])
+        usage_line('2026-10-13T08:10:00Z', 10, 20), usage_line('2026-10-13T08:20:00Z', 13, 20),
+        usage_line('yesterday', 50, 50)])
     assert world.report('--day', DAY)['allocation']['five']['counted_points'] == 3
 
 
@@ -951,8 +954,10 @@ def test_the_german_usage_line_is_read_too(world):
     text = 'Nutzung: 5h 10 % (Reset 14:00) · 7T 20 % (Reset Mo) · Messung vor 0 min'
     later = text.replace('10 %', '16 %')
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [
-        {'type': 'attachment', 'timestamp': '2026-10-13T08:00:00Z', 'attachment': {'content': [text]}},
-        {'type': 'attachment', 'timestamp': '2026-10-13T08:10:00Z', 'attachment': {'content': [later]}}])
+        {'type': 'attachment', 'timestamp': '2026-10-13T08:00:00Z',
+         'attachment': {'type': 'hook_additional_context', 'content': [text]}},
+        {'type': 'attachment', 'timestamp': '2026-10-13T08:10:00Z',
+         'attachment': {'type': 'hook_additional_context', 'content': [later]}}])
     assert world.report('--day', DAY)['allocation']['five']['counted_points'] == 6
 
 
@@ -1253,13 +1258,31 @@ def test_a_month_mixes_live_days_and_archived_days(world):
     assert len(data['clis']) == 1 and data['clis'][0]['requests'] == 3 and data['clis'][0]['id'] == 'aaaaaaaa'
 
 
-def test_a_day_with_transcripts_is_computed_not_read_from_the_archive(world):
+def test_a_finished_day_that_the_archive_has_is_always_taken_from_the_archive(world):
     three_days(world)
     world.log.mkdir(parents=True)
     (world.log / ARCHIVE).write_text(json.dumps({'v': 1, 'day': DAY, 'stats': {'requests': 99, 'cost': 99.0}}) + '\n',
                                      encoding='utf-8')
     data = world.report('--day', DAY)
+    assert data['total']['requests'] == 99 and data['coverage']['archive_days'] == [DAY]
+
+
+def test_a_day_that_is_not_finished_is_never_taken_from_the_archive(world):
+    three_days(world)
+    world.log.mkdir(parents=True)
+    (world.log / ARCHIVE).write_text(json.dumps({'v': 1, 'day': '2026-10-14', 'stats': {'requests': 99}}) + '\n',
+                                     encoding='utf-8')
+    data = world.report('--day', '2026-10-14')
     assert data['total']['requests'] == 1 and data['coverage']['archive_days'] == []
+
+
+def test_a_day_whose_transcripts_were_partly_deleted_is_taken_from_the_archive(world):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0)])
+    world.transcript('-home-u-proj-b', 'bbbbbbbb-2', [paid('2026-10-13T11:00:00Z', 'b', 2.0, cwd='/home/u/b')])
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    (world.projects / '-home-u-proj-b' / 'bbbbbbbb-2.jsonl').unlink()
+    data = world.report('--day', DAY)
+    assert data['total']['requests'] == 2 and data['total']['cost_usd'] == pytest.approx(3.0)
 
 
 def test_a_broken_archived_day_is_skipped_and_counted(world):
@@ -1406,6 +1429,14 @@ def test_a_transcript_that_cannot_be_opened_is_skipped(world, monkeypatch):
     assert data['total']['cost_usd'] == pytest.approx(1.0) and data['coverage']['transcript_files'] == 1
 
 
+def test_a_transcript_that_vanishes_before_it_is_read_is_skipped(world, monkeypatch):
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0)])
+    real = report_module.find_transcripts
+    monkeypatch.setattr(report_module, 'find_transcripts',
+                        lambda folder: [(str(world.projects / 'gone.jsonl'), 'gone', False), *real(folder)])
+    assert world.report('--day', DAY)['total']['requests'] == 1
+
+
 def test_old_files_are_not_read_for_a_recent_period(world, monkeypatch):
     old = world.transcript('-home-u-proj-a', 'old-1', [paid('2026-08-01T10:00:00Z', 'a', 1.0)])
     os.utime(old, (T('2026-08-01T11:00:00Z'),) * 2)
@@ -1501,7 +1532,7 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert list(data) == ['period', 'coverage', 'subscription', 'total', 'clis', 'allocation', 'calibration', 'guards']
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
     assert set(data['coverage']) == {'transcript_files', 'archive_days', 'unreadable_history_lines',
-                                     'unreadable_archive_lines'}
+                                     'unreadable_archive_lines', 'unreadable_transcript_lines'}
     assert set(data['total']) == {'requests', 'tokens', 'cost_usd', 'main', 'subagents', 'models', 'unpriced',
                                   'cache_hit_rate', 'cold_starts', 'thinking_tokens', 'thinking_share', 'web_searches',
                                   'web_fetches'}
@@ -1576,6 +1607,209 @@ def test_the_text_labels_the_archive_and_the_unreadable_lines(world):
         path.unlink()
     text = world.text('--day', DAY)
     assert 'from the archive: 2026-10-13' in text and '1 unreadable history line' in text
+
+
+# --- Findings of the independent review ---------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('meta, expected', [
+    ({'agentType': 'bau-bericht', 'name': 'bau-bericht'}, 'unknown'),            # a named subagent: agentType holds the name
+    ({'agentType': 'reviewer', 'name': 'bau-bericht'}, 'reviewer'),
+    ({'spawnedAgentType': 'arbeiter-bauen', 'agentType': 'arbeiter-bauen', 'name': 'arbeiter-bauen'}, 'arbeiter-bauen'),
+    ({'customAgentType': 'architekt', 'name': 'architekt'}, 'architekt'),
+    ({'agentType': 'general-purpose'}, 'general-purpose')])
+def test_an_agent_type_that_is_only_the_name_is_unknown(world, meta, expected):
+    session = 'aaaaaaaa-1111'
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:00:00Z', 'm1', 1.0)])
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:01:00Z', 'm2', 1.0)], sub='x1', meta=meta)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    outputs = [world.text('--day', DAY), json.dumps(world.report('--day', DAY)),
+               (world.log / ARCHIVE).read_text(encoding='utf-8')]
+    assert list(world.report('--day', DAY)['total']['subagents']['by_type']) == [expected]
+    if expected == 'unknown':
+        assert all('bau-bericht' not in output for output in outputs)
+
+
+def test_an_attachment_of_another_kind_is_no_measurement(world):
+    line = ('Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago '
+            '· Now: Wed 14 Jan 2026 10:05')
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [
+        usage_line('2026-10-13T08:00:00Z', 10, 20), usage_line('2026-10-13T08:10:00Z', 12, 20),
+        {'type': 'attachment', 'timestamp': '2026-10-13T08:20:00Z',
+         'attachment': {'type': 'edited_text_file', 'filename': 'README.md', 'snippet': line}},
+        {'type': 'attachment', 'timestamp': '2026-10-13T08:30:00Z', 'attachment': {'content': [line]}},
+        {'type': 'attachment', 'timestamp': '2026-10-13T08:40:00Z', 'attachment': line}])
+    data = world.report('--day', DAY)
+    assert data['allocation']['five']['counted_points'] == 2 and len(data['subscription']['five_windows']) == 1
+    assert len(data['subscription']['week_segments']) == 1
+
+
+def test_small_falls_without_reset_times_are_noise_and_halving_is_a_new_window(world):
+    # stale values of another session (7 and 34) between the real ones, then a real reset to 3 and 12
+    values = [(10, 40), (12, 41), (7, 34), (14, 42), (3, 12), (5, 14)]
+    world.history([row(f'2026-10-13T08:{10 * i:02d}:00Z', five, week) for i, (five, week) in enumerate(values)])
+    data = world.report('--day', DAY)
+    assert data['allocation']['five'] == {'counted_points': 6, 'attributed_points': 0, 'unexplained_points': 6,
+                                          'skipped_sections': 1, 'skipped_points': 0}
+    assert segments(data) == [(40, 42, None), (12, 14, None)]
+    assert [(w['peak'], w['resets']) for w in data['subscription']['five_windows']] == [(14, None), (5, None)]
+
+
+def test_a_small_fall_with_recorded_reset_times_is_still_a_reset(world):
+    five, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T08:00:00Z', 10, 40, five, week), row('2026-10-13T09:00:00Z', 7, 38, five, week)])
+    data = world.report('--day', DAY)
+    assert data['allocation']['five']['skipped_sections'] == 1 and data['allocation']['week']['skipped_sections'] == 1
+
+
+def test_noise_is_judged_against_the_last_value_that_counted(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:10:00Z', 15, 39),
+                   row('2026-10-13T08:20:00Z', 14, 38), row('2026-10-13T08:30:00Z', 22, 41)])
+    five = world.report('--day', DAY)['allocation']['five']
+    assert five['counted_points'] == 2 and five['skipped_sections'] == 0       # 15 and 14 are noise next to 20
+
+
+@pytest.mark.parametrize('bad_line', [
+    '{"v": 0, "day": "2026-10-12", "stats": {}}', '{"v": 1, "day": ["2026-10-12"], "stats": {}}',
+    '{"v": 1, "day": "2026-10-12", "stats": 5}', '{"v": 1, "day": "soon", "stats": {}}', '{"day": "2026-10-12"}'])
+def test_a_line_the_reader_rejects_does_not_count_as_a_known_day_for_the_writer(world, bad_line):
+    three_days(world)
+    world.log.mkdir(parents=True)
+    (world.log / ARCHIVE).write_text(bad_line + '\n', encoding='utf-8')
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    data = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert data['coverage']['archive_days'] == ['2026-10-12', '2026-10-13'] and data['total']['requests'] == 2
+
+
+@pytest.mark.parametrize('rows, windows', [
+    ([('2026-10-12T20:00:00Z', 10), ('2026-10-12T21:30:00Z', 20), ('2026-10-12T23:00:00Z', 30)], 1),      # over midnight
+    ([('2026-10-12T20:00:00Z', 10), ('2026-10-12T21:30:00Z', 20), ('2026-10-13T02:30:00Z', 30)], 2),      # 5 hours apart
+    ([('2026-10-12T20:00:00Z', 60), ('2026-10-12T21:30:00Z', 70), ('2026-10-12T23:00:00Z', 20)], 2)])     # the value halved
+def test_a_five_hour_window_without_reset_times_is_one_window_over_midnight(world, rows, windows):
+    world.history([row(t, five, 0) for t, five in rows])
+    spend(world, ('2026-10-12T20:30:00Z', 1.0), ('2026-10-12T23:30:00Z', 1.0))
+    live = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert len(live['subscription']['five_windows']) == windows
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    (world.log / 'usage-history.jsonl').unlink()
+    archived = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert archived['coverage']['archive_days'] == ['2026-10-12', '2026-10-13']
+    assert archived['subscription'] == live['subscription']
+
+
+@pytest.mark.parametrize('args', [['--month', '0000-01'], ['--month', '9999-12'], ['--day', '9999-12-31'],
+                                  ['--day', '0001-01-01'], ['--since', '0001-01-01'],
+                                  ['--since', '2026-01-01', '--until', '9999-12-31'],
+                                  ['--month', '1969-12'], ['--day', '1900-01-01']])
+def test_dates_at_the_edge_of_the_calendar_are_argument_errors(world, capsys, args):
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args(*args), now=NOW)
+    assert stop.value.code == 2 and 'Traceback' not in capsys.readouterr().err
+
+
+def test_a_request_id_of_the_wrong_type_or_a_huge_number_discards_the_line_and_counts_it(world):
+    good = paid('2026-10-13T10:00:00Z', 'good', 1.0)
+    listed, dicted = paid('2026-10-13T10:01:00Z', 'b1', 1.0), paid('2026-10-13T10:02:00Z', 'b2', 1.0)
+    listed['requestId'], dicted['requestId'] = ['r'], {'r': 1}
+    huge = ('{"type":"assistant","timestamp":"2026-10-13T10:03:00Z","message":{"id":"h","model":"x","usage":'
+            '{"output_tokens":' + '9' * 400 + '}}}')
+    huge_details = paid('2026-10-13T10:04:00Z', 'b3', 1.0)
+    huge_details['message']['usage']['output_tokens_details'] = {'thinking_tokens': 10 ** 30}
+    data = day_report(world, good, listed, dicted, huge, huge_details)
+    assert data['total']['requests'] == 1 and data['coverage']['unreadable_transcript_lines'] == 4
+    assert '4 unreadable transcript line(s) skipped' in world.text('--day', DAY)
+
+
+def test_a_huge_number_in_the_history_is_unreadable_not_a_crash(world):
+    huge = {'t': '2026-10-13T10:00:00Z', 'five': 10 ** 400, 'week': 1, 'five_resets': None, 'week_resets': None}
+    world.history([json.dumps(huge),
+                   json.dumps(row('2026-10-13T10:00:00Z', 1, 1))])
+    assert world.report('--day', DAY)['coverage']['unreadable_history_lines'] == 1
+
+
+def test_a_fall_next_to_a_measurement_with_a_reset_time_but_none_of_its_own_is_still_noise(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40, T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')),
+                   row('2026-10-13T08:10:00Z', 15, 39), row('2026-10-13T08:20:00Z', 22, 41)])
+    assert world.report('--day', DAY)['allocation']['five']['counted_points'] == 2
+
+
+def window(first, last, first_value, last_value, resets=None, peak=None):
+    return {'resets': resets, 'first': first, 'last': last, 'first_value': first_value, 'last_value': last_value,
+            'peak': peak or max(first_value, last_value), 'peak_at': last}
+
+
+def test_windows_join_one_after_the_other_and_the_last_value_is_that_of_the_chain():
+    joined = []
+    report_module._merge_windows(joined, [window(0, 1000, 10, 10)])
+    report_module._merge_windows(joined, [window(2000, 3000, 30, 30)])
+    report_module._merge_windows(joined, [window(3500, 4000, 15, 15)])        # a fall from 30: a window of its own
+    assert [(w['first'], w['last'], w['last_value']) for w in joined] == [(0, 3000, 30), (3500, 4000, 15)]
+
+
+def test_a_fall_to_exactly_half_is_a_new_window_and_a_five_hour_span_is_two_windows(world):
+    world.history([row('2026-10-13T08:00:00Z', 20, 40), row('2026-10-13T08:10:00Z', 10, 20)])
+    assert segments(world.report('--day', DAY)) == [(40, 40, None), (20, 20, None)]
+    assert len(world.report('--day', DAY)['subscription']['five_windows']) == 2
+    world.history([row('2026-10-13T08:00:00Z', 10, 0), row('2026-10-13T12:59:59Z', 20, 0),
+                   row('2026-10-13T13:00:00Z', 30, 0)])
+    assert [w['peak'] for w in world.report('--day', DAY)['subscription']['five_windows']] == [20, 30]
+
+
+def test_the_days_at_the_edge_of_the_allowed_years_work(world):
+    for args in (['--day', '2000-01-01'], ['--day', '2999-12-31'], ['--month', '2000-01'], ['--month', '2999-12']):
+        assert world.report(*args)['total']['requests'] == 0
+
+
+def test_a_count_of_a_trillion_is_read_and_one_more_is_not(world):
+    data = day_report(world, req('2026-10-13T10:00:00Z', 'a', out=10 ** 12),
+                      req('2026-10-13T10:01:00Z', 'b', out=10 ** 12 + 1, request='r2'))
+    assert data['total']['tokens']['output'] == 10 ** 12 and data['coverage']['unreadable_transcript_lines'] == 1
+
+
+def test_reset_times_beyond_the_year_2100_are_not_measurements(world):
+    world.history([row('2026-10-13T10:00:00Z', 1, 1, None, 10 ** 12), row('2026-10-13T10:01:00Z', 1, 1, 10 ** 12, None),
+                   row('2026-10-13T10:02:00Z', 1, 1, 4_102_444_800, 4_102_444_800)])
+    assert world.report('--day', DAY)['coverage']['unreadable_history_lines'] == 2
+    (world.log / 'usage-history.jsonl').unlink()
+    put_usage_file(world, 10 ** 12)
+    assert report_module.main(world.args('--week'), now=NOW) == 1
+
+
+def test_the_cache_write_of_one_hour_cannot_exceed_the_cache_write(world):
+    line = req('2026-10-13T10:00:00Z', 'm1', out=1)
+    line['message']['usage'].update(cache_creation_input_tokens=100,
+                                    cache_creation={'ephemeral_5m_input_tokens': 0, 'ephemeral_1h_input_tokens': 500})
+    tokens = day_report(world, line)['total']['tokens']
+    assert (tokens['cache_write_5m'], tokens['cache_write_1h']) == (0, 100)
+
+
+def test_a_model_name_with_odd_characters_is_not_shown(world):
+    data = day_report(world, req('2026-10-13T10:00:00Z', 'm1', model=f'claude odd\n{SECRET}', out=7),
+                      req('2026-10-13T10:01:00Z', 'm2', model='claude-fine-1.2:x/y', out=7, request='r2'))
+    assert set(data['total']['unpriced']) == {'?', 'claude-fine-1.2:x/y'}
+    assert SECRET not in json.dumps(data) and SECRET not in world.text('--day', DAY)
+
+
+@pytest.mark.parametrize('first_newer', [True, False])
+def test_a_request_in_two_main_sessions_belongs_to_the_session_file_modified_first(world, first_newer):
+    line = paid('2026-10-13T10:00:00Z', 'm1', 1.0)
+    older = world.transcript('-home-u-proj-a', 'zzzzzzzz-1', [line])
+    # the continuation: its name sorts first, its file is newer
+    newer = world.transcript('-home-u-proj-a', 'aaaaaaaa-2', [line])
+    if first_newer:
+        older, newer = newer, older
+    os.utime(older, (T('2026-10-13T12:00:00Z'),) * 2)
+    os.utime(newer, (T('2026-10-13T13:00:00Z'),) * 2)
+    data = world.report('--day', DAY)
+    assert data['total']['requests'] == 1
+    assert [c['id'] for c in data['clis']] == [older.stem[:8]]
+
+
+def test_the_unpriced_only_section_is_called_unexplained_with_the_right_words(world):
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 14, 20)])
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [req('2026-10-13T10:05:00Z', model='claude-mystery-9', out=1000)])
+    assert 'unexplained (no request with a price in between)' in world.text('--day', DAY)
 
 
 # --- Arguments ----------------------------------------------------------------------------------------------------------
