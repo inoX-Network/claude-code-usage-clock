@@ -155,8 +155,8 @@ background task:
 - It stops with a short message that asks for nothing (Claude Code still delivers it, after `/clear` to the new
   session) when the session is gone (after `/clear` or closing it: no fresh state file on
   three checks in a row; a sleeping computer does not count), after 115 minutes (Claude Code ends background tasks
-  after two hours; the next prompt offers it again), when another watcher for the session lives, or when
-  `from_k` is 0.
+  after two hours; the turn that delivers its message already offers the next one), when another watcher for the
+  session lives, or when `from_k` is 0.
 - After a wake-up the offer rests for an hour, so the routine does not start the next watcher.
 
 What you need for this:
@@ -364,8 +364,9 @@ one-shot task survives `--resume`. If you only want Claude Code to wait and cont
 - The date and time in the prompt line are your local time and go to the model with every prompt.
 - The wake-up watcher is as good as the cache clock Claude Code passes to the status line (`prompt_cache`), which
   is not a versioned API either; without it the watcher never fires. It cannot wake a session whose computer is
-  asleep or switched off, and it cannot know that the model will follow the wake-up call. If Claude Code ever
-  compacts an idle session on its own before the cache expires, the watcher finds nothing left to save.
+  asleep or switched off, and it cannot know that the model will follow the wake-up call. Claude Code itself
+  compacts an idle session shortly before a 1-hour cache expires (seen with 2.1.290 at about 6 minutes left). The
+  default lead of 10 minutes fires before that; with a smaller `lead_min` the watcher may find nothing left to save.
 
 ### Working with a guard hook
 

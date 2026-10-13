@@ -260,8 +260,34 @@ def test_it_does_not_follow_a_link_in_place_of_the_state_file(tmp_path):
 def test_it_ends_after_115_minutes_with_a_message_to_start_again(tmp_path):
     message, clock = run(tmp_path, ['fresh'])
     assert len(clock.sleeps) == 115 and clock.t == T0 + 115 * MIN
-    assert message.startswith(f'Wake-up watcher stopped: session {SID} reached its maximum run time of 115 minutes.')
-    assert 'start it again when the reminder asks' in message
+    assert message == (f'Wake-up watcher stopped: session {SID} reached its maximum run time of 115 minutes. The '
+                       'reminder that comes with this message offers a new watcher; if it does, start it again.')
+
+
+def test_the_end_after_the_maximum_run_time_leaves_an_ended_heartbeat(tmp_path):
+    run(tmp_path, ['fresh'])
+    assert beat(tmp_path) == {'session_id': SID, 'state': 'ended', 'at': '2027-01-15T09:55:00Z'}
+
+
+def test_the_end_after_the_maximum_run_time_frees_the_offer_of_the_reporter_at_once(tmp_path):
+    """Seen 13.10.2026: the turn that delivers the end message had no offer, because the last `watching`
+    heartbeat of the ending watcher was seconds old. The session then went idle without a watcher."""
+    run(tmp_path, ['fresh'])
+    end = T0 + 115 * MIN
+    assert _wake.blocks_hint(_wake.read_heartbeat(str(directory(tmp_path)), SID), end) is False
+
+
+def test_an_ended_heartbeat_that_cannot_be_written_still_gives_the_end_message(tmp_path, monkeypatch):
+    real = _wake.write_heartbeat
+
+    def only_watching(directory_, session_id, state_, now):
+        if state_ == 'ended':
+            raise OSError('disk full')
+        real(directory_, session_id, state_, now)
+    monkeypatch.setattr(_wake, 'write_heartbeat', only_watching)
+    message, _ = run(tmp_path, ['fresh'])
+    path = directory(tmp_path) / f'{SID}.watch'     # the clean-up of the state writer may have removed it
+    assert 'reached its maximum run time' in message and (not path.exists() or beat(tmp_path)['state'] != 'ended')
 
 
 def test_just_before_the_limit_it_still_polls(tmp_path):
@@ -286,8 +312,9 @@ def test_a_heartbeat_counts_as_alive_up_to_exactly_three_minutes(tmp_path, age_s
     assert ('session-end routine' in message) is (not running)
 
 
-def test_a_fired_heartbeat_does_not_stop_a_start(tmp_path):
-    message, _ = run(tmp_path, ['fire'], beat_before=('fired', 60))
+@pytest.mark.parametrize('state_', ['fired', 'ended'])
+def test_a_fired_or_ended_heartbeat_does_not_stop_a_start(tmp_path, state_):
+    message, _ = run(tmp_path, ['fire'], beat_before=(state_, 0))
     assert 'session-end routine' in message
 
 
@@ -400,9 +427,10 @@ def read(tmp_path):
     return _wake.read_heartbeat(str(directory(tmp_path)), SID)
 
 
-def test_a_written_heartbeat_reads_back_as_state_and_epoch_seconds(tmp_path):
-    _wake.write_heartbeat(str(directory(tmp_path)), SID, 'fired', T0)
-    assert read(tmp_path) == {'state': 'fired', 'at': T0}
+@pytest.mark.parametrize('state_', ['watching', 'fired', 'ended'])
+def test_a_written_heartbeat_reads_back_as_state_and_epoch_seconds(tmp_path, state_):
+    _wake.write_heartbeat(str(directory(tmp_path)), SID, state_, T0)
+    assert read(tmp_path) == {'state': state_, 'at': T0}
 
 
 @pytest.mark.parametrize('content', [
@@ -461,7 +489,8 @@ def test_the_state_reader_still_reads_state_files_and_never_a_heartbeat_by_defau
 @pytest.mark.parametrize('state_,age_s,blocks', [
     ('watching', 0, True), ('watching', 180, True), ('watching', 181, False), ('watching', -60, True),
     ('watching', -61, False), ('watching', 7200, False),
-    ('fired', 0, True), ('fired', 3600, True), ('fired', 3601, False), ('fired', -60, True), ('fired', -61, False)])
+    ('fired', 0, True), ('fired', 3600, True), ('fired', 3601, False), ('fired', -60, True), ('fired', -61, False),
+    ('ended', 0, False), ('ended', 60, False), ('ended', -60, False), ('ended', 3600, False)])
 def test_a_living_watcher_or_a_recent_fire_blocks_a_new_hint(state_, age_s, blocks):
     assert _wake.blocks_hint({'state': state_, 'at': T0 - age_s}, T0) is blocks
 

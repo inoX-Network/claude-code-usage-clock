@@ -188,8 +188,9 @@ Example: `Context: 168k/1000k tokens (17%). Measured, not estimated.`
   <abs dir>/wake_watcher.py <session_id>` (the path from `__file__`, absolute, through `shlex.quote`). Not offered
   while the heartbeat file says a watcher lives (`watching`, at most `_wake.ALIVE_MIN` = 3 minutes old) or has
   fired (`fired`, at most `_wake.REST_AFTER_FIRE_MIN` = 60 minutes old): the routine the wake-up triggers would
-  start the next watcher at once. A heartbeat more than one minute ahead of the clock counts as broken and blocks
-  nothing. If anything in the offer fails (missing `_wake.py`, unreadable heartbeat), the context line goes out
+  start the next watcher at once. `ended` (written when a watcher stops after its maximum run time) blocks nothing.
+  A heartbeat more than one minute ahead of the clock counts as broken and blocks nothing. If anything in the offer
+  fails (missing `_wake.py`, unreadable heartbeat), the context line goes out
   without it. With `from_k` 0 the output is byte for byte the line above.
 - **On internal error:** exit 0, no output, nothing logged. Config problems are not logged either (the hook runs
   after every tool call); a wrong `context_reporter` value falls back to its default.
@@ -213,8 +214,9 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
 
 - **At the start**, in this order: `from_k` is 0: message `disabled`, nothing written. A heartbeat of state
   `watching` at most `ALIVE_MIN` minutes old (a living watcher): message `already running`, nothing written. A
-  `fired` heartbeat or a broken file does not stop a start.
-- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: end. (2) read
+  `fired` or `ended` heartbeat or a broken file does not stop a start.
+- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: write the
+  heartbeat `ended` (a failure to write it is ignored, the message goes out anyway) and end. (2) read
   the state file through `context_reporter.read_state` (no link, no named pipe, size limit) and take it as alive if
   `measured_at` is at most `STALE_MIN` minutes old and not more than a minute in the future. A missing, stale or
   unreadable file counts one missed poll; the third in a row ends with `session ... is no longer active`; a fresh
@@ -232,8 +234,8 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
   not start a new watcher.` The other endings say why the watcher stopped; the one for a gone session adds `If you
   are a different session, there is nothing to do.` (a task started in one session wakes whichever session is
   current when it ends, also after `/clear`).
-- **Heartbeat file** `<log_dir>/context/<session_id>.watch`: `{"session_id", "state": "watching"|"fired", "at":
-  "<UTC ISO>"}`. Written like the state file (atomic, `O_EXCL|O_NOFOLLOW`, 0600, never through a link, shared code
+- **Heartbeat file** `<log_dir>/context/<session_id>.watch`: `{"session_id", "state": "watching"|"fired"|"ended",
+  "at": "<UTC ISO>"}`. Written like the state file (atomic, `O_EXCL|O_NOFOLLOW`, 0600, never through a link, shared code
   `_context_state.write_private`), read with the same guards. The state file's seven-day clean-up removes old
   `*.watch` files, too.
 - **Cases:** `/clear` or closing the session: the status line stops writing, the file goes stale, the watcher ends
@@ -242,14 +244,17 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
   still counts as fresh). Sleeping or suspended computer: the polls stop with the status line; afterwards one stale
   poll is not enough to end, and an expiry that has passed in the meantime is cold and never fires. Cold or
   unknown cache: waits, never fires. The user writes: the status line writes a later `cache_expires_at`, the
-  watcher waits on. The 2-hour limit of background tasks: the watcher ends itself after 115 minutes; the next prompt
-  at or above `from_k` offers it again (its heartbeat is then older than `ALIVE_MIN`); the time between its end and
-  that prompt is unwatched.
+  watcher waits on. The 2-hour limit of background tasks: the watcher ends itself after 115 minutes and leaves the
+  heartbeat `ended`. Its message arrives as a turn of its own, which runs `UserPromptSubmit`, so that turn already
+  offers the next watcher. Before `ended` existed, the last `watching` beat (seconds old) suppressed exactly this
+  offer, and a session that went idle right after it stayed unwatched (seen 13 Oct 2026).
 - **Limits:** the expiry is as old as the state file (the status line refreshes every `refreshInterval` = 60 s). With
   the 5-minute cache the lead is one poll interval: a poll that comes a little later than 60 s can step over it, with
   the 1-hour cache the window holds ten polls. Two watchers can start within the same second before the first heartbeat
-  exists. The model decides whether it follows the wake-up call; its instructions need a session-end routine. If
-  Claude Code compacts an idle session by itself before the cache expires, there is nothing left to save.
+  exists. The model decides whether it follows the wake-up call; its instructions need a session-end routine. Claude
+  Code compacts an idle session by itself shortly before a 1-hour cache expires (seen with 2.1.290: compaction began
+  about 6 minutes before the expiry and took 2 minutes); the watcher has to fire before that, which the default lead
+  of 10 minutes does and a smaller `lead_min` may not.
 
 ### spawn_gate.py
 

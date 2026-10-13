@@ -19,7 +19,8 @@ It stops quietly (message, exit 0) when
 - the session is gone: the state file is missing or older than STALE_MIN minutes on STALE_POLLS polls in a row
   (after `/clear` or closing the session the status line stops writing; a sleeping machine does not count, the
   counter starts again with the first fresh file),
-- it has run MAX_RUN_MIN minutes (Claude Code stops background tasks after two hours),
+- it has run MAX_RUN_MIN minutes (Claude Code stops background tasks after two hours); it first writes the
+  heartbeat `ended`, so the turn that delivers its message already offers the next watcher,
 - the heartbeat file cannot be written.
 An invalid session id is exit 2. Nothing else is read or written; only the standard library is used.
 """
@@ -81,8 +82,13 @@ def watch(session_id: str, cfg: dict, directory: str, now=time.time, sleep=time.
     while True:
         moment = now()
         if moment - started >= MAX_RUN_MIN * 60:
+            try:     # frees the offer: its last `watching` beat is seconds old and would block it for ALIVE_MIN
+                _wake.write_heartbeat(directory, session_id, 'ended', moment)
+            except OSError:
+                pass
             return (f'Wake-up watcher stopped: session {session_id} reached its maximum run time of {MAX_RUN_MIN} '
-                    'minutes. If the session is still idle, start it again when the reminder asks.')
+                    'minutes. The reminder that comes with this message offers a new watcher; if it does, start it '
+                    'again.')
         state = context_reporter.read_state(directory, session_id)
         if state is not None and context_reporter.is_fresh(state.get('measured_at'),
                                                           datetime.fromtimestamp(moment, timezone.utc), STALE_MIN):
