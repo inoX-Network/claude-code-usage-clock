@@ -267,6 +267,7 @@ class Data:
         self.measurement_times: list[float] = []
         self.guards: list[tuple] = []            # (time, hook, mode, decision)
         self.files = 0
+        self.week_anchor: float | None = None     # a known weekly reset time: the weekly windows follow it every 7 days
         self.session_of: dict[str, str] = {}     # first 8 characters of a session id -> the session
         self.label: dict[str, str] = {}
         self.start: dict[str, float] = {}
@@ -420,7 +421,7 @@ def new_stats() -> dict:
     return {'requests': 0, 'cost': 0.0, 'cold_starts': 0, 'extra': {}, 'tokens': dict.fromkeys(KINDS, 0),
             'main': {'requests': 0, 'cost': 0.0},
             'sub': {'requests': 0, 'cost': 0.0}, 'agent_types': {}, 'models': {}, 'unpriced': {}, 'clis': {},
-            'abo': {'week_start': None, 'week_end': None, 'week_resets': None, 'five_windows': []},
+            'abo': {'weeks': [], 'five_windows': []},
             'alloc': {m: {'counted': 0.0, 'attributed': 0.0, 'rest': 0.0, 'skipped_sections': 0, 'skipped_points': 0.0}
                       for m in METRICS},
             'cal': {m: {'all': new_sums(), 'models': {}, 'days': {}} for m in METRICS},
@@ -451,21 +452,43 @@ def _merge_window(windows: list[dict], window: dict) -> None:
     windows.append(dict(window))
 
 
+def _week_point(point) -> dict:
+    if not (_is_number(point['t']) and _is_number(point['value'])):
+        raise TypeError('week point')
+    return {'t': point['t'], 'value': point['value']}
+
+
+def _same_segment(first: dict, second: dict) -> bool:
+    """Whether two week segments (the second not earlier) are one weekly window: the value did not fall between them and
+    the reset times, if both are known, agree."""
+    if second['start']['value'] < first['end']['value']:
+        return False
+    return None in (first['resets'], second['resets']) or abs(second['resets'] - first['resets']) < RESET_TOLERANCE_S
+
+
+def _merge_weeks(target: list, extra: list) -> None:
+    segments = []
+    for segment in extra:
+        resets = segment['resets']
+        if not (resets is None or _is_number(resets)):
+            raise TypeError('resets')
+        segments.append({'start': _week_point(segment['start']), 'end': _week_point(segment['end']), 'resets': resets})
+    merged: list[dict] = []
+    for segment in sorted(target + segments, key=lambda seg: (seg['start']['t'], seg['end']['t'])):
+        if merged and _same_segment(merged[-1], segment):
+            last = merged[-1]
+            if segment['end']['t'] >= last['end']['t']:
+                last['end'] = segment['end']
+            last['resets'] = last['resets'] if last['resets'] is not None else segment['resets']
+        else:
+            merged.append(segment)
+    target[:] = merged
+
+
 def _merge_abo(target: dict, extra) -> None:
     if not isinstance(extra, dict):
         raise TypeError('abo')
-    for key, later in (('week_start', False), ('week_end', True)):
-        point = extra.get(key)
-        if point is not None:
-            if not (_is_number(point['t']) and _is_number(point['value'])):
-                raise TypeError(key)
-            known = target[key]
-            if known is None or (point['t'] > known['t'] if later else point['t'] < known['t']):
-                target[key] = {'t': point['t'], 'value': point['value']}
-    if extra.get('week_resets') is not None:
-        if not _is_number(extra['week_resets']):
-            raise TypeError('week_resets')
-        target['week_resets'] = max(target['week_resets'] or 0, extra['week_resets'])
+    _merge_weeks(target['weeks'], extra.get('weeks', []))
     for window in extra.get('five_windows', []):
         resets = window['resets']
         numbers = all(_is_number(window[k]) for k in ('first', 'peak', 'peak_at'))
@@ -621,24 +644,46 @@ def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, e
                     entry['cd'] += total * rise
 
 
-def _same_window(before: Measurement, first: Measurement) -> bool:
-    if before.week_resets is not None and first.week_resets is not None:
-        return abs(first.week_resets - before.week_resets) < RESET_TOLERANCE_S
-    return first.week >= before.week
+def _week_reset(m: Measurement, anchor: float | None) -> float | None:
+    """The end of the weekly window a measurement belongs to: the recorded reset time, else the next one in the
+    weekly rhythm of `anchor` (a known weekly reset time), else unknown."""
+    if m.week_resets is not None or anchor is None:
+        return m.week_resets
+    return anchor + (math.floor((m.t - anchor) / WEEK_S) + 1) * WEEK_S
+
+
+def _same_week(earlier: Measurement, later: Measurement, anchor: float | None) -> bool:
+    """Both measurements are in one weekly window: the value did not fall and the reset times (if known) agree."""
+    if later.week < earlier.week:
+        return False
+    resets = _week_reset(earlier, anchor), _week_reset(later, anchor)
+    return None in resets or abs(resets[1] - resets[0]) < RESET_TOLERANCE_S
+
+
+def _week_segments(measurements: list[Measurement], lo: int, weekly: list[Measurement], anchor: float | None) -> list[dict]:
+    """The weekly windows in the period, each with its first and last value; `weekly` are the measurements inside the
+    period that have a weekly value, `lo` the index of the first one inside in `measurements`."""
+    before = next((m for m in reversed(measurements[:lo]) if m.week is not None), None)
+    segments: list[dict] = []
+    previous = None
+    for m in weekly:
+        point = {'t': m.t, 'value': m.week}
+        if previous is not None and _same_week(previous, m, anchor):
+            segments[-1]['end'] = point
+        else:
+            joined = previous is None and before is not None and _same_week(before, m, anchor)
+            start = {'t': before.t, 'value': before.week} if joined else point
+            segments.append({'start': start, 'end': point, 'resets': _week_reset(m, anchor)})
+        previous = m
+    return segments
 
 
 def _subscription(data: Data, start: float, end: float) -> dict:
     times, measurements = data.measurement_times, data.measurements
     lo, hi = bisect.bisect_left(times, start), bisect.bisect_left(times, end)
     inside = measurements[lo:hi]
-    piece = {'week_start': None, 'week_end': None, 'week_resets': None, 'five_windows': []}
     weekly = [m for m in inside if m.week is not None]
-    if weekly:
-        before = next((m for m in reversed(measurements[:lo]) if m.week is not None), None)
-        first = before if before is not None and _same_window(before, weekly[0]) else weekly[0]
-        piece['week_start'] = {'t': first.t, 'value': first.week}
-        piece['week_end'] = {'t': weekly[-1].t, 'value': weekly[-1].week}
-        piece['week_resets'] = next((m.week_resets for m in reversed(weekly) if m.week_resets is not None), None)
+    piece = {'weeks': _week_segments(measurements, lo, weekly, data.week_anchor), 'five_windows': []}
     previous = None
     for m in inside:
         if m.five is None:
@@ -675,7 +720,8 @@ def compute_stats(data: Data, prices: list[dict], intervals: list[tuple[float, f
 # --- The report ---------------------------------------------------------------------------------------------------
 
 def _usd_per_point(sums: dict) -> float | None:
-    """Slope through zero of the rise on the cost, inverted: sum(cost^2) / sum(cost x rise)."""
+    """Slope through zero of the rise on the cost, inverted: sum(cost^2) / sum(cost x rise). The rise is the dependent
+    value because the rounding to whole points is in the rise, not in the cost."""
     return sums['c2'] / sums['cd'] if sums['cd'] > 0 else None
 
 
@@ -721,8 +767,8 @@ def _requests_and_cost(table: dict) -> dict:
     return {name: {'requests': v['requests'], 'cost_usd': v['cost']} for name, v in _by_cost(table)}
 
 
-def _point(entry: dict | None) -> dict | None:
-    return None if entry is None else {'at': iso(entry['t']), 'value': entry['value']}
+def _point(entry: dict) -> dict:
+    return {'at': iso(entry['t']), 'value': entry['value']}
 
 
 def _cli_report(ident: str, cli: dict) -> dict:
@@ -749,8 +795,9 @@ def build_report(stats: dict, period: dict, coverage: dict) -> dict:
     return {
         'period': period,
         'coverage': coverage,
-        'subscription': {'week_start': _point(abo['week_start']), 'week_end': _point(abo['week_end']),
-                         'week_resets': abo['week_resets'], 'five_windows': windows},
+        'subscription': {'week_segments': [{'start': _point(w['start']), 'end': _point(w['end']), 'reset_at': w['resets']}
+                                           for w in abo['weeks']],
+                         'five_windows': windows},
         'total': {'requests': stats['requests'], 'tokens': stats['tokens'], 'cost_usd': stats['cost'],
                   'main': {'requests': stats['main']['requests'], 'cost_usd': stats['main']['cost']},
                   'subagents': subagents, 'models': _models_report(stats['models'], True),
@@ -775,12 +822,24 @@ def _costs_text(table: dict) -> str:
     return ', '.join(f'{name} {v["cost_usd"]:.2f} USD ({v["requests"]})' for name, v in table.items())
 
 
+def _week_text(segments: list[dict]) -> str:
+    """`A % -> B % (+n points) until <reset>, then C % -> D % ...`: a weekly reset splits the line, nothing is
+    subtracted across it. The last window says when it resets."""
+    parts = []
+    for index, segment in enumerate(segments):
+        start, end = segment['start']['value'], segment['end']['value']
+        text = f'{start:g} % -> {end:g} % ({end - start:+g} points)'
+        if segment['reset_at'] is not None:
+            text += f', resets {clock(segment["reset_at"], True)}' if index == len(segments) - 1 else \
+                f' until {clock(segment["reset_at"], True)}'
+        parts.append(text)
+    return ', then '.join(parts)
+
+
 def _subscription_lines(abo: dict) -> list[str]:
     lines = ['Subscription']
-    if abo['week_start'] is not None:
-        start, end = abo['week_start']['value'], abo['week_end']['value']
-        reset = f', resets {clock(abo["week_resets"], True)}' if abo['week_resets'] is not None else ''
-        lines.append(f'  Week: {start:g} % -> {end:g} % ({end - start:+g} points){reset}')
+    if abo['week_segments']:
+        lines.append('  Week: ' + _week_text(abo['week_segments']))
     else:
         lines.append('  Week: no measurement in this period')
     lines.append(f'  5h windows: {len(abo["five_windows"])}')
@@ -965,6 +1024,12 @@ def resolve_usage_file(config: str | None) -> str:
         return _config.load(log_problems=False)['usage_file']
 
 
+def week_anchor(history: list[Measurement], usage_file: str) -> float | None:
+    """A weekly reset time: the latest one in the history, else the one in the usage file."""
+    recorded = next((m.week_resets for m in reversed(history) if m.week_resets is not None), None)
+    return recorded if recorded is not None else usage_file_week_reset(usage_file)
+
+
 def usage_file_week_reset(path: str) -> float | None:
     """`seven_day.resets_at` of the usage file, if it has one."""
     block = _usage._read_dict(path).get('seven_day')
@@ -981,12 +1046,10 @@ def _day_arg(parser, text: str, name: str) -> date:
         parser.error(f'{name} must be a day like 2026-01-14')
 
 
-def _period(parser, args, today: date, history: list[Measurement], now: float, usage_file: str) -> dict:
+def _period(parser, args, today: date, anchor: float | None, now: float) -> dict:
     """kind, label, start, end (Unix seconds) of the requested period; {'error': text} if --week has no reset time."""
     if args.week:
-        resets = next((m.week_resets for m in reversed(history) if m.week_resets is not None), None)
-        if resets is None:
-            resets = usage_file_week_reset(usage_file)
+        resets = anchor
         if resets is None:
             return {'error': 'No weekly reset time in the measurement history or the usage file: '
                              'use --since and --until instead.'}
@@ -1073,15 +1136,17 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     today = local_day(now)
     history, broken_history = read_history(log_dir)
     archive, broken_archive = read_archive(log_dir)
+    anchor = week_anchor(history, resolve_usage_file(config))
     if args.archive:
         period = {'kind': 'archive', 'start': 0.0, 'end': math.inf}
     else:
-        period = _period(parser, args, today, history, now, resolve_usage_file(config))
+        period = _period(parser, args, today, anchor, now)
     if 'error' in period:
         print(period['error'])
         return 1
     start, end = period['start'], period['end']
     data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start)
+    data.week_anchor = anchor
     if args.archive:
         return archive_finished_days(data, prices, archive, log_dir, projects_dir, today)
 

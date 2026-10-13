@@ -415,6 +415,14 @@ keep, per level (period, model, CLI), how many requests report each detail (`*_n
 tokens of the reporting requests (`thinking_out`); the share is `thinking / thinking_out`. No reporting request: `null`
 in the JSON, `n/a` in the text. They never enter the cost weight (thinking is part of the output price).
 
+**Weekly windows.** The weekly value is shown per window, never as a difference across a weekly reset. A measurement's
+window ends at its `week_resets` if recorded, else at the next reset in the 7-day rhythm of the anchor (the latest
+`week_resets` of the history, else `seven_day.resets_at` of the usage file), else it is unknown. Consecutive measurements
+with a known value are in one window unless the value fell or the reset times differ by 60 s or more; the first window
+starts at the last value before the period if that is in the same window. `subscription.week_segments` lists them as
+`start`, `end` (`at`, `value`) and `reset_at`. In the figures (`abo.weeks`) segments of several days join if they have
+the same reset time, or no reset time and no fall of the value between them.
+
 **Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
 day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the
 history, else `seven_day.resets_at` of the usage file (found like the log folder: `--config`, `CCUC_USAGE_FILE`, `usage_file`
@@ -431,7 +439,7 @@ CLI (cost weight, 8 character session prefix); with a total above zero the rise 
 
 **Calibration.** A counted section with exactly one CLI, no unpriced request and a total above zero adds to the sums
 `n`, `c2 = sum(cost^2)`, `cd = sum(cost x rise)` of the whole period, of its day and, if all its requests have the same
-price entry, of that model. USD per point is `c2 / cd` (regression of the rise on the cost through zero, inverted); it is
+price entry, of that model. USD per point is `c2 / cd` (regression of the rise on the cost through zero, inverted: the noise of the whole points is in the rise); it is
 shown from 50 sections (`MIN_SECTIONS`), per model only from 50 sections of that model, per day always with its count.
 
 **Mergeable figures and the archive.** All figures of a period are one dict of numbers (`new_stats`), so the figures of

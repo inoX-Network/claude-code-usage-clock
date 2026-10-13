@@ -686,9 +686,8 @@ def test_the_weekly_value_at_start_and_end_and_the_five_hour_windows(world):
                    row('2026-10-13T16:00:00Z', 7, 45, r2, week), row('2026-10-13T17:00:00Z', 20, 47, r2, week),
                    row('2026-10-14T10:00:00Z', 1, 50, T('2026-10-14T15:00:00Z'), week)])
     abo = world.report('--day', DAY)['subscription']
-    assert abo['week_start'] == {'at': '2026-10-12T20:00:00Z', 'value': 40}
-    assert abo['week_end'] == {'at': '2026-10-13T17:00:00Z', 'value': 47}
-    assert abo['week_resets'] == week
+    assert abo['week_segments'] == [{'start': {'at': '2026-10-12T20:00:00Z', 'value': 40},
+                                     'end': {'at': '2026-10-13T17:00:00Z', 'value': 47}, 'reset_at': week}]
     assert abo['five_windows'] == [
         {'resets': r1, 'first_seen': '2026-10-13T08:00:00Z', 'peak': 62, 'peak_at': '2026-10-13T10:00:00Z'},
         {'resets': r2, 'first_seen': '2026-10-13T16:00:00Z', 'peak': 20, 'peak_at': '2026-10-13T17:00:00Z'}]
@@ -699,12 +698,120 @@ def test_a_weekly_value_before_the_period_of_an_earlier_week_is_not_the_start(wo
     world.history([row('2026-10-11T20:00:00Z', 30, 96, None, old), row('2026-10-12T08:00:00Z', 5, 1, None, new),
                    row('2026-10-13T08:00:00Z', 6, 4, None, new)])
     abo = world.report('--day', '2026-10-12')['subscription']
-    assert abo['week_start'] == {'at': '2026-10-12T08:00:00Z', 'value': 1}
+    assert [(s['start'], s['end']['value'], s['reset_at']) for s in abo['week_segments']] == [
+        ({'at': '2026-10-12T08:00:00Z', 'value': 1}, 1, new)]
+
+
+def segments(data):
+    return [(s['start']['value'], s['end']['value'], s['reset_at']) for s in data['subscription']['week_segments']]
+
+
+def test_a_weekly_reset_in_the_period_splits_the_week_line_and_nothing_is_subtracted_across_it(world):
+    old, new = T('2026-10-13T12:00:00Z'), T('2026-10-20T12:00:00Z')
+    five = T('2026-10-13T17:00:00Z')
+    world.history([row('2026-10-13T08:00:00Z', 5, 90, five, old), row('2026-10-13T11:00:00Z', 20, 100, five, old),
+                   row('2026-10-13T12:30:00Z', 1, 0, five, new), row('2026-10-13T15:00:00Z', 9, 12, five, new)])
+    assert segments(world.report('--day', DAY)) == [(90, 100, old), (0, 12, new)]
+    text = world.text('--day', DAY)
+    assert ('Week: 90 % -> 100 % (+10 points) until Tue 13 Oct 14:00, then 0 % -> 12 % (+12 points), resets Tue 20 Oct 14:00'
+            in text)
+    assert '-78' not in text and '-88' not in text
+
+
+def test_without_reset_times_a_fall_of_the_weekly_value_starts_a_new_segment(world):
+    world.history([row('2026-10-13T08:00:00Z', 5, 50), row('2026-10-13T09:00:00Z', 6, 60), row('2026-10-13T10:00:00Z', 7, 3),
+                   row('2026-10-13T11:00:00Z', 8, 8)])
+    assert segments(world.report('--day', DAY)) == [(50, 60, None), (3, 8, None)]
+    assert 'Week: 50 % -> 60 % (+10 points), then 3 % -> 8 % (+5 points)' in world.text('--day', DAY)
+
+
+@pytest.mark.parametrize('gap, expected', [(59, 1), (60, 2)])
+def test_weekly_reset_times_a_minute_apart_are_two_windows(world, gap, expected):
+    reset = T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T08:00:00Z', 1, 50, None, reset), row('2026-10-13T09:00:00Z', 2, 51, None, reset + gap)])
+    assert len(world.report('--day', DAY)['subscription']['week_segments']) == expected
+
+
+def test_a_measurement_without_reset_time_takes_the_one_of_the_rhythm_of_a_later_recorded_one(world):
+    reset = T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T08:00:00Z', 1, 50), row('2026-10-13T09:00:00Z', 2, 51, None, reset)])
+    assert segments(world.report('--day', DAY)) == [(50, 51, reset)]
+
+
+@pytest.mark.parametrize('second_value, expected', [(51, [(50, 51, 1)]), (3, [(50, 50, None), (3, 3, 1)])])
+def test_archived_windows_with_and_without_reset_time_join_unless_the_value_fell(world, second_value, expected):
+    reset = T('2026-10-19T07:00:00Z')
+
+    def day(name, value, resets):
+        point = {'t': T(f'{name}T10:00:00Z'), 'value': value}
+        stats = {'abo': {'weeks': [{'start': point, 'end': point, 'resets': resets}]}}
+        return json.dumps({'v': 1, 'day': name, 'stats': stats})
+
+    world.log.mkdir(parents=True)
+    (world.log / ARCHIVE).write_text(day('2026-10-12', 50, None) + '\n' + day('2026-10-13', second_value, reset) + '\n',
+                                     encoding='utf-8')
+    world.projects.mkdir()
+    found = segments(world.report('--since', '2026-10-12', '--until', '2026-10-13'))
+    assert found == [(start, end, reset if known else None) for start, end, known in expected]
+
+
+def test_the_reset_of_the_usage_file_marks_the_weekly_windows_when_the_measurements_carry_none(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    world.history([row('2026-10-12T05:00:00Z', 1, 40), row('2026-10-12T06:00:00Z', 2, 41),
+                   row('2026-10-12T08:00:00Z', 3, 42)])
+    data = world.report('--since', '2026-10-12', '--until', '2026-10-12')
+    assert segments(data) == [(40, 41, T('2026-10-12T07:00:00Z')), (42, 42, T('2026-10-19T07:00:00Z'))]
+    (world.root / 'usage.json').unlink()
+    assert segments(world.report('--since', '2026-10-12', '--until', '2026-10-12')) == [(40, 42, None)]
+
+
+def test_a_recorded_reset_time_beats_the_derived_one(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    recorded = T('2026-10-19T09:00:00Z')
+    world.history([row('2026-10-12T05:00:00Z', 1, 40, None, recorded), row('2026-10-12T08:00:00Z', 3, 42, None, recorded)])
+    assert segments(world.report('--since', '2026-10-12', '--until', '2026-10-12')) == [(40, 42, recorded)]
+
+
+def test_the_value_before_the_period_is_the_start_only_in_the_same_derived_window(world):
+    put_usage_file(world, T('2026-10-19T07:00:00Z'))
+    # the weekly window changes at 07:00
+    world.history([row('2026-10-18T21:00:00Z', 1, 60), row('2026-10-19T08:00:00Z', 2, 61)])
+    assert segments(world.report('--day', '2026-10-19')) == [(61, 61, T('2026-10-26T07:00:00Z'))]
+    world.history([row('2026-10-12T21:00:00Z', 1, 50), row('2026-10-12T23:00:00Z', 2, 51)])
+    assert segments(world.report('--day', DAY)) == [(50, 51, T('2026-10-19T07:00:00Z'))]
+
+
+def test_the_split_week_line_survives_the_archive_and_the_segments_of_two_days_join(world):
+    old, new = T('2026-10-12T22:30:00Z'), T('2026-10-19T22:30:00Z')
+    five = T('2026-10-13T01:00:00Z')
+    world.history([row('2026-10-12T20:00:00Z', 5, 80, five, old), row('2026-10-12T22:00:00Z', 6, 90, five, old),
+                   row('2026-10-12T23:00:00Z', 7, 2, five, new), row('2026-10-13T08:00:00Z', 8, 9, five, new)])
+    live = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert segments(live) == [(80, 90, old), (2, 9, new)]
+    spend(world, ('2026-10-12T21:00:00Z', 1.0), ('2026-10-13T07:00:00Z', 1.0))
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    (world.log / 'usage-history.jsonl').unlink()
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    archived = world.report('--since', '2026-10-12', '--until', '2026-10-13')
+    assert archived['coverage']['archive_days'] == ['2026-10-12', '2026-10-13']
+    assert archived['subscription'] == live['subscription']
+
+
+@pytest.mark.parametrize('second_value, expected', [(51, [(50, 51, None)]), (3, [(50, 50, None), (3, 3, None)])])
+def test_segments_without_reset_times_join_over_midnight_unless_the_value_fell(world, second_value, expected):
+    world.history([row('2026-10-12T21:00:00Z', 1, 50), row('2026-10-12T23:00:00Z', 2, second_value)])
+    spend(world, ('2026-10-12T21:30:00Z', 1.0), ('2026-10-12T23:30:00Z', 1.0))
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    (world.log / 'usage-history.jsonl').unlink()
+    assert segments(world.report('--since', '2026-10-12', '--until', '2026-10-13')) == expected
 
 
 def test_without_any_measurement_the_subscription_is_empty(world):
     abo = day_report(world, paid('2026-10-13T10:00:00Z', 'a', 1.0))['subscription']
-    assert abo == {'week_start': None, 'week_end': None, 'week_resets': None, 'five_windows': []}
+    assert abo == {'week_segments': [], 'five_windows': []}
 
 
 def test_a_window_without_reset_times_starts_when_the_value_falls(world):
@@ -826,7 +933,7 @@ def test_before_the_history_the_usage_line_of_the_transcripts_is_the_measurement
     data = world.report('--day', DAY)
     assert data['allocation']['five']['counted_points'] == 4
     assert data['clis'][0]['estimated_share']['five'] == pytest.approx(4.0)
-    assert data['subscription']['week_end'] == {'at': '2026-10-13T08:10:00Z', 'value': 21}
+    assert data['subscription']['week_segments'][-1]['end'] == {'at': '2026-10-13T08:10:00Z', 'value': 21}
 
 
 def test_unreadable_usage_lines_are_skipped(world):
@@ -1173,7 +1280,10 @@ def test_a_broken_archived_day_is_skipped_and_counted(world):
     {'requests': 3, 'cost': 1.0, 'tokens': {'input': 5}, 'clis': {'a': {'start': 1}}},
     {'tokens': 5}, {'tokens': {'input': 'x'}}, {'cost': 'x'}, {'clis': [1]}, {'clis': {'a': {'start': 1}}},
     {'clis': {'a': {'label': 5, 'start': 1}}}, {'clis': {'a': {'label': 'x', 'start': 1, 'tokens': 7}}}, {'abo': 5},
-    {'abo': {'week_start': {'t': 'x', 'value': 1}}}, {'abo': {'week_resets': 'x'}},
+    {'abo': {'weeks': 5}},
+    {'abo': {'weeks': [{'start': {'t': 'x', 'value': 1}, 'end': {'t': 1, 'value': 1}, 'resets': None}]}},
+    {'abo': {'weeks': [{'start': {'t': 1, 'value': 1}}]}},
+    {'abo': {'weeks': [{'start': {'t': 1, 'value': 1}, 'end': {'t': 1, 'value': 1}, 'resets': 'x'}]}},
     {'abo': {'five_windows': [{'resets': None, 'first': 'x', 'peak': 1, 'peak_at': 1}]}},
     {'abo': {'five_windows': [{'resets': 'x', 'first': 1, 'peak': 1,
                                'peak_at': 1}]}}, {'abo': {'five_windows': [{'first': 1}]}}])
@@ -1206,8 +1316,9 @@ def test_a_window_over_midnight_is_one_window_after_merging_two_archived_days(wo
     window, = merged['subscription']['five_windows']
     assert window['first_seen'] == '2026-10-12T20:00:00Z' and window['peak'] == max(first_peak, second_peak)
     assert window['peak_at'] == ('2026-10-12T22:30:00Z' if second_peak > first_peak else '2026-10-12T21:00:00Z')
-    assert merged['subscription']['week_start'] == {'at': '2026-10-12T20:00:00Z', 'value': 40}
-    assert merged['subscription']['week_end'] == {'at': '2026-10-12T23:30:00Z', 'value': 43}
+    segment, = merged['subscription']['week_segments']
+    assert segment['start'] == {'at': '2026-10-12T20:00:00Z', 'value': 40}
+    assert segment['end'] == {'at': '2026-10-12T23:30:00Z', 'value': 43}
 
 
 def test_archived_calibration_and_windows_merge_into_a_week(world):
@@ -1522,7 +1633,7 @@ def test_the_log_folder_is_found_like_log_summary_finds_it(world, monkeypatch, t
     world.projects.mkdir()
     code = report_module.main(world.args('--json', '--day', DAY, '--config', str(config)), now=NOW)
     data = json.loads(world.capsys.readouterr().out)
-    assert code == 0 and data['subscription']['week_end']['value'] == 20
+    assert code == 0 and data['subscription']['week_segments'][-1]['end']['value'] == 20
 
 
 def test_a_missing_config_file_is_an_argument_error(world, tmp_path):

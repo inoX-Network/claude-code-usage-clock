@@ -344,8 +344,8 @@ def test_the_report_section_names_the_limits_the_code_has():
     assert f'{usage_report.MIN_SECTIONS} sections (`MIN_SECTIONS`)' in architecture
     assert f'{usage_report.MAX_GAP_S} s' in architecture
     for needle in ('usage-days.jsonl', '0600', '0700', 'never overwrites a day', 'prices.json', 'no price', 'unexplained',
-                   'spawned type', 'thinking', 'seven_day.resets_at', '`n/a`', '`null`', 'never added to the cost weight'):
+                   'spawned type', 'thinking', 'seven_day.resets_at', 'week_segments', 'then 0 % -> 12 %', '`n/a`', '`null`', 'never added to the cost weight'):
         assert needle in body, needle
     for needle in ('O_APPEND|O_NOFOLLOW', 'flock', 'half merged', 'attributed + rest', 'spawnedAgentType', 'customAgentType',
-                   'thinking_tokens', 'web_search_requests', 'thinking_out'):
+                   'thinking_tokens', 'web_search_requests', 'thinking_out', 'abo.weeks', 'week_segments'):
         assert needle in architecture, needle

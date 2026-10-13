@@ -378,7 +378,11 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
   taken of the output of those requests.
 - **Subscription:** the weekly value at the start and at the end of the period, and the 5h windows with their
   peak. They come from the measurement history; for the time before the history began, from the usage line of
-  the usage clock in the transcripts. A weekly difference across a weekly reset means nothing.
+  the usage clock in the transcripts. A weekly reset inside the period splits the week line into windows (`Week: 90 % ->
+  100 % (+10 points) until Tue 13 Oct 14:00, then 0 % -> 12 % (+12 points)`), nothing is subtracted across the reset.
+  The reset time is the recorded one, else derived from a known weekly reset time (the history's or the usage file's)
+  in steps of seven days; with none, a fall of the value starts a new window. The JSON lists the windows as
+  `week_segments` with `start`, `end` and `reset_at`.
 - **Per CLI:** a CLI is a main session with its subagents, named by the folder, the first 8 characters of the
   session id and its start. A subagent is listed under its agent type: the spawned type, else the custom type, else
   the plain `agentType` of its `agent-*.meta.json`; a name given to a subagent is never shown. Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
@@ -388,7 +392,9 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
   with no request in between is **unexplained** (another app, a request without a transcript) and is not shared.
   Stretches that contain a reset, or last longer than 60 minutes, do not count. Attributed plus unexplained is
   always the measured rise.
-- **Calibration:** USD per point, a regression through zero over the stretches in which only one CLI was active.
+- **Calibration:** USD per point, a regression through zero over the stretches in which only one CLI was active. It
+  regresses the rise on the cost and inverts the slope, because the rounding to whole points is in the rise, not in
+  the cost.
   Below 50 such stretches it says "not calibrated yet". A model is listed only with 50 stretches of its own.
 - **Gates:** how many starts the spawn gate allowed, warned about, asked about and denied, and the warnings of the
   soft stop (in `shadow` mode these are the decisions it would have made).
