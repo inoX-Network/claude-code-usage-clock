@@ -19,7 +19,8 @@ for the week: --week-ok-until=YYYY-MM-DD (up to and including that day only a wa
 command in settings.json, where the model cannot set it if settings.json is protected). Without it
 `thresholds.week_action` decides: warn, ask (Claude Code's permission prompt, which only a human can answer;
 denied in permission modes that may skip the prompt, see ASK_SHOWN) or deny.
-In shadow mode everything is only logged.
+In shadow mode nothing is blocked: every decision is logged, and deny, ask and warn reach the model as a
+note of what enforce would have done (_hookio.shadow_note).
 """
 import json
 import os
@@ -165,6 +166,9 @@ def main() -> int:
         return 0
     _hookio.log_decision('spawn_gate', args['mode'], hook_input, decision, reason)
     if args['mode'] != 'enforce':
+        if decision in _hookio.SHADOW_PHRASES:
+            _hookio.emit_context(EVENT, _hookio.shadow_note('Spawn gate', 'this start', decision, reason,
+                                                            'Tell the user in one sentence.'))
         return 0
     if decision == 'deny':
         _hookio.emit_deny(EVENT, reason)

@@ -3,6 +3,9 @@
 Claude Code shows you your usage. This makes the model see it too, and lets two gates decide from those numbers
 whether new agents may start and running ones keep working.
 
+A first install runs the gates in shadow mode: nothing is blocked yet, and the model tells you each time a gate
+would have stepped in. Switch to `enforce` once the log looks right ([From shadow to enforce](#from-shadow-to-enforce)).
+
 ![The status line: model, 5h usage with reset time, weekly usage, context size and prompt cache clock](docs/images/statusline.png)
 
 The status line in a real session: the five-hour window at 57 % (yellow from 50 %) resets at 22:40, the week is
@@ -25,8 +28,10 @@ repo closes that gap with a status line and four hooks (five parts):
 On top of these there is one optional helper that needs no settings entry: the [wake-up
 watcher](#the-wake-up-watcher), off by default.
 
-"Log only" (`shadow` mode) means the gates decide and write their decision to a log, but block nothing. Run
-them that way for a while, read the log, then switch to `enforce`.
+"Log only" (`shadow` mode) means the gates decide and write their decision to a log, but block nothing. When a
+gate would have denied, asked or warned, the model gets a short note instead ("Spawn gate (shadow mode, information
+only): in enforce mode this start would have been denied. Reason: …") and tells you, or a subagent mentions it
+in its report. Run them that way for a while, read the log, then switch to `enforce`.
 
 ## Requirements
 

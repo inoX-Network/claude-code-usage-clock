@@ -320,3 +320,23 @@ def test_log_dir_env_override_and_config_default(tmp_path, monkeypatch):
     assert _hookio.log_dir() == str(tmp_path / 'home' / 'mylogs')
     monkeypatch.setenv('CCUC_LOG_DIR', '~/fromenv')
     assert _hookio.log_dir() == str(tmp_path / 'home' / 'fromenv')
+
+
+# --- shadow_note ------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('action,phrase', [('deny', 'would have been denied'),
+                                           ('ask', "would have needed the user's approval"),
+                                           ('warn', 'would have come with a warning')])
+def test_the_shadow_note_says_what_enforce_would_have_done(action, phrase):
+    assert _hookio.shadow_note('Spawn gate', 'this start', action, 'Too much.', 'Tell the user.') == (
+        f'Spawn gate (shadow mode, information only): in enforce mode this start {phrase}. Reason: Too much. '
+        'Nothing was blocked. Tell the user. The gates stay in shadow mode until the user runs tools/install.py '
+        '--mode enforce.')
+
+
+@pytest.mark.parametrize('reason,shown', [('no full stop', 'no full stop.'), ('Allow it?', 'Allow it?'),
+                                          ('Stop!', 'Stop!'), ('  spaced.  ', 'spaced.'), ('', '(none).')])
+def test_the_reason_in_the_shadow_note_always_ends_a_sentence(reason, shown):
+    note = _hookio.shadow_note('Soft stop', 'this call', 'deny', reason, 'Mention it.')
+    assert f'Reason: {shown} Nothing was blocked.' in note
+
