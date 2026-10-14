@@ -390,7 +390,7 @@ class Data:
                     self.label[request.session] = folder
             if not request.sub:
                 self.first_main.setdefault(request.session, index)
-        self.start_indices = sorted(first_of.values())
+        self.start_indices = list(first_of.values())
         self.start_times = [self.times[index] for index in self.start_indices]
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
@@ -775,7 +775,7 @@ def _starts_between(data: Data, prices: list[dict], start: float, end: float) ->
     starts = []
     for index in data.start_indices[lo:hi]:
         request = data.requests[index]
-        starts.append({'t': request.ts, 'session': request.session[:8], 'type': request.agent_type if request.sub else None,
+        starts.append({'t': request.ts, 'session': request.session[:8], 'type': request.agent_type,
                        'model': _model_name(_price_of(data, prices, request.model), request.model),
                        'input': request.tokens[0], 'cache_write': request.tokens[1] + request.tokens[2],
                        'cache_read': request.tokens[3]})

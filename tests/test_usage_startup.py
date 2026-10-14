@@ -284,7 +284,7 @@ def test_an_archived_start_of_the_wrong_shape_makes_the_line_unreadable(world, f
     assert len(data['startup']['starts']) == 6                       # computed from the transcripts instead
 
 
-@pytest.mark.parametrize('starts', [{'t': 1}, 'many', [7], [[1, 2]]])
+@pytest.mark.parametrize('starts', [{'t': 1}, {}, '', 'many', [7], [[1, 2]]])
 def test_archived_starts_that_are_no_list_of_starts_make_the_line_unreadable(world, starts):
     startup_world(world)
     assert report_module.main(world.args('--archive'), now=NOW) == 0
@@ -317,6 +317,7 @@ def estimate_world(world, tmp_path):
     work.mkdir(parents=True)
     put(user / 'CLAUDE.md', 'g' * 230)
     put(user / 'rules' / 'a.md', 'r' * 115)
+    put(user / 'rules' / 'notes.txt', 'n' * 50)                       # not a markdown file: no rule
     put(user / 'rules' / 'sub' / 'scoped.md', f'---\npaths:\n  - "src/**"\n---\n{SECRET}' + 's' * 500)
     put(tmp_path / 'work' / 'CLAUDE.md', 'q' * 23)
     put(work / 'CLAUDE.md', 'p' * 460)
@@ -588,3 +589,27 @@ def test_a_file_that_cannot_be_opened_counts_nothing(world, tmp_path, monkeypatc
     monkeypatch.setattr(report_module, 'open', refuse, raising=False)
     assert [f['file'] for f in estimate(world, user)['parts'][0]['files']] == [
         '~/.claude/CLAUDE.md', '~/.claude/rules/a.md', '../CLAUDE.md']
+
+
+def test_a_start_at_midnight_belongs_to_the_day_that_begins(world):
+    world.transcript('-p-a', 'aaaaaaaa-1', [req('2026-10-12T22:00:00Z', 'a1', inp=1, request='r1')])     # 00:00 on 13th
+    world.transcript('-p-a', 'bbbbbbbb-1', [req('2026-10-13T21:59:59Z', 'b1', inp=2, request='r2')])     # 23:59:59 on 13th
+    world.transcript('-p-a', 'cccccccc-1', [req('2026-10-13T22:00:00Z', 'c1', inp=3, request='r3')])     # 00:00 on 14th
+    assert [s['tokens']['total'] for s in startup(world, '--day', DAY)['starts']] == [1, 2]
+    assert [s['tokens']['total'] for s in startup(world, '--day', '2026-10-14')['starts']] == [3]
+    assert startup(world, '--day', '2026-10-12')['starts'] == []
+
+
+def test_the_types_are_listed_with_the_most_starts_first(world):
+    world.transcript('-p-a', 'aaaaaaaa-1', [req('2026-10-13T08:00:00Z', 'a1', inp=5, request='r1')])
+    for number, kind in enumerate(('alpha', 'zeta', 'zeta'), 1):
+        world.transcript('-p-a', 'aaaaaaaa-1', [req(f'2026-10-13T08:0{number}:00Z', f'z{number}', inp=5,
+                                                    request=f'rz{number}')], sub=f'z{number}', meta={'agentType': kind})
+    assert list(startup(world, '--day', DAY)['subagents']['by_type']) == ['zeta', 'alpha']
+
+
+def test_the_subagent_types_of_an_estimate_come_in_name_order_whatever_the_order_given(world, tmp_path):
+    user, work = estimate_world(world, tmp_path)
+    data = report_module.estimate_start('proj-x', str(work), str(user), str(world.projects), 2.3,
+                                        ['agent-b', 'Explore', 'agent-a'])
+    assert [s['type'] for s in data['subagents']] == ['agent-a', 'agent-b']
