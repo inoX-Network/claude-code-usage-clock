@@ -23,9 +23,10 @@ tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
   log_summary.py          summarises the JSONL log
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
-  usage_report.py         what was used per day, week, month and CLI, from the transcripts (read only; --archive writes the day archive)
+  usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
   prices.json             API prices per million tokens for usage_report.py, with source and date
 docs/agents.md            how to give agents model and effort, for users and for the model
+docs/report-format.md     what every line of the usage report and every field of its JSON means (units, source, measured or estimated)
 tests/                    pytest, synthetic data only
 config.example.json       every key with its default
 ```
@@ -489,9 +490,48 @@ twice, a day is never overwritten). Like the measurement history the file is 060
 `O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off
 last line gets a line break first.
 
-**Output.** Text (English) or `--json` with the sections `period`, `coverage`, `subscription`, `total`, `clis`,
-`allocation`, `calibration`, `guards` in this order. Exit codes: 0 report, 1 no transcripts folder (and no archived day
+**Projects.** A project is the folder name of a CLI (its `label`), for everyone and without a setting; CLIs of the same label
+are one project. The report knows no paths: folders of the same name in different places fall together. The grouping is made
+when the report is built, so the archive holds no projects. The table shortens a name longer than `NAME_WIDTH` (30) in the
+middle (`_shorten`: the first `NAME_WIDTH // 2` characters, `…`, the last `NAME_WIDTH - 1 - NAME_WIDTH // 2`); names whose short forms
+are equal stay whole (`short_names`). Only the table is shortened: the JSON, `--full` and the `Details:` line have full names.
+
+**Overview.** `build_overview(period, report, start_block_5h)` makes `report['overview']` from the other sections of the same
+report and `render_overview` prints that object alone, so the JSON object is the text. Projects are summed from their
+CLIs (cost, estimated points, tokens for the cache hit rate), sorted by `(-cost_usd, name)`; the first `MAX_PROJECTS` (5) are rows, the
+others are the sum `more`. Points and costs below the display thresholds are formatted by `points_text` (`0`, `<1`,
+else the number with one decimal) and `usd_text`. **Notable** has five rules, always evaluated in this order and each
+on its own: (1) per gate (`spawn_gate`, `soft_stop`) and mode, `deny` and `ask` counts above 0; (2) 5h windows whose
+`peak` is at least `thresholds.start_block_5h` (one line); (3) projects whose cache hit rate is below `CACHE_LOW` (0.9),
+one line, rates rounded down; (4) the first project if its share is above 0.5; (5) `allocation.*.unexplained_points`
+above 0 for the week or the 5h limit. A rule that hits adds the lines to `overview.notable` (`rule`, `text` and its
+numbers); no hit, no `Notable` block.
+
+**Gate reasons.** `read_guard_log` keeps, for `warn`, `ask` and `deny`, `reason_kind(reason)`: the text before the first
+colon, `\d+(\.\d+)? ?%` replaced by `N %`, characters outside `[\w .,…()/+%-]` replaced by `?`, cut to 60 characters,
+the first letter in lower case; empty gives `no reason`. They are counted in `stats['guard_reasons']`
+(`hook -> mode -> decision -> reason -> count`), a second figure set next to `guards`, mergeable and archived with the
+day. An archived day of an earlier version has no `guard_reasons`: it merges (the key is optional) and its decisions
+show as `reason not recorded` (decisions minus the sum of the reasons, per gate, mode and decision; `reason_counts`).
+The reason text is the gate's own log text; a log line never carries values of the input (see Log), so this is no text
+of a transcript.
+
+**Details.** `--project NAME` matches a project whose name is `NAME` or starts with it (an exact name wins over longer names it
+starts; several fit: an error with the candidates, exit 2); `--session ID` matches a CLI whose 8-character id starts
+with `ID` or is a prefix of `ID` (a full session id works), case-sensitive, and must be unique among the CLIs left by
+`--project` (`select_clis` raises `SelectionError`, which `main` turns into `parser.error`, exit 2: none, several with
+the candidates, empty text). The output is the head of `--full`, the `By CLI` blocks of the selected CLIs (the same
+function `_cli_block` as `--full`) and `Sum of N CLIs`: the raw figures of the selected CLIs merged with `_merge_cli` and
+printed as one block. `--json` takes none of `--full`, `--project`, `--session` (exit 2), and `--archive` none of them.
+
+**Output.** Text (English) or `--json` with the sections `schema_version`, `period`, `coverage`, `overview`, `subscription`,
+`total`, `clis`, `allocation`, `calibration`, `guards`, `guard_reasons` in this order (`SCHEMA_VERSION` changes
+only when a field is renamed or removed). The text is, without a switch, the overview; `--full` is the former report with
+these differences: a 5h window names weekday and date of its peak; estimates below one point read `<1` (`~` only for
+a number from 1); the per-day calibration lists days with at least `MIN_DAY_SECTIONS` (20) stretches; the `Gates` heading has
+no sentence about the mode, each gate says its mode and gives its reasons. Exit codes: 0 report, 1 no transcripts folder (and no archived day
 to use; an empty folder is an empty report) or an unreadable `prices.json` or an archive that cannot be written, 2 bad arguments.
+`docs/report-format.md` explains every line and field for readers.
 
 ## Known limits
 

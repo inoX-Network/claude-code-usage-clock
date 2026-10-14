@@ -313,14 +313,69 @@ never message text: per request only the token counts, the model, the time, the 
 the CLI), the ids that tell requests apart and, for a subagent, its agent type.
 
 ```sh
-python3 tools/usage_report.py                       # today
+python3 tools/usage_report.py                       # today, as an overview
 python3 tools/usage_report.py --day 2026-01-14
 python3 tools/usage_report.py --week                # the subscription week, up to the weekly reset time
 python3 tools/usage_report.py --month 2026-01
 python3 tools/usage_report.py --since 2026-01-05 --until 2026-01-11
-python3 tools/usage_report.py --json                # the same figures for other tools
+python3 tools/usage_report.py --week --project shop     # the details of one project (as in --full) and their sum
+python3 tools/usage_report.py --week --session 5f3a     # the details of one session: any start of its id
+python3 tools/usage_report.py --week --full             # every figure
+python3 tools/usage_report.py --json                # the same figures for other tools, the overview included
 python3 tools/usage_report.py --archive             # see below
 ```
+
+### The overview
+
+Without a switch the report is an overview that anyone can read at a glance, about 20 lines. An example, with
+invented numbers (every column and line is explained in [`docs/report-format.md`](docs/report-format.md)):
+
+```
+Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
+5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
+
+Where it went            USD   share  ~week pts  sessions
+  0016                    60    60 %       20.0         1
+  0034                    29    29 %       18.0         2
+  0022                   6.0     6 %         <1         1
+  0050                   3.0     3 %         <1         1
+  0051                   1.5     1 %         <1         1
+  2 more                0.75    <1 %         <1         2
+
+Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
+Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
+
+Notable
+  spawn gate denied 2 agent starts (5h window at N %: 2)
+  spawn gate asked before 1 agent start (7-day window at N %: 1)
+  soft stop denied 4 subagent tool calls (checkpoint due: 3, usage pause: 1)
+  soft stop would have denied 2 subagent tool calls (checkpoint due: 2; shadow mode, nothing was blocked)
+  one 5h window reached 82 % (Tue 13 Oct)
+  cache hits under 90 %: 0034 80 %
+  0016 made 60 % of the cost (60 USD)
+
+Details: --project 0016 · --session aaaaaaaa · --full
+```
+
+- **Where it went:** the projects by cost at API prices (the **cost weight**, see below), the five largest as rows and
+  the rest as one line. A project is the name of the folder a session ran in, the same for everyone and without a
+  setting: the report shows where you worked. It knows no paths, so folders of the same name in different places are one
+  project. A name longer than 30 characters loses its middle for a `…` in the table (`my-company-fron…dmin-dashboard`); the
+  JSON, `--full` and the `Details:` line always have the full name, and two projects that would look the same after
+  shortening are both shown whole. `~week pts` is the estimated share of the weekly limit, in points (1 point
+  = 1 percentage point of the week); `<1` is less than one point.
+- **Notable:** a line appears only if one of these fixed rules hits, and then for everything it hits, however small
+  the project: a gate denied or asked about something (with the reasons, see below), a 5h window reached
+  `thresholds.start_block_5h` (default 75 %), a project's cache hit rate is below 90 %, one project made more than half
+  of the cost, or the subscription rose with no request with a price in between ("unexplained"). Without a hit the
+  block is left out.
+- **Details:** `--project NAME` (the full name of the project, or the beginning of it) and `--session ID` (the
+  beginning of a session id). Either must be unique, else the report lists the candidates and stops with exit code 2.
+  They print the blocks that
+  `--full` has for those sessions, and their sum. They combine with every period and with each other. `--json` has
+  all projects and sessions in one object and takes none of the three.
+
+### The full report
 
 Days are local days. `--week` is the subscription week, not the calendar week: it ends at the weekly reset time
 that the measurement history last saw, else the one in the shared usage file (`seven_day.resets_at`), and counts on in
@@ -337,7 +392,7 @@ Sources: 3 transcript file(s) read
 Subscription
   Week: 31 % -> 37 % (+6 points), resets Mon 19 Jan 09:00
   5h windows: 1
-    reset 13:00, peak 61 % at 11:10 (first seen 08:00)
+    reset 13:00, peak 61 % at Wed 14 Jan 11:10 (first seen 08:00)
 
 Total
   Requests: 49 (main 43, subagents 6)
@@ -374,9 +429,12 @@ Calibration (USD per point, from stretches in which only one CLI was active)
   5h: not calibrated yet (30 of 50 stretches)
   week: not calibrated yet (30 of 50 stretches)
 
-Gates (in shadow mode a decision is logged, nothing is blocked)
-  spawn gate (shadow): allowed 7, warned 1, asked 0, denied 1
-  soft stop (shadow): warnings 1, denied 0
+Gates
+  spawn gate (shadow mode, only logged): allowed 7, warned 1, asked 0, denied 1
+      warned by reason: call model: 1
+      denied by reason: 5h window at N %: 1
+  soft stop (shadow mode, only logged): warnings 1, denied 0
+      warned by reason: checkpoint due: 1
 ```
 
 - **Measured:** requests, tokens by kind (cache writes of 5 minutes and 1 hour apart), the share of the output that
@@ -415,9 +473,15 @@ Gates (in shadow mode a decision is logged, nothing is blocked)
 - **Calibration:** USD per point, a regression through zero over the stretches in which only one CLI was active. It
   regresses the rise on the cost and inverts the slope, because the rounding to whole points is in the rise, not in
   the cost.
-  Below 50 such stretches it says "not calibrated yet". A model is listed only with 50 stretches of its own.
-- **Gates:** how many starts the spawn gate allowed, warned about, asked about and denied, and the warnings of the
-  soft stop (in `shadow` mode these are the decisions it would have made).
+  Below 50 such stretches it says "not calibrated yet". A model is listed only with 50 stretches of its own. In the text,
+  a day is listed only with at least 20 stretches (the JSON lists every day with its count).
+- **Small estimates:** an estimate below one point is written `<1`, not `~0.0` or `~1.0`: a session's share of a
+  rise of a few points is not known to a tenth.
+- **Gates:** how many starts the spawn gate allowed, warned about, asked about and denied, and the warnings and
+  denials of the soft stop, per gate and mode (in `shadow` mode these are the decisions it would have made), and for
+  every warning, question and denial **by reason**: the text of the gate's own log line before its first colon, with
+  percentages written as `N %` (`checkpoint due`, `usage pause`). Days archived by an earlier version have no reasons; their
+  decisions count as `reason not recorded`.
 
 Claude Code deletes old transcripts (after 30 days by default). `--archive` keeps what a finished day showed: it
 writes every finished day that is not in `<log_dir>/usage-days.jsonl` yet, never overwrites a day, and prints
@@ -427,6 +491,20 @@ deleted by now), so a month stays whole; a line of another format, or one that d
 an archive line (it is counted as unreadable and its day is computed from the transcripts). The
 archive holds the figures only (no text), is private to you (mode 0600, folder 0700) and is opened without
 following links.
+
+### Ask your agent about your usage
+
+The JSON is made for an agent to read: [`docs/report-format.md`](docs/report-format.md) explains every field (its unit,
+where it comes from, whether it is measured or estimated). Give your agent that file and the output, for example:
+
+> Read `docs/report-format.md` in the claude-code-usage-clock folder. Then run
+> `python3 tools/usage_report.py --week --json` and tell me in plain words where my usage went this week: which
+> projects cost the most, and whether anything in `overview.notable` needs my attention. Say which numbers are measured
+> and which are estimates.
+
+The report reads only local files: the Claude Code transcripts (numbers only, never message text), the measurement
+history, the day archive and the log of the gates. It makes no model call and sends nothing anywhere; your agent sees
+the same numbers you do.
 
 ## Configuration
 

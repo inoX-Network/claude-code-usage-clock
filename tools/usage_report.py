@@ -6,14 +6,18 @@ requests apart, the agent type of a subagent, the usage line of this tool, and t
 of the hooks. It never reads or prints message text.
 
 Usage: python3 usage_report.py [--day [YYYY-MM-DD] | --week | --month [YYYY-MM] | --since YYYY-MM-DD [--until YYYY-MM-DD]]
-                               [--json] [--projects-dir DIR] [--config PATH]
+                               [--full | --project NAME | --session ID | --json] [--projects-dir DIR] [--config PATH]
        python3 usage_report.py --archive [--projects-dir DIR] [--config PATH]
 
 The default is today. Days are local days; --week is the subscription week that ends at the weekly reset time
 (from the measurement history, else from the usage file; not a calendar week); --since and --until are whole days,
-both included. --json prints the same figures as a stable JSON object. --archive writes every finished day that is not
-in <log_dir>/usage-days.jsonl yet and prints nothing: Claude Code deletes transcripts after about 30 days, the archive
-keeps the day figures (run it daily).
+both included. Without a switch the report is an overview of about 20 lines: the projects by cost, what is notable.
+--full prints every figure, --project and --session (a prefix of the session id) print the blocks of --full for those
+sessions and their sum. --json prints the same figures as a stable JSON object, including the overview (see
+docs/report-format.md). --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
+nothing: Claude Code deletes transcripts after about 30 days, the archive keeps the day figures (run it daily).
+A project is the name of the folder a session ran in (the report knows no paths: folders of the same name
+in different places are one project).
 
 The cost weight is what the tokens would cost at API prices (tools/prices.json); a model without a price is shown
 with its tokens as "no price", never estimated. The subscription rise per CLI is an ESTIMATE (marked ~): the rise of
@@ -55,6 +59,13 @@ MAX_GAP_S = 3600            # a longer stretch between two measurements is too c
 RESET_TOLERANCE_S = 60      # reset times closer than this belong to the same window (as in _usage.py)
 COLD_START_TOKENS = 50_000  # a request that writes at least this much cache, after the first, is a cold start
 MIN_SECTIONS = 50           # sections with a single CLI needed before a cost per point is shown
+MIN_DAY_SECTIONS = 20       # sections a day needs before its cost per point is listed in the text
+MAX_PROJECTS = 5            # projects with a row in the overview; the rest is one line
+NAME_WIDTH = 30             # characters of a project name in the overview table; a longer one is shortened in the middle
+CACHE_LOW = 0.9             # a project whose cache hit rate is below this is notable
+MAX_REASONS = 3             # reasons named in a notable line; the rest is "other"
+REASON_LENGTH = 60          # characters of a reason kept
+SCHEMA_VERSION = 1          # of the JSON object; changes when a field is renamed or removed
 FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
 WEEK_S = 7 * 86400
 RECOVERY_S = 900           # a stale number is followed by the real one within this time
@@ -76,6 +87,11 @@ AGENT_TYPE_KEYS = ('spawnedAgentType', 'customAgentType', 'agentType')     # the
 AGENT_TYPE = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
 MODEL_NAME = re.compile(r'[A-Za-z0-9_.:/-]{1,64}')
 WORD = re.compile(r'[a-z_]{1,20}')
+PERCENT = re.compile(r'\d+(?:\.\d+)? ?%')
+REASON_CHARS = re.compile(r'[^\w .,…()/+%-]')
+NUMBER = re.compile(r'(?<![\w.-])\d+(?:\.\d+)?(?![\w.-])')      # a number of its own, not the 5 of `5h` or `7-day`
+QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # names and values a gate quotes in its reason
+REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
 
@@ -103,10 +119,13 @@ def day_bounds(day: date) -> tuple[float, float]:
     return day_start(day), day_start(day + timedelta(days=1))
 
 
-def clock(ts: float, with_date: bool = False) -> str:
+def day_text(ts: float) -> str:
     moment = datetime.fromtimestamp(ts)
-    stamp = f'{WEEKDAYS[moment.weekday()]} {moment.day} {MONTHS[moment.month - 1]} ' if with_date else ''
-    return f'{stamp}{moment:%H:%M}'
+    return f'{WEEKDAYS[moment.weekday()]} {moment.day} {MONTHS[moment.month - 1]}'
+
+
+def clock(ts: float, with_date: bool = False) -> str:
+    return (day_text(ts) + ' ' if with_date else '') + f'{datetime.fromtimestamp(ts):%H:%M}'
 
 
 # --- Prices ---------------------------------------------------------------------------------------------------------
@@ -335,7 +354,7 @@ class Data:
         self.times: list[float] = []
         self.measurements: list[Measurement] = []
         self.measurement_times: list[float] = []
-        self.guards: list[tuple] = []            # (time, hook, mode, decision)
+        self.guards: list[tuple] = []            # (time, hook, mode, decision, kind of reason or None)
         self.files = 0
         self.unreadable_requests = 0             # request lines that were left out because they cannot be requests
         self.week_anchor: float | None = None     # a known weekly reset time: the weekly windows follow it every 7 days
@@ -464,7 +483,9 @@ def read_guard_log(log_dir: str) -> list[tuple]:
                 row = json.loads(raw)
                 ts = parse_ts(row['time'])
                 if ts is not None and row['hook'] in ('spawn_gate', 'soft_stop'):
-                    entries.append((ts, row['hook'], _word(row.get('mode'), 'unknown'), _word(row.get('decision'), 'other')))
+                    decision = _word(row.get('decision'), 'other')
+                    entries.append((ts, row['hook'], _word(row.get('mode'), 'unknown'), decision,
+                                    reason_kind(row.get('reason')) if decision in REASONED else None))
             except (ValueError, TypeError, KeyError, RecursionError):
                 continue
     return entries
@@ -472,6 +493,16 @@ def read_guard_log(log_dir: str) -> list[tuple]:
 
 def _word(value, fallback: str) -> str:
     return value if isinstance(value, str) and WORD.fullmatch(value) else fallback
+
+
+def reason_kind(reason) -> str:
+    """The kind of a reason from the log: the text before the first colon, without percentages and numbers (`5h window
+    at 78 %` and `... at 80 %` are one kind, so are `3 agents` and `4 agents`), quoted names replaced by `…`, made
+    harmless, at most REASON_LENGTH characters, starting in lower case."""
+    prefix = reason.split(':', 1)[0] if isinstance(reason, str) else ''
+    prefix = NUMBER.sub('N', PERCENT.sub('N %', QUOTED.sub('…', prefix)))
+    prefix = REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]
+    return prefix[:1].lower() + prefix[1:] or 'no reason'
 
 
 def parse_archive_line(raw: str) -> tuple[str, dict]:
@@ -524,7 +555,7 @@ def new_stats() -> dict:
             'alloc': {m: {'counted': 0.0, 'attributed': 0.0, 'rest': 0.0, 'skipped_sections': 0, 'skipped_points': 0.0}
                       for m in METRICS},
             'cal': {m: {'all': new_sums(), 'models': {}, 'days': {}} for m in METRICS},
-            'guards': {}}
+            'guards': {}, 'guard_reasons': {}}
 
 
 def _add_counts(target: dict, extra) -> None:
@@ -619,19 +650,25 @@ def merge_stats(target: dict, extra) -> None:
     target['requests'] += extra.get('requests', 0)
     target['cost'] += extra.get('cost', 0)
     target['cold_starts'] += extra.get('cold_starts', 0)
-    for key in ('extra', 'tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards'):
-        _add_counts(target[key], extra.get(key, {}))
+    for key in ('extra', 'tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards',
+                'guard_reasons'):
+        _add_counts(target[key], extra.get(key, {}))      # an archived day of an older version lacks the reasons
     for ident, cli in extra.get('clis', {}).items():
-        if not (isinstance(cli['label'], str) and _is_number(cli['start'])):
-            raise TypeError(ident)
-        mine = target['clis'].setdefault(ident, new_cli(cli['label'], cli['start']))
-        mine['start'] = min(mine['start'], cli['start'])
-        for key in ('requests', 'cost', 'cold_starts', 'five_pts', 'week_pts'):
-            mine[key] += cli.get(key, 0)
-        for key in ('tokens', 'models', 'subs'):
-            _add_counts(mine[key], cli.get(key, {}))
-        _add_counts(mine, {key: cli[key] for key in DETAIL_KEYS if key in cli})
+        _merge_cli(target['clis'], ident, cli)
     _merge_abo(target['abo'], extra.get('abo', {}))
+
+
+def _merge_cli(clis: dict, ident: str, cli: dict) -> None:
+    """Adds the figures of one CLI to the CLI `ident` of `clis` (made if it is not there)."""
+    if not (isinstance(cli['label'], str) and _is_number(cli['start'])):
+        raise TypeError(ident)
+    mine = clis.setdefault(ident, new_cli(cli['label'], cli['start']))
+    mine['start'] = min(mine['start'], cli['start'])
+    for key in ('requests', 'cost', 'cold_starts', 'five_pts', 'week_pts'):
+        mine[key] += cli.get(key, 0)
+    for key in ('tokens', 'models', 'subs'):
+        _add_counts(mine[key], cli.get(key, {}))
+    _add_counts(mine, {key: cli[key] for key in DETAIL_KEYS if key in cli})
 
 
 # --- Computing the figures of intervals ---------------------------------------------------------------------------------
@@ -830,9 +867,11 @@ def compute_stats(data: Data, prices: list[dict], intervals: list[tuple[float, f
             _count_request(stats, data, prices, index)
         _count_sections(stats, data, prices, start, end)
         _merge_abo(stats['abo'], _subscription(data, start, end))
-        for ts, hook, mode, decision in data.guards:
+        for ts, hook, mode, decision, kind in data.guards:
             if start <= ts < end:
                 _add_counts(stats['guards'], {hook: {mode: {decision: 1}}})
+                if kind is not None:
+                    _add_counts(stats['guard_reasons'], {hook: {mode: {decision: {kind: 1}}}})
     return stats
 
 
@@ -905,15 +944,155 @@ def _allocation(alloc: dict) -> dict:
             'skipped_points': alloc['skipped_points']}
 
 
-def build_report(stats: dict, period: dict, coverage: dict) -> dict:
+def reason_counts(report: dict, hook: str, mode: str, decision: str) -> dict:
+    """The reasons of one decision of one gate in one mode, with the decisions of days that were archived without
+    reasons as "reason not recorded"."""
+    reasons = dict(report['guard_reasons'].get(hook, {}).get(mode, {}).get(decision, {}))
+    missing = report['guards'].get(hook, {}).get(mode, {}).get(decision, 0) - sum(reasons.values())
+    if missing > 0:
+        reasons['reason not recorded'] = missing
+    return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _reasons_text(reasons: dict, limit: int | None = None) -> str:
+    """`name n, name n`; with a limit the rest of the reasons is summed up as "other"."""
+    items = list(reasons.items())
+    if limit is not None and len(items) > limit:
+        items = items[:limit] + [('other', sum(count for _, count in items[limit:]))]
+    return ', '.join(f'{name}: {count}' for name, count in items)
+
+
+GATE_NAMES = (('spawn_gate', 'spawn gate', 'agent start'), ('soft_stop', 'soft stop', 'subagent tool call'))
+
+
+def _gate_notes(report: dict) -> list[dict]:
+    """A line for every gate and mode that denied or asked about something."""
+    notes = []
+    for hook, name, noun in GATE_NAMES:
+        for mode, counts in sorted(report['guards'].get(hook, {}).items()):
+            for decision, verb, rule in (('deny', 'denied', 'gate_denied'), ('ask', 'asked before', 'gate_asked')):
+                count = counts.get(decision, 0)
+                if not count:
+                    continue
+                reasons = reason_counts(report, hook, mode, decision)
+                shadow = mode == 'shadow'
+                note = '; ' + ('shadow mode, nothing was blocked' if shadow else f'{mode} mode') if mode != 'enforce' else ''
+                text = (f'{name} {"would have " if shadow else ""}{verb} {count} {noun}{"" if count == 1 else "s"} '
+                        f'({_reasons_text(reasons, MAX_REASONS)}{note})')
+                notes.append({'rule': rule, 'gate': hook, 'mode': mode, 'count': count, 'reasons': reasons, 'text': text})
+    return notes
+
+
+def _window_note(windows: list[dict], threshold: float) -> list[dict]:
+    hot = [w for w in windows if w['peak'] >= threshold]
+    if not hot:
+        return []
+    top = max(hot, key=lambda w: w['peak'])
+    day = day_text(parse_ts(top['peak_at']))
+    text = (f'one 5h window reached {top["peak"]:g} % ({day})' if len(hot) == 1 else
+            f'{len(hot)} 5h windows reached {threshold:g} % or more (highest {top["peak"]:g} %, {day})')
+    return [{'rule': 'five_hour_window', 'windows': len(hot), 'threshold_percent': threshold,
+             'highest_percent': top['peak'], 'highest_at': top['peak_at'], 'text': text}]
+
+
+def _cache_note(projects: list[dict]) -> list[dict]:
+    low = [{'name': p['name'], 'cache_hit_rate': p['cache_hit_rate']} for p in projects
+           if p['cache_hit_rate'] is not None and p['cache_hit_rate'] < CACHE_LOW]
+    if not low:
+        return []
+    listing = ', '.join(f'{p["name"]} {math.floor(100 * p["cache_hit_rate"])} %' for p in low)
+    return [{'rule': 'cache_hits_low', 'threshold': CACHE_LOW, 'projects': low,
+             'text': f'cache hits under {100 * CACHE_LOW:.0f} %: {listing}'}]
+
+
+def _dominant_note(projects: list[dict]) -> list[dict]:
+    top = projects[0] if projects else None
+    if top is None or top['share'] is None or top['share'] <= 0.5:
+        return []
+    return [{'rule': 'project_dominates', 'project': top['name'], 'share': top['share'], 'cost_usd': top['cost_usd'],
+             'text': f'{top["name"]} made {100 * top["share"]:.0f} % of the cost ({usd_text(top["cost_usd"])} USD)'}]
+
+
+def _unexplained_note(allocation: dict) -> list[dict]:
+    week, five = allocation['week']['unexplained_points'], allocation['five']['unexplained_points']
+    parts = [f'{name} {points_text(points)} points' for name, points in (('week', week), ('5h', five)) if points > 0]
+    if not parts:
+        return []
+    return [{'rule': 'unexplained_rise', 'week_points': week, 'five_points': five,
+             'text': f'unexplained rise (no request with a price in between): {", ".join(parts)}'}]
+
+
+def _title(period: dict) -> str:
+    label = period['label']
+    return {'day': f'Day {label}', 'month': f'Month {label}', 'range': f'Days {label}'}.get(period['kind'],
+                                                                                           label[:1].upper() + label[1:])
+
+
+def _project_row(name: str, clis: list[dict], total: float) -> dict:
+    tokens = {kind: sum(cli['tokens'][kind] for cli in clis) for kind in KINDS}
+    cost = sum(cli['cost_usd'] for cli in clis)
+    return {'name': name, 'cost_usd': cost, 'share': cost / total if total > 0 else None,
+            'week_points': sum(cli['estimated_share']['week'] for cli in clis),
+            'five_points': sum(cli['estimated_share']['five'] for cli in clis), 'sessions': len(clis),
+            'cache_hit_rate': _hit_rate(tokens), 'session_ids': [cli['id'] for cli in clis]}
+
+
+def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
+    """The overview from the other sections of the report; the text overview is made of this object alone."""
+    total, abo = report['total'], report['subscription']
+    by_project: dict[str, list[dict]] = {}
+    for cli in report['clis']:
+        by_project.setdefault(cli['label'], []).append(cli)
+    projects = sorted((_project_row(name, clis, total['cost_usd']) for name, clis in by_project.items()),
+                      key=lambda row: (-row['cost_usd'], row['name']))
+    rest = projects[MAX_PROJECTS:]
+    more = None
+    if rest:
+        cost = sum(p['cost_usd'] for p in rest)
+        more = {'projects': len(rest), 'cost_usd': cost,
+                'share': cost / total['cost_usd'] if total['cost_usd'] > 0 else None,
+                'week_points': sum(p['week_points'] for p in rest), 'five_points': sum(p['five_points'] for p in rest),
+                'sessions': sum(p['sessions'] for p in rest)}
+    segments, windows = abo['week_segments'], abo['five_windows']
+    week = None
+    if segments:
+        resets = segments[-1]['reset_at']
+        week = {'used_percent': segments[-1]['end']['value'],
+                'rise_points': sum(seg['end']['value'] - seg['start']['value'] for seg in segments),
+                'windows': len(segments), 'reset_at': resets}
+    top = max(windows, key=lambda w: w['peak'], default=None)
+    families: dict[str, float] = {}
+    for name, model in total['models'].items():
+        families[name.split()[0]] = families.get(name.split()[0], 0.0) + model['cost_usd']
+    top_type = next(iter(total['subagents']['by_type'].items()), None)
+    notable = (_gate_notes(report) + _window_note(windows, start_block_5h) + _cache_note(projects)
+               + _dominant_note(projects) + _unexplained_note(report['allocation']))
+    return {'title': _title(period), 'cost_usd': total['cost_usd'], 'week': week,
+            'five_hour': {'windows': len(windows), 'highest_percent': top['peak'] if top else None,
+                          'highest_at': top['peak_at'] if top else None},
+            'projects': projects, 'max_projects': MAX_PROJECTS, 'more': more,
+            'split': {'main_usd': total['main']['cost_usd'], 'subagents_usd': total['subagents']['cost_usd'],
+                      'top_subagent': {'type': top_type[0], 'cost_usd': top_type[1]['cost_usd']} if top_type else None},
+            'models': {'families': [{'name': name, 'cost_usd': cost} for name, cost in
+                                    sorted(families.items(), key=lambda item: (-item[1], item[0]))],
+                       'unpriced_requests': sum(model['requests'] for model in total['unpriced'].values())},
+            'thinking_share': total['thinking_share'], 'cache_hit_rate': total['cache_hit_rate'], 'notable': notable,
+            'details': {'project': projects[0]['name'] if projects else None,
+                        'session': projects[0]['session_ids'][0] if projects else None}}
+
+
+def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float) -> dict:
+    """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable."""
     abo = stats['abo']
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
                for w in abo['five_windows']]
     subagents = {'requests': stats['sub']['requests'], 'cost_usd': stats['sub']['cost'],
                  'by_type': _requests_and_cost(stats['agent_types'])}
-    return {
+    report = {
+        'schema_version': SCHEMA_VERSION,
         'period': period,
         'coverage': coverage,
+        'overview': None,
         'subscription': {'week_segments': [{'start': _point(w['start']), 'end': _point(w['end']), 'reset_at': w['resets']}
                                            for w in abo['weeks']],
                          'five_windows': windows},
@@ -926,7 +1105,28 @@ def build_report(stats: dict, period: dict, coverage: dict) -> dict:
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
         'guards': stats['guards'],
+        'guard_reasons': stats['guard_reasons'],
     }
+    report['overview'] = build_overview(period, report, start_block_5h)
+    return report
+
+
+def points_text(points: float, decimals: int = 1) -> str:
+    """Points of the subscription: nothing is `0`, anything below one is `<1` (a rounded `0.0` or `1.0` for a small
+    session would say more than the estimate knows)."""
+    if points <= 0:
+        return '0'
+    return '<1' if points < 1 else f'{points:.{decimals}f}'
+
+
+def usd_text(cost: float) -> str:
+    """Two decimals below 1 USD, one below 10, none above."""
+    return f'{cost:.2f}' if cost < 1 else f'{cost:.1f}' if cost < 9.95 else f'{cost:.0f}'
+
+
+def _estimate_text(points: float, decimals: int) -> str:
+    text = points_text(points, decimals)
+    return text if text.startswith(('<', '0')) else '~' + text
 
 
 def tokens_text(count: float) -> str:
@@ -964,7 +1164,7 @@ def _subscription_lines(abo: dict) -> list[str]:
     lines.append(f'  5h windows: {len(abo["five_windows"])}')
     for window in abo['five_windows']:
         reset = f'reset {clock(window["resets"])}, ' if window['resets'] is not None else ''
-        lines.append(f'    {reset}peak {window["peak"]:g} % at {clock(parse_ts(window["peak_at"]))}'
+        lines.append(f'    {reset}peak {window["peak"]:g} % at {clock(parse_ts(window["peak_at"]), True)}'
                      f' (first seen {clock(parse_ts(window["first_seen"]))})')
     return lines
 
@@ -1005,20 +1205,25 @@ def _total_lines(total: dict) -> list[str]:
     return lines
 
 
+def _cli_block(head: str, cli: dict) -> list[str]:
+    """The lines of one CLI (or of a sum of CLIs): the head line, then its tokens, models, output, subagents and cache."""
+    share = cli['estimated_share']
+    lines = [f'  {head + "  " if head else ""}{cli["cost_usd"]:.2f} USD  {cli["requests"]} requests  '
+             f'{_estimate_text(share["five"], 1)} 5h points  {_estimate_text(share["week"], 2)} week points',
+             f'    tokens {_kinds_text(cli["tokens"])}',
+             '    models ' + ', '.join(f'{name} {cost:.2f}' for name, cost in cli['models'].items()),
+             f'    output {_details_text(cli)}']
+    if cli['subagents']:
+        lines.append(f'    subagents {_costs_text(cli["subagents"])}')
+    rate = 'n/a' if cli['cache_hit_rate'] is None else f'{100 * cli["cache_hit_rate"]:.1f} %'
+    lines.append(f'    cache hits {rate}, cold starts {cli["cold_starts"]}')
+    return lines
+
+
 def _cli_lines(clis: list[dict]) -> list[str]:
     lines = ['By CLI (main session and its subagents, most expensive first; ~ = estimate)']
     for cli in clis:
-        share = cli['estimated_share']
-        lines.append(f'  {cli["label"]}  {cli["id"]}  started {clock(parse_ts(cli["start"]), True)}  '
-                     f'{cli["cost_usd"]:.2f} USD  {cli["requests"]} requests  ~{share["five"]:.1f} 5h points  '
-                     f'~{share["week"]:.2f} week points')
-        lines.append(f'    tokens {_kinds_text(cli["tokens"])}')
-        lines.append('    models ' + ', '.join(f'{name} {cost:.2f}' for name, cost in cli['models'].items()))
-        lines.append(f'    output {_details_text(cli)}')
-        if cli['subagents']:
-            lines.append(f'    subagents {_costs_text(cli["subagents"])}')
-        rate = 'n/a' if cli['cache_hit_rate'] is None else f'{100 * cli["cache_hit_rate"]:.1f} %'
-        lines.append(f'    cache hits {rate}, cold starts {cli["cold_starts"]}')
+        lines += _cli_block(f'{cli["label"]}  {cli["id"]}  started {clock(parse_ts(cli["start"]), True)}', cli)
     return lines
 
 
@@ -1042,8 +1247,8 @@ def _calibration_lines(calibration: dict) -> list[str]:
                          if cal['sections'] < MIN_SECTIONS else f'  {name}: no rise measured in {cal["sections"]} stretches')
             continue
         lines.append(f'  {name}: {cal["usd_per_point"]:.2f} USD per point from {cal["sections"]} stretches')
-        days = [f'{day[5:]} {v["usd_per_point"]:.2f} ({v["sections"]})'
-                for day, v in cal['per_day'].items() if v['usd_per_point'] is not None]
+        days = [f'{day[5:]} {v["usd_per_point"]:.2f} ({v["sections"]})' for day, v in cal['per_day'].items()
+                if v['usd_per_point'] is not None and v['sections'] >= MIN_DAY_SECTIONS]
         if len(days) > 1:
             lines.append('    per day: ' + ', '.join(days))
         if cal['per_model']:
@@ -1052,20 +1257,130 @@ def _calibration_lines(calibration: dict) -> list[str]:
     return lines
 
 
-def _guard_lines(guards: dict) -> list[str]:
-    lines = ['Gates (in shadow mode a decision is logged, nothing is blocked)']
-    for hook, name in (('spawn_gate', 'spawn gate'), ('soft_stop', 'soft stop')):
-        for mode, counts in sorted(guards.get(hook, {}).items()):
+def _guard_lines(report: dict) -> list[str]:
+    lines = ['Gates']
+    for hook, name, _noun in GATE_NAMES:
+        for mode, counts in sorted(report['guards'].get(hook, {}).items()):
+            kind = {'shadow': 'shadow mode, only logged', 'enforce': 'enforce mode'}.get(mode, f'{mode} mode')
             if hook == 'spawn_gate':
                 text = ', '.join(f'{label} {counts.get(key, 0)}' for key, label in
                                  (('allow', 'allowed'), ('warn', 'warned'), ('ask', 'asked'), ('deny', 'denied')))
             else:
                 text = f'warnings {counts.get("warn", 0)}, denied {counts.get("deny", 0)}'
-            lines.append(f'  {name} ({mode}): {text}')
+            lines.append(f'  {name} ({kind}): {text}')
+            for decision, label in (('warn', 'warned'), ('ask', 'asked'), ('deny', 'denied')):
+                if counts.get(decision):
+                    lines.append(f'      {label} by reason: {_reasons_text(reason_counts(report, hook, mode, decision))}')
     return lines
 
 
-def render(report: dict) -> str:
+def _shorten(name: str) -> str:
+    head = NAME_WIDTH // 2
+    return name if len(name) <= NAME_WIDTH else name[:head] + '…' + name[len(name) - (NAME_WIDTH - 1 - head):]
+
+
+def short_names(names: list[str]) -> list[str]:
+    """The names as the table shows them: one longer than NAME_WIDTH loses its middle for a `…` (the start keeps the odd
+    character). Names whose short forms are the same are all kept whole."""
+    short = [_shorten(name) for name in names]
+    return [text if short.count(text) == 1 else name for name, text in zip(names, short)]
+
+
+def _table_lines(view: dict) -> list[str]:
+    shown = view['projects'][:view['max_projects']]
+    rows = [(name, p['cost_usd'], p['share'], p['week_points'], p['sessions'])
+            for name, p in zip(short_names([p['name'] for p in shown]), shown)]
+    if view['more']:
+        more = view['more']
+        rows.append((f'{more["projects"]} more', more['cost_usd'], more['share'], more['week_points'], more['sessions']))
+    width = max(23, 4 + max(len(row[0]) for row in rows))
+    lines = [f'{"Where it went":<{width}}{"USD":>5}{"share":>8}{"~week pts":>11}{"sessions":>10}']
+    for name, cost, share, points, sessions in rows:
+        percent = '<1 %' if share is not None and 0 < share < 0.01 else _percent(share)
+        lines.append(f'  {name:<{width - 2}}{usd_text(cost):>5}{percent:>8}{points_text(points):>11}{sessions:>10}')
+    return lines
+
+
+def _split_lines(view: dict) -> list[str]:
+    split = view['split']
+    main = f'Main {usd_text(split["main_usd"])} USD · subagents {usd_text(split["subagents_usd"])} USD'
+    if split['top_subagent']:
+        main += f' (top: {split["top_subagent"]["type"]} {usd_text(split["top_subagent"]["cost_usd"])} USD)'
+    models = [f'{m["name"]} {usd_text(m["cost_usd"])} USD' for m in view['models']['families']]
+    if view['models']['unpriced_requests']:
+        models.append(f'{view["models"]["unpriced_requests"]} request(s) without a price')
+    thinking = view['thinking_share']
+    models += ['thinking n/a' if thinking is None else f'thinking {_percent(thinking)} of output',
+               f'cache hits {_percent(view["cache_hit_rate"])}']
+    return [main, ' · '.join(models)]
+
+
+def render_overview(report: dict) -> str:
+    """The overview, made of `report['overview']` alone: the object in the JSON is what the text says."""
+    view = report['overview']
+    week, five = view['week'], view['five_hour']
+    if week is None:
+        used = 'no weekly measurement'
+    elif week['windows'] == 1:
+        used = f'{week["used_percent"]:g} % of the weekly limit used (+{week["rise_points"]:g} points)'
+    else:      # the rises of several weekly windows add up, the percentage is that of the last one
+        used = (f'weekly limit at {week["used_percent"]:g} % now · +{week["rise_points"]:g} points over '
+                f'{week["windows"]} weekly windows')
+    windows = ('none measured' if not five['windows'] else
+               f'{five["windows"]}, highest {five["highest_percent"]:g} % ({clock(parse_ts(five["highest_at"]), True)})')
+    blocks = [[f'{view["title"]} · {used} · {usd_text(view["cost_usd"])} USD at API prices', f'5h windows: {windows}']]
+    blocks += [_table_lines(view), _split_lines(view)] if view['projects'] else [['No requests in this period.']]
+    if view['notable']:
+        blocks.append(['Notable'] + [f'  {note["text"]}' for note in view['notable']])
+    details = view['details']
+    options = [f'--project {details["project"]}', f'--session {details["session"]}'] if details['project'] else []
+    blocks.append(['Details: ' + ' · '.join(options + ['--full'])])
+    return '\n\n'.join('\n'.join(block) for block in blocks)
+
+
+class SelectionError(Exception):
+    pass
+
+
+def select_clis(report: dict, stats: dict, project: str | None, session: str | None) -> dict:
+    """The CLIs of one project (its name or the start of it) and/or one session (the start of its id, or longer),
+    with their sum. Raises SelectionError with what to say when nothing, or more than one, fits."""
+    clis = report['clis']
+    parts = []
+    if project is not None:
+        if not project:
+            raise SelectionError('--project must not be empty')
+        names = [p['name'] for p in report['overview']['projects']]
+        found = [project] if project in names else [name for name in names if name.startswith(project)]
+        if not found:
+            raise SelectionError(f"--project '{project}' matches no project in this period "
+                                 f"(projects: {', '.join(names) or 'none'})")
+        if len(found) > 1:
+            raise SelectionError(f"--project '{project}' matches {len(found)} projects: {', '.join(found)} "
+                                 '- give more characters')
+        project = found[0]
+        clis = [cli for cli in clis if cli['label'] == project]
+        parts.append(f'project {project}')
+    if session is not None:
+        if not session:
+            raise SelectionError('--session must not be empty')
+        found = [cli for cli in clis if cli['id'].startswith(session) or session.startswith(cli['id'])]
+        if not found:
+            raise SelectionError(f"--session '{session}' matches no session "
+                                 + (f'in project {project}' if project is not None else 'in this period'))
+        if len(found) > 1:
+            listing = ', '.join(f'{cli["id"]} ({cli["label"]})' for cli in found)
+            raise SelectionError(f"--session '{session}' matches {len(found)} sessions: {listing} - give more characters")
+        clis = found
+        parts.append(f'session {found[0]["id"]}')
+    merged: dict = {}
+    for cli in clis:
+        _merge_cli(merged, 'sum', stats['clis'][cli['id']])
+    return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum'])}
+
+
+def render(report: dict, selection: dict | None = None) -> str:
+    """The full report; with a selection (see select_clis) only the blocks of those CLIs and their sum."""
     period, coverage = report['period'], report['coverage']
     offset = datetime.fromtimestamp(parse_ts(period['start'])).astimezone().strftime('%z')
     sources = [f'{coverage["transcript_files"]} transcript file(s) read']
@@ -1075,13 +1390,19 @@ def render(report: dict) -> str:
                       ('unreadable_transcript_lines', 'transcript')):
         if coverage[key]:
             sources.append(f'{coverage[key]} unreadable {name} line(s) skipped')
-    head = [f'Usage report {period["label"]} (local time, UTC{offset[:3]}:{offset[3:]})', 'Sources: ' + '; '.join(sources)]
-    sections = [head, _subscription_lines(report['subscription']), _total_lines(report['total'])]
-    if report['clis']:
-        sections.append(_cli_lines(report['clis']))
-    sections += [_allocation_lines(report['allocation']), _calibration_lines(report['calibration'])]
-    if report['guards']:
-        sections.append(_guard_lines(report['guards']))
+    title = f'Usage report {period["label"]} (local time, UTC{offset[:3]}:{offset[3:]})'
+    head = [title + (f' - {selection["description"]}' if selection else ''), 'Sources: ' + '; '.join(sources)]
+    if selection:
+        count = len(selection['clis'])
+        total = [f'Sum of {count} CLI{"" if count == 1 else "s"}'] + _cli_block('', selection['sum'])
+        sections = [head, _cli_lines(selection['clis']), total]
+    else:
+        sections = [head, _subscription_lines(report['subscription']), _total_lines(report['total'])]
+        if report['clis']:
+            sections.append(_cli_lines(report['clis']))
+        sections += [_allocation_lines(report['allocation']), _calibration_lines(report['calibration'])]
+        if report['guards']:
+            sections.append(_guard_lines(report))
     return '\n\n'.join('\n'.join(section) for section in sections)
 
 
@@ -1126,7 +1447,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--month', nargs='?', const='', metavar='YYYY-MM', help='one calendar month (default: this one)')
     parser.add_argument('--since', metavar='YYYY-MM-DD', help='first day of a range of days')
     parser.add_argument('--until', metavar='YYYY-MM-DD', help='last day of the range (default: today), needs --since')
-    parser.add_argument('--json', action='store_true', help='print the figures as JSON')
+    parser.add_argument('--full', action='store_true', help='print every figure instead of the overview')
+    parser.add_argument('--project', metavar='NAME', help='the blocks of --full for this project, and their sum')
+    parser.add_argument('--session', metavar='ID', help='the blocks of --full for the session whose id starts with ID')
+    parser.add_argument('--json', action='store_true', help='print the figures, overview included, as JSON')
     parser.add_argument('--archive', action='store_true',
                         help='write the finished days that are not in the archive yet, print nothing')
     parser.add_argument('--projects-dir', metavar='DIR', help=f'transcripts (default: {PROJECTS_DIR})')
@@ -1134,14 +1458,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_usage_file(config: str | None) -> str:
-    """The shared usage file, found like `log_summary.resolve_log_dir` finds the log folder: --config, else
-    CCUC_USAGE_FILE, else `usage_file` of CCUC_CONFIG or of the configuration of the standard installation."""
-    if config is None and os.environ.get('CCUC_USAGE_FILE'):
-        return os.path.expanduser(os.environ['CCUC_USAGE_FILE'])
+def load_config(config: str | None) -> dict:
+    """The effective configuration, found like `log_summary.resolve_log_dir` finds the log folder: --config, else
+    CCUC_CONFIG, else the configuration of the standard installation. A problem in it is not logged here (the hooks do)."""
     chosen = config or os.environ.get('CCUC_CONFIG') or os.path.expanduser(log_summary.STANDARD_CONFIG)
     with mock.patch.dict(os.environ, {'CCUC_CONFIG': chosen}):
-        return _config.load(log_problems=False)['usage_file']
+        return _config.load(log_problems=False)
+
+
+def resolve_usage_file(config: str | None) -> str:
+    """The shared usage file: --config, else CCUC_USAGE_FILE, else `usage_file` of the configuration."""
+    if config is None and os.environ.get('CCUC_USAGE_FILE'):
+        return os.path.expanduser(os.environ['CCUC_USAGE_FILE'])
+    return load_config(config)['usage_file']
 
 
 def week_anchor(history: list[Measurement], usage_file: str) -> float | None:
@@ -1248,8 +1577,12 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         parser.error(f'choose one of {", ".join(chosen)}')
     if args.until is not None and args.since is None:
         parser.error('--until needs --since')
-    if args.archive and (chosen or args.until is not None or args.json):
-        parser.error('--archive takes no period and no --json')
+    selecting = args.project is not None or args.session is not None
+    if args.archive and (chosen or args.until is not None or args.json or args.full or selecting):
+        parser.error('--archive takes no period, no --json, no --full, no --project and no --session')
+    if args.json and (args.full or selecting):
+        parser.error('--json prints all projects and sessions already (each CLI has its project): '
+                     '--full, --project and --session are for the text report')
     config = os.path.expanduser(args.config) if args.config else None
     if config is not None and not os.path.isfile(config):
         parser.error(f'--config: not a file: {args.config}')
@@ -1297,8 +1630,18 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
-    report = build_report(stats, shown, coverage)
-    print(json.dumps(report, indent=2) if args.json else render(report))
+    report = build_report(stats, shown, coverage, load_config(config)['thresholds']['start_block_5h'])
+    if args.json:
+        print(json.dumps(report, indent=2))
+    elif selecting:
+        if args.full:
+            parser.error('--full shows everything; --project and --session already show the full blocks of their sessions')
+        try:
+            print(render(report, select_clis(report, stats, args.project, args.session)))
+        except SelectionError as error:
+            parser.error(str(error))
+    else:
+        print(render(report) if args.full else render_overview(report))
     return 0
 
 
