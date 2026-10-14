@@ -134,6 +134,21 @@ def emit_context(event: str, text: str) -> None:
     print(json.dumps({'hookSpecificOutput': {'hookEventName': event, 'additionalContext': text}}, ensure_ascii=False))
 
 
+SHADOW_PHRASES = {'deny': 'would have been denied', 'ask': "would have needed the user's approval",
+                  'warn': 'would have come with a warning'}
+
+
+def shadow_note(gate: str, subject: str, action: str, reason: str, tell: str) -> str:
+    """What a gate in shadow mode tells the model instead of deciding: what enforce would have done and why. The
+    model reads a PreToolUse context next to the tool result, so it is said in the past."""
+    reason = reason.strip() or '(none)'
+    if reason[-1] not in '.?!':
+        reason += '.'
+    return (f'{gate} (shadow mode, information only): in enforce mode {subject} {SHADOW_PHRASES[action]}. '
+            f'Reason: {reason} Nothing was blocked. {tell} The gates stay in shadow mode until the user runs '
+            'tools/install.py --mode enforce.')
+
+
 def log_dir() -> str:
     """Env CCUC_LOG_DIR, else config `log_dir`."""
     return os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or _config.load(log_problems=False)['log_dir'])

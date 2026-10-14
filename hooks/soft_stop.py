@@ -5,7 +5,8 @@ Acts only when the input carries an agent_id ("present only when the hook fires 
 The main session is never blocked. Fail open: every internal error lets the call through, a failed import
 included. The hook always exits 0, because exit code 2 would block a PreToolUse call.
 Completion tools (StructuredOutput) are always allowed.
-In shadow mode (the default) decisions are only logged.
+In shadow mode (the default) nothing is blocked: decisions are logged, and deny and warn reach the subagent as a
+note of what enforce would have done (_hookio.shadow_note).
 
 Levels, all from config.json (thresholds.*), all measured on the five-hour window:
   warn             a warning: save a checkpoint soon
@@ -221,6 +222,9 @@ def main() -> int:
         _hookio.log_decision('soft_stop', args['mode'], hook_input, decision.action, decision.reason,
                              calls_since_checkpoint=since)
         if args['mode'] != 'enforce':
+            if decision.action in _hookio.SHADOW_PHRASES:
+                _hookio.emit_context(EVENT, _hookio.shadow_note('Soft stop', 'this call', decision.action,
+                                                                decision.reason, 'Mention it in your report.'))
             return 0
         if decision.action == 'deny':
             _hookio.emit_deny(EVENT, decision.reason)

@@ -104,6 +104,18 @@ def is_warning(out):
             and out['hookSpecificOutput']['additionalContext'].startswith('Spawn gate: '))
 
 
+def is_shadow_note(out, phrase):
+    """The hint of shadow mode: context only, never a decision, and it says what enforce would have done."""
+    return (out is not None and list(out) == ['hookSpecificOutput']
+            and set(out['hookSpecificOutput']) == {'hookEventName', 'additionalContext'}
+            and out['hookSpecificOutput']['hookEventName'] == 'PreToolUse'
+            and out['hookSpecificOutput']['additionalContext'].startswith(
+                f'Spawn gate (shadow mode, information only): in enforce mode this start {phrase}. Reason: ')
+            and out['hookSpecificOutput']['additionalContext'].endswith(
+                'Nothing was blocked. Tell the user in one sentence. The gates stay in shadow mode until the user '
+                'runs tools/install.py --mode enforce.'))
+
+
 def reason(out):
     return out['hookSpecificOutput']['permissionDecisionReason']
 
@@ -114,9 +126,13 @@ def context(out):
 
 # --- Agent tool ---------------------------------------------------------------------------------------------
 
-def test_shadow_mode_never_blocks_but_logs(tmp_path, env):
+def test_shadow_mode_never_blocks_but_logs_and_tells_what_enforce_would_have_done(tmp_path, env):
     usage(tmp_path, 10)
-    assert run(agent(), env) is None
+    enforced = reason(run(agent(), env, '--mode=enforce'))
+    assert run(agent(), env) == {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': (
+        'Spawn gate (shadow mode, information only): in enforce mode this start would have been denied. Reason: '
+        + enforced + ' Nothing was blocked. Tell the user in one sentence. The gates stay in shadow mode until the '
+        'user runs tools/install.py --mode enforce.')}}
     line = gate_log(tmp_path)[-1]
     assert line['decision'] == 'deny' and line['mode'] == 'shadow'
     assert 'secret task' not in json.dumps(line)  # never log prompt content
@@ -328,7 +344,8 @@ def test_log_masks_script_parts_model_literals_and_paths(tmp_path, env):
     for hook_input in cases:
         out = run(hook_input, env, '--mode=enforce')
         assert is_deny(out) and 'SECRET' in reason(out), hook_input     # the model still sees the value
-        assert run(hook_input, env) is None                             # shadow: only logged
+        shadow = run(hook_input, env)                                   # shadow: logged, the model is told
+        assert is_shadow_note(shadow, 'would have been denied') and 'SECRET' in context(shadow), hook_input
     lines = gate_log(tmp_path)
     assert len(lines) == 2 * len(cases) and all(line['decision'] == 'deny' and '…' in line['reason'] for line in lines)
     assert 'SECRET' not in (tmp_path / 'log' / 'log.jsonl').read_text(encoding='utf-8')
@@ -366,8 +383,9 @@ def test_spawn_gate_without_the_check_module_denies(tmp_path, env):
     text = json.dumps({'tool_name': 'Agent', 'tool_input': {}})
     code, out, _ = run_raw(without / 'spawn_gate.py', text, env, '--mode=enforce')
     assert code == 0 and is_deny(out) and 'ModuleNotFoundError' in reason(out)
-    code, out, _ = run_raw(without / 'spawn_gate.py', text, env)
-    assert (code, out) == (0, None) and gate_log(tmp_path)[-1]['decision'] == 'deny'
+    code, out, _ = run_raw(without / 'spawn_gate.py', text, env)          # shadow: let through, but said
+    assert code == 0 and is_shadow_note(out, 'would have been denied') and 'ModuleNotFoundError' in context(out)
+    assert gate_log(tmp_path)[-1]['decision'] == 'deny'
 
 
 def test_spawn_gate_without_base_modules_denies(tmp_path, env):
@@ -747,7 +765,8 @@ def test_internal_error_in_shadow_mode_is_only_logged(tmp_path, monkeypatch, cap
     monkeypatch.setattr(sys, 'argv', ['spawn_gate.py'])
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'tool_name': 'Workflow', 'tool_input': {}})))
     assert spawn_gate.main() == 0
-    assert capsys.readouterr().out == ''
+    out = json.loads(capsys.readouterr().out)
+    assert is_shadow_note(out, 'would have been denied') and 'ZeroDivisionError' in context(out)
     line = gate_log(tmp_path)[-1]
     assert line['decision'] == 'deny' and line['mode'] == 'shadow' and 'ZeroDivisionError' in line['reason']
 
@@ -866,7 +885,8 @@ def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
     assert reason(out) == '7-day window at 85 %: above the weekly threshold. Allow this start?'
     assert is_deny(run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce'))
     assert is_deny(run(agent('full-def'), env, '--mode=enforce'))                     # no mode in the input
-    assert run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow') is None
+    assert is_shadow_note(run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow'),
+                          "would have needed the user's approval")
     lines = gate_log(tmp_path)
     assert [line['decision'] for line in lines] == ['ask', 'deny', 'deny', 'ask']
     assert [line['permission_mode'] for line in lines] == ['default', 'bypassPermissions', None, 'default']
@@ -893,3 +913,27 @@ def test_mode_parsing_without_hookio():
     assert spawn_gate._mode(['--mode=enforce']) == 'enforce'
     assert spawn_gate._mode(['--mode=enforce', '--mode=shadow']) == 'shadow'
     assert spawn_gate._mode(['--mode=ENFORCE', 'enforce']) == 'shadow'
+
+
+# --- Shadow mode: the hint ------------------------------------------------------------------------------------
+
+def test_shadow_mode_stays_silent_when_enforce_would_allow(tmp_path, env):
+    usage(tmp_path, 10)
+    assert run(agent('full-def'), env, '--mode=enforce') is None
+    assert run(agent('full-def'), env) is None
+    assert gate_log(tmp_path)[-1]['decision'] == 'allow'
+
+
+def test_shadow_mode_turns_a_warning_into_the_hint(tmp_path, env):
+    usage(tmp_path, 10)
+    env = config(tmp_path, env, spawn_rules={'model_effort_action': 'warn'})
+    assert is_warning(run(agent(), env, '--mode=enforce'))
+    out = run(agent(), env)
+    assert is_shadow_note(out, 'would have come with a warning') and not context(out).startswith('Spawn gate: ')
+
+
+def test_shadow_mode_hints_at_the_usage_block_with_its_numbers(tmp_path, env):
+    usage(tmp_path, 80)
+    out = run(agent('full-def'), env)
+    assert is_shadow_note(out, 'would have been denied') and '80' in context(out)
+

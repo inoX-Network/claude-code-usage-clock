@@ -570,14 +570,31 @@ def test_usage_without_a_five_hour_block_is_unknown(tmp_path):
     assert is_warning(run(call(), ENFORCE))
 
 
-def test_shadow_is_the_default_and_only_logs(tmp_path):
+def shadow_note(phrase, reason):
+    return {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'additionalContext': (
+        f'Soft stop (shadow mode, information only): in enforce mode this call {phrase}. Reason: {reason} Nothing '
+        'was blocked. Mention it in your report. The gates stay in shadow mode until the user runs tools/install.py '
+        '--mode enforce.')}}
+
+
+def test_shadow_is_the_default_never_blocks_and_tells_what_enforce_would_have_done(tmp_path):
     write_usage(tmp_path, 96)
-    assert run(call()) is None
-    assert run(call(), '--mode=shadow') is None
-    assert run(call(), '--mode=bogus') is None
-    lines = log_lines(tmp_path)
+    enforced = run(call(), ENFORCE)['hookSpecificOutput']['permissionDecisionReason']
+    expected = shadow_note('would have been denied', enforced)
+    assert run(call()) == expected
+    assert run(call(), '--mode=shadow') == expected
+    assert run(call(), '--mode=bogus') == expected
+    lines = log_lines(tmp_path)[1:]
     assert [line['decision'] for line in lines] == ['deny', 'deny', 'deny']
     assert all(line['mode'] == 'shadow' and line['hook'] == 'soft_stop' for line in lines)
+
+
+def test_shadow_turns_a_warning_into_the_hint_and_stays_silent_when_enforce_would_allow(tmp_path):
+    write_usage(tmp_path, 86)
+    warned = run(call(), ENFORCE)['hookSpecificOutput']['additionalContext']
+    assert run(call()) == shadow_note('would have come with a warning', warned)
+    write_usage(tmp_path, 10)
+    assert run(call(), ENFORCE) is None and run(call()) is None
 
 
 def test_shadow_still_counts_so_that_switching_to_enforce_continues_the_count(tmp_path):

@@ -172,13 +172,21 @@ entry gets `refreshInterval: 60`; an update of our own entry adds it only if it 
 | `usage_clock.py` | UserPromptSubmit | exit 0, no output (a prompt must never be rejected) |
 | `context_reporter.py` | UserPromptSubmit, PostToolUse `*` | exit 0, no output (nothing may be rejected or blocked) |
 | `soft_stop.py` | PreToolUse `*` | exit 0, allow (fail open) |
-| `spawn_gate.py` | PreToolUse `Agent\|Workflow\|Skill` | deny (fail closed), except while checking a Skill: warn; in `shadow` only logged |
+| `spawn_gate.py` | PreToolUse `Agent\|Workflow\|Skill` | deny (fail closed), except while checking a Skill: warn; in `shadow` the shadow note instead |
 
 Output formats: deny = `{"hookSpecificOutput": {"hookEventName", "permissionDecision": "deny",
 "permissionDecisionReason"}}`; warning = `{"hookSpecificOutput": {"hookEventName", "additionalContext"}}`.
 All texts are English. They are addressed to the model, which relays them to the user in the user's language.
 
-In `shadow` mode nothing is denied or warned; every decision is logged with what it would have been.
+In `shadow` mode nothing is denied, asked or warned; every decision is logged with what it would have been. For
+deny, ask and warn the gate outputs a warning-format note instead (`_hookio.shadow_note`): `<Gate> (shadow mode,
+information only): in enforce mode <subject> would have been denied | would have needed the user's approval |
+would have come with a warning. Reason: <reason> Nothing was blocked. <tell> The gates stay in shadow mode until
+the user runs tools/install.py --mode enforce.` Spawn gate: subject `this start`, tell `Tell the user in one
+sentence.`; soft stop: `this call`, `Mention it in your report.`. The reason is the one enforce would give,
+stripped and ended with a full stop unless it ends in `.`, `?` or `!`. The model reads a PreToolUse context next to
+the tool result, hence the past tense. Allow stays silent in both modes. A spawn gate that cannot even import its
+base modules still only writes to stderr in shadow mode.
 
 ### usage_clock.py
 
