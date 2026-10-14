@@ -579,11 +579,12 @@ def _week_point(point) -> dict:
 
 
 def _same_segment(first: dict, second: dict) -> bool:
-    """Whether two week segments (the second not earlier) are one weekly window: the value did not fall between them and
-    the reset times, if both are known, agree."""
-    if second['start']['value'] < first['end']['value']:
+    """Whether two week segments (the second not earlier) are one weekly window: the reset times, if both are known,
+    agree, and the second overlaps the first in time or the value did not fall between them. Overlapping segments come
+    from a live part that spans an archived day; two windows never overlap."""
+    if None not in (first['resets'], second['resets']) and abs(second['resets'] - first['resets']) >= RESET_TOLERANCE_S:
         return False
-    return None in (first['resets'], second['resets']) or abs(second['resets'] - first['resets']) < RESET_TOLERANCE_S
+    return second['start']['t'] <= first['end']['t'] or second['start']['value'] >= first['end']['value']
 
 
 def _merge_weeks(target: list, extra: list) -> None:

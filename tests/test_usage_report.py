@@ -798,6 +798,35 @@ def test_the_split_week_line_survives_the_archive_and_the_segments_of_two_days_j
     assert archived['subscription'] == live['subscription']
 
 
+def test_a_week_with_an_archived_day_in_the_middle_stays_one_segment(world):
+    # Seen 14 Oct 2026: the live part of a week spans the archived day, both start at the week's first value
+    reset = T('2026-10-19T13:00:00Z')
+    world.history([row('2026-10-12T14:00:00Z', 1, 0, None, reset), row('2026-10-12T20:00:00Z', 5, 5, None, reset),
+                   row('2026-10-13T10:00:00Z', 9, 20, None, reset), row('2026-10-13T20:00:00Z', 9, 29, None, reset),
+                   row('2026-10-14T08:00:00Z', 3, 38, None, reset)])
+    spend(world, ('2026-10-12T15:00:00Z', 1.0), ('2026-10-13T11:00:00Z', 1.0), ('2026-10-14T09:00:00Z', 1.0))
+    live = world.report('--week')
+    assert segments(live) == [(0, 38, reset)]
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    archived = world.report('--week')
+    assert archived['coverage']['archive_days'] == ['2026-10-13']
+    assert archived['subscription']['week_segments'] == live['subscription']['week_segments']
+    assert 'Week: 0 % -> 38 % (+38 points), resets Mon 19 Oct 15:00' in world.text('--week')
+
+
+@pytest.mark.parametrize('resets', [(None, None), (1, None), (1, 1)])
+def test_overlapping_segments_are_one_window_unless_their_reset_times_differ(resets):
+    def seg(t0, v0, t1, v1, r):
+        return {'start': {'t': t0, 'value': v0}, 'end': {'t': t1, 'value': v1}, 'resets': r}
+    target = [seg(100, 0, 500, 38, resets[0])]
+    report_module._merge_weeks(target, [seg(200, 0, 300, 29, resets[1])])
+    assert [(s['start']['t'], s['end']['t'], s['end']['value'], s['resets']) for s in target] == [
+        (100, 500, 38, 1 if 1 in resets else None)]
+    other = [seg(100, 0, 500, 38, 1)]
+    report_module._merge_weeks(other, [seg(200, 0, 300, 29, 1 + report_module.RESET_TOLERANCE_S)])
+    assert len(other) == 2
+
+
 @pytest.mark.parametrize('second_value, expected', [(51, [(50, 51, None)]), (3, [(50, 50, None), (3, 3, None)])])
 def test_segments_without_reset_times_join_over_midnight_unless_the_value_fell(world, second_value, expected):
     world.history([row('2026-10-12T21:00:00Z', 1, 50), row('2026-10-12T23:00:00Z', 2, second_value)])
@@ -2032,3 +2061,18 @@ def test_a_missing_config_file_is_an_argument_error(world, tmp_path):
     with pytest.raises(SystemExit) as stop:
         report_module.main(world.args('--config', str(tmp_path / 'missing.json')), now=NOW)
     assert stop.value.code == 2
+
+
+def test_a_segment_that_starts_where_the_other_ends_is_the_same_window():
+    # One measurement can end one day's segment and start the next one's: it cannot belong to two windows
+    target = [{'start': {'t': 100, 'value': 10}, 'end': {'t': 500, 'value': 38}, 'resets': None}]
+    report_module._merge_weeks(target, [{'start': {'t': 500, 'value': 0}, 'end': {'t': 600, 'value': 2}, 'resets': None}])
+    assert len(target) == 1 and target[0]['end']['t'] == 600
+    report_module._merge_weeks(target, [{'start': {'t': 601, 'value': 0}, 'end': {'t': 700, 'value': 1}, 'resets': None}])
+    assert len(target) == 2
+
+
+def test_a_later_segment_that_starts_at_the_same_value_is_the_same_window():
+    target = [{'start': {'t': 100, 'value': 10}, 'end': {'t': 500, 'value': 38}, 'resets': None}]
+    report_module._merge_weeks(target, [{'start': {'t': 900, 'value': 38}, 'end': {'t': 950, 'value': 40}, 'resets': None}])
+    assert [(s['start']['value'], s['end']['value']) for s in target] == [(10, 40)]
