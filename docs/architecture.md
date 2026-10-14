@@ -150,6 +150,7 @@ default and writes the usual one log line. `history.enabled` must be a boolean.
 `wake_watcher.from_k` must be a finite number of at least 0 (0 = off, the default) and `wake_watcher.lead_min` a
 finite number above 0 (default 10); anything else falls back to the default with the usual log line (the watcher
 itself loads the config without logging).
+`wake_watcher.routine_file` must be text (default `""` = off); `~` is expanded when it is read.
 
 Two switches are deliberately NOT in the config file but in the hook command in `settings.json`:
 `--mode=shadow|enforce` (default `shadow`) and `--week-ok-until=YYYY-MM-DD`. Where `settings.json` is
@@ -233,6 +234,20 @@ Example: `Context: 168k/1000k tokens (17%). Measured, not estimated.`
   A heartbeat more than one minute ahead of the clock counts as broken and blocks nothing. If anything in the offer
   fails (missing `_wake.py`, unreadable heartbeat), the context line goes out
   without it. With `from_k` 0 the output is byte for byte the line above.
+- **Routine after a wake-up call:** on `UserPromptSubmit` only (never `PostToolUse`, never with an `agent_id`), if
+  `wake_watcher.routine_file` is not empty. Claude Code submits the end of a background task as a prompt
+  (`<task-notification>` with `<output-file>PATH</output-file>`; seen 14 Oct 2026, the task output itself is not in
+  the prompt). For every absolute `PATH` in a prompt that is text and contains `<task-notification>`: open it with
+  `O_NOFOLLOW|O_NONBLOCK`, accept only a regular file of the current user, and compare its first bytes with
+  `Wake-up call for session <session_id>:` (this session; after `/clear` the call belongs to the old one). On a
+  match, read the routine file (`~` expanded) with the same open and these checks, in this order: missing, a link,
+  not a regular file, owned by another user, writable by group or others, larger than `ROUTINE_MAX_BYTES` = 4096,
+  not UTF-8, empty after stripping. A usable file follows the context line after an empty line, with the header
+  `Session-end routine (from wake_watcher.routine_file, presented because the wake-up watcher fired):`; without a
+  context line (no fresh state) it is the whole output. An unusable one gives nothing and one log line
+  `{"hook": "context_reporter", "decision": "no_routine", "reason": "wake_watcher.routine_file: <reason>"}`, without
+  the path. Any other failure gives nothing, silently; the context line is never lost. With the field empty the
+  output is byte for byte as without it.
 - **On internal error:** exit 0, no output, nothing logged. Config problems are not logged either (the hook runs
   after every tool call); a wrong `context_reporter` value falls back to its default.
 - **Limits:** the percentage is computed from the two stored numbers. The status line shows the percentage
@@ -272,8 +287,11 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
 - **Message** (English, one paragraph, with the session id): how long the user was away (about TTL minus the
   rest), the rest of the cache in minutes (rounded up), the context in k and the threshold; then `The user is away.
   Run your session-end routine now, without asking (save progress, commit, push, summary), then end the turn. Do
-  not start a new watcher.` The other endings say why the watcher stopped; the one for a gone session adds `If you
-  are a different session, there is nothing to do.` (a task started in one session wakes whichever session is
+  not start a new watcher.` With `wake_watcher.routine_file` set, the middle reads `without asking: it comes with
+  this message (wake_watcher.routine_file); work through every step of it (if it is missing: save progress, commit,
+  push, summary)`. The start `Wake-up call for session <session_id>:` is what the context reporter looks for. The
+  other endings say why the watcher stopped; the one for a gone session adds `If you are a different session,
+  there is nothing to do.` (a task started in one session wakes whichever session is
   current when it ends, also after `/clear`).
 - **Heartbeat file** `<log_dir>/context/<session_id>.watch`: `{"session_id", "state": "watching"|"fired"|"ended",
   "at": "<UTC ISO>"}`. Written like the state file (atomic, `O_EXCL|O_NOFOLLOW`, 0600, never through a link, shared code

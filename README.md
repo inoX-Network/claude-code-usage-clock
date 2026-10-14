@@ -169,10 +169,17 @@ What you need for this:
 
 - The status line, with its `refreshInterval` (the installer sets 60 seconds). The watcher reads the cache clock
   from the state file the status line writes; without refreshing it would see an idle session as gone.
-- A **session-end routine** in the instructions the model reads (for example your `CLAUDE.md`): what "save progress,
-  commit, push, summary" means for your projects. The wake-up message is the output of a tool, and a model rightly
-  does not follow instructions from tool output on its own; one line in your instructions that names the wake-up
-  call as a trigger for the routine closes that gap.
+- A **session-end routine**: what "save progress, commit, push, summary" means for your projects. The wake-up
+  message alone is the output of a tool, and a model rightly does not follow instructions from tool output on its
+  own. Two ways to close that gap:
+  - Put the routine in a file and set `wake_watcher.routine_file` to its path. When the watcher fires, Claude Code
+    submits its end as a notification, which runs the context reporter; it sees that the task's output is this
+    session's wake-up call and adds your file to the context, as hook context like the context line. The file must
+    be a regular file of yours that group and others cannot write, UTF-8, at most 4 KB; otherwise nothing is added
+    and the log gets one line. [`examples/wake-routine.md`](examples/wake-routine.md) is a start; the installer
+    does not copy it, so an update never touches your file.
+  - Or write it into the instructions the model reads (for example your `CLAUDE.md`), with one line that names the
+    wake-up call as a trigger for the routine.
 - Only the main session is offered the watcher, never a subagent, and only with a prompt, never after a tool call.
 
 ## What the status line shows
@@ -437,6 +444,7 @@ that key and writes one line to the log.
 | `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
 | `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
 | `wake_watcher.lead_min` | `10` | Longest lead before the prompt cache expires at which the watcher fires, in minutes; never more than a fifth of the cache lifetime (10 min for the 1-hour cache, 1 min for the 5-minute cache). |
+| `wake_watcher.routine_file` | `""` | Path (`~` allowed) to a file with your session-end routine; when the watcher fires, the context reporter hands it to the model with the wake-up call. Empty: off. |
 | `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |

@@ -669,3 +669,248 @@ def test_the_command_in_the_offer_splits_into_interpreter_script_and_session_id(
     command = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 200}}))[1].split('): ', 1)[1]
     assert shlex.split(command) == ['python3', WATCHER, SID]
     assert os.path.isfile(shlex.split(command)[1])
+
+
+# --- The session-end routine after a wake-up call ------------------------------------------------------------
+
+ROUTINE = '1. Save progress.\n2. Commit and push.\n3. Summary, step by step.\n'
+HEADER = 'Session-end routine (from wake_watcher.routine_file, presented because the wake-up watcher fired):\n'
+SUMMARY = 'Background command "Startet den Abschluss-Wecker neu im Hintergrund" completed (exit code 0)'
+
+
+def wake_text(session_id=SID):
+    return (f'Wake-up call for session {session_id}: the user has been away for about 50 min, the prompt cache has '
+            'about 10 min left, the context is 378k tokens (wake-up threshold 200k). The user is away. Run your '
+            'session-end routine now.\n')
+
+
+def notification(output_file, task_id='ben0ictcc', summary=SUMMARY):
+    """The prompt Claude Code submits when a background task ends, in the form seen on 14 Oct 2026."""
+    return (f'<task-notification>\n<task-id>{task_id}</task-id>\n<tool-use-id>toolu_014KsEhNMnYNdinFCabPN8jJ'
+            f'</tool-use-id>\n<output-file>{output_file}</output-file>\n<status>completed</status>\n'
+            f'<summary>{summary}</summary>\n</task-notification>')
+
+
+def task_output(tmp_path, text=None, name='ben0ictcc.output'):
+    """The output file of a background task: by default that of a watcher that fired for this session."""
+    folder = tmp_path / 'tasks'
+    folder.mkdir(exist_ok=True)
+    path = folder / name
+    path.write_text(wake_text() if text is None else text, encoding='utf-8')
+    return path
+
+
+def routine_at(tmp_path, content=ROUTINE, mode=0o600, name='routine.md'):
+    path = tmp_path / name
+    path.write_bytes(content if isinstance(content, bytes) else content.encode('utf-8'))
+    os.chmod(path, mode)
+    return path
+
+
+def routine_cfg(path, from_k=0):
+    cfg = json.loads(json.dumps(CFG))
+    cfg['wake_watcher']['routine_file'] = str(path)
+    cfg['wake_watcher']['from_k'] = from_k
+    return cfg
+
+
+def woken(tmp_path, output=None):
+    return dict(PROMPT, prompt=notification(output or task_output(tmp_path)))
+
+
+def log_lines(tmp_path):
+    path = tmp_path / 'log' / 'log.jsonl'
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
+
+
+def test_a_fired_watcher_brings_the_routine_after_the_context_line(tmp_path):
+    save(tmp_path)
+    assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path))) == (
+        'UserPromptSubmit', LINE + '\n\n' + HEADER + ROUTINE.strip())
+
+
+def test_the_routine_comes_even_when_the_context_line_has_nothing_to_say(tmp_path):
+    assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path))) == (
+        'UserPromptSubmit', HEADER + ROUTINE.strip())
+
+
+def test_without_a_routine_file_a_wake_up_call_changes_nothing(tmp_path):
+    save(tmp_path)
+    assert build(tmp_path, woken(tmp_path)) == ('UserPromptSubmit', LINE)
+    assert build(tmp_path / 'empty', woken(tmp_path)) is None
+    assert log_lines(tmp_path) == []
+
+
+def test_the_routine_file_takes_a_home_relative_path(tmp_path):
+    home = tmp_path / 'home'
+    home.mkdir()
+    routine_at(home, name='my-routine.md')
+    assert build(tmp_path, woken(tmp_path), routine_cfg('~/my-routine.md'))[1] == HEADER + ROUTINE.strip()
+
+
+@pytest.mark.parametrize('text', [
+    wake_text('another-session'),                                                  # woke another session
+    wake_text('abc-123_XY'),                                                       # longer id, same start
+    f'Wake-up watcher stopped: session {SID} is no longer active (cleared or closed).\n',
+    f'Wake-up watcher for session {SID}: already running (another watcher for this session is alive).\n',
+    f'Wake-up watcher for session {SID}: disabled (wake_watcher.from_k is 0 in config.json). Nothing to do.\n',
+    f'Wake-up watcher stopped: session {SID} reached its maximum run time of 115 minutes.\n',
+    'some other task\n' + wake_text(),                                             # not at the start
+    '',
+])
+def test_only_a_wake_up_call_for_this_session_brings_the_routine(tmp_path, text):
+    save(tmp_path)
+    assert build(tmp_path, woken(tmp_path, task_output(tmp_path, text)), routine_cfg(routine_at(tmp_path))) == (
+        'UserPromptSubmit', LINE)
+
+
+@pytest.mark.parametrize('prompt', [
+    'hello',
+    wake_text(),                                                     # the user pastes the text: no notification
+    '<task-notification>\n<status>completed</status>\n</task-notification>',      # no output file
+])
+def test_a_prompt_that_is_no_notification_of_a_fired_watcher_brings_nothing(tmp_path, prompt):
+    save(tmp_path)
+    assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path)))[1] == LINE
+
+
+@pytest.mark.parametrize('prompt', [None, 5, ['x'], {'a': 1}])
+def test_a_prompt_that_is_not_text_brings_nothing(tmp_path, prompt):
+    save(tmp_path)
+    assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path)))[1] == LINE
+
+
+def test_one_of_several_notifications_in_one_prompt_is_enough(tmp_path):
+    other = task_output(tmp_path, 'done\n', name='other.output')
+    prompt = notification(other, 'b1') + '\n' + notification(task_output(tmp_path))
+    assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path)))[1] == HEADER + ROUTINE.strip()
+
+
+def test_the_output_file_must_be_a_regular_file_given_by_an_absolute_path(tmp_path, monkeypatch):
+    routine = routine_cfg(routine_at(tmp_path))
+    real = task_output(tmp_path)
+    link = tmp_path / 'tasks' / 'link.output'
+    link.symlink_to(real)
+    assert build(tmp_path, woken(tmp_path, link), routine) is None
+    assert build(tmp_path, woken(tmp_path, tmp_path / 'tasks'), routine) is None              # a folder
+    assert build(tmp_path, woken(tmp_path, tmp_path / 'tasks' / 'missing.output'), routine) is None
+    monkeypatch.chdir(tmp_path)
+    assert build(tmp_path, woken(tmp_path, 'tasks/ben0ictcc.output'), routine) is None        # relative
+    fifo = tmp_path / 'tasks' / 'fifo.output'
+    os.mkfifo(fifo)
+    assert build(tmp_path, woken(tmp_path, fifo), routine) is None                             # and does not hang
+
+
+def test_an_output_file_of_another_user_is_not_trusted(tmp_path, monkeypatch):
+    output = task_output(tmp_path)
+    routine = routine_cfg(routine_at(tmp_path))
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, 'getuid', lambda: real_uid + 1)
+    assert build(tmp_path, woken(tmp_path, output), routine) is None
+    assert log_lines(tmp_path) == []           # not a wake-up call: nothing to report
+
+
+@pytest.mark.parametrize('make,reason', [
+    (lambda p: p / 'missing.md', 'missing'),
+    (lambda p: p, 'not a regular file'),                                            # a folder
+    (lambda p: routine_at(p, mode=0o620), 'writable by group or others'),
+    (lambda p: routine_at(p, mode=0o602), 'writable by group or others'),
+    (lambda p: routine_at(p, 'x' * 4097), 'larger than 4096 bytes'),
+    (lambda p: routine_at(p, ' \n\t\n'), 'empty'),
+    (lambda p: routine_at(p, b'\xff\xfe not utf-8'), 'not UTF-8'),
+])
+def test_an_unusable_routine_file_brings_nothing_and_one_log_line(tmp_path, make, reason):
+    save(tmp_path)
+    path = make(tmp_path)
+    assert build(tmp_path, woken(tmp_path), routine_cfg(path))[1] == LINE
+    lines = log_lines(tmp_path)
+    assert len(lines) == 1 and lines[0]['hook'] == 'context_reporter' and lines[0]['decision'] == 'no_routine'
+    assert lines[0]['reason'] == f'wake_watcher.routine_file: {reason}'
+    assert str(path) not in json.dumps(lines[0])            # the path is the user's business, not the log's
+
+
+def test_a_link_in_place_of_the_routine_file_is_not_followed(tmp_path):
+    target = routine_at(tmp_path)
+    link = tmp_path / 'link.md'
+    link.symlink_to(target)
+    assert build(tmp_path, woken(tmp_path), routine_cfg(link)) is None
+    assert log_lines(tmp_path)[0]['reason'] == 'wake_watcher.routine_file: a link'
+
+
+def test_a_named_pipe_in_place_of_the_routine_file_brings_nothing_and_does_not_hang(tmp_path):
+    fifo = tmp_path / 'routine.md'
+    os.mkfifo(fifo, 0o600)
+    assert build(tmp_path, woken(tmp_path), routine_cfg(fifo)) is None
+    assert log_lines(tmp_path)[0]['reason'] == 'wake_watcher.routine_file: not a regular file'
+
+
+def test_a_routine_file_of_exactly_4096_bytes_is_read_whole(tmp_path):
+    content = 'é' * 2048                                          # 4096 bytes in UTF-8
+    assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path, content)))[1] == HEADER + content
+
+
+def test_a_read_only_routine_file_is_fine(tmp_path):
+    assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path, mode=0o400)))[1] == HEADER + ROUTINE.strip()
+
+
+def test_a_routine_file_of_another_user_is_not_read(tmp_path, monkeypatch):
+    path = routine_at(tmp_path)
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, 'getuid', lambda: real_uid + 1)
+    assert context_reporter.read_routine(str(path)) == (None, 'owned by another user')
+
+
+def test_the_routine_reader_reports_what_it_read(tmp_path):
+    assert context_reporter.read_routine(str(routine_at(tmp_path))) == (ROUTINE.strip(), None)
+
+
+def test_after_a_tool_or_in_a_subagent_there_is_never_a_routine(tmp_path):
+    save(tmp_path, used=900_000)
+    routine = routine_cfg(routine_at(tmp_path))
+    tool = dict(TOOL, prompt=notification(task_output(tmp_path)))
+    assert build(tmp_path, tool, routine) == ('PostToolUse', 'Context: 900k/1000k tokens (90%). Measured, not estimated.')
+    assert build(tmp_path, dict(woken(tmp_path), agent_id='a1'), routine) is None
+
+
+def test_the_routine_follows_the_offer_when_both_are_due(tmp_path):
+    save(tmp_path, used=250_000)
+    line = build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path), from_k=200))[1]
+    assert line == 'Context: 250k/1000k tokens (25%). Measured, not estimated.' + HINT + '\n\n' + HEADER + ROUTINE.strip()
+
+
+def test_a_failing_routine_never_costs_the_context_line(tmp_path, monkeypatch):
+    save(tmp_path)
+
+    def boom(*_a):
+        raise RuntimeError('boom')
+    monkeypatch.setattr(context_reporter, 'read_routine', boom)
+    assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path))) == ('UserPromptSubmit', LINE)
+
+
+def test_the_hook_process_brings_the_routine_from_the_configured_file(tmp_path):
+    fresh_state(tmp_path)
+    env = write_config(tmp_path, {'wake_watcher': {'routine_file': str(routine_at(tmp_path))}})
+    assert run_hook(woken(tmp_path), env) == ('UserPromptSubmit', LINE + '\n\n' + HEADER + ROUTINE.strip())
+    assert run_hook(woken(tmp_path)) == ('UserPromptSubmit', LINE)                 # not configured
+
+
+def test_the_hook_process_logs_an_unusable_routine_file(tmp_path):
+    fresh_state(tmp_path)
+    env = write_config(tmp_path, {'wake_watcher': {'routine_file': str(tmp_path / 'missing.md')}})
+    assert run_hook(woken(tmp_path), env) == ('UserPromptSubmit', LINE)
+    assert [line['reason'] for line in log_lines(tmp_path)] == ['wake_watcher.routine_file: missing']
+
+
+def test_a_routine_file_that_cannot_be_opened_is_reported_as_not_readable(tmp_path):
+    path = routine_at(tmp_path, mode=0o000)
+    assert context_reporter.read_routine(str(path)) == (None, 'not readable')
+
+
+def test_an_output_file_outside_a_notification_brings_nothing(tmp_path):
+    prompt = f'see <output-file>{task_output(tmp_path)}</output-file>'
+    assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path))) is None
+
+
+def test_a_notification_that_is_not_text_brings_nothing(tmp_path):
+    prompt = [notification(task_output(tmp_path))]
+    assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path))) is None

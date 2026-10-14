@@ -59,12 +59,17 @@ def due(state: dict, used: int, from_k: float, lead_min: float, now: float) -> d
     return {'ttl_min': TTL_MIN[ttl], 'rest_s': rest, 'used': used}
 
 
-def _fired_text(session_id: str, facts: dict, from_k: float) -> str:
+def _fired_text(session_id: str, facts: dict, from_k: float, routine_file: str) -> str:
+    """The wake-up call. Its start is what the context reporter looks for in the task output before it adds the
+    routine of `wake_watcher.routine_file`; with that file set, the call points to it."""
     rest_min = math.ceil(facts['rest_s'] / 60)
+    routine = ('it comes with this message (wake_watcher.routine_file); work through every step of it (if it is '
+               'missing: save progress, commit, push, summary)') if routine_file else (
+               '(save progress, commit, push, summary)')
     return (f'Wake-up call for session {session_id}: the user has been away for about {facts["ttl_min"] - rest_min} '
             f'min, the prompt cache has about {rest_min} min left, the context is {facts["used"] // 1000}k tokens '
-            f'(wake-up threshold {from_k:g}k). The user is away. Run your session-end routine now, without asking '
-            '(save progress, commit, push, summary), then end the turn. Do not start a new watcher.')
+            f'(wake-up threshold {from_k:g}k). The user is away. Run your session-end routine now, without asking'
+            f'{": " if routine_file else " "}{routine}, then end the turn. Do not start a new watcher.')
 
 
 def watch(session_id: str, cfg: dict, directory: str, now=time.time, sleep=time.sleep) -> str:
@@ -105,7 +110,7 @@ def watch(session_id: str, cfg: dict, directory: str, now=time.time, sleep=time.
             facts = due(state, measured[1], from_k, lead_min, moment) if measured is not None else None
             if facts is not None:
                 _wake.write_heartbeat(directory, session_id, 'fired', moment)
-                return _fired_text(session_id, facts, from_k)
+                return _fired_text(session_id, facts, from_k, cfg['wake_watcher']['routine_file'])
         except OSError as exc:
             return (f'Wake-up watcher stopped: session {session_id}: the heartbeat file cannot be written '
                     f'({exc.strerror or exc}). Nothing to do.')

@@ -13,6 +13,11 @@ ready command, from `wake_watcher.from_k` thousand tokens on (0: never). It stay
 or has fired within the last hour (heartbeat file, see _wake.py): the routine the watcher triggers would
 otherwise start the next one. If the offer fails for any reason, the context line is still given.
 
+When the watcher has fired, Claude Code submits its end as a task notification (UserPromptSubmit) whose text names
+the output file of the task. If that file starts with this session's wake-up call and `wake_watcher.routine_file`
+names a usable file, its content follows the line: the user's session-end routine reaches the model as hook
+context, not only as tool output. An unusable routine file gives one log line and nothing else.
+
 Silent (no output, exit 0) for a subagent (its context is another one), for another event, and for every file
 that is missing, a link, not a regular file, broken, of another session, implausible, older than
 `context_reporter.max_age_min` or from the future. Never blocks and always exits with 0, even if an import
@@ -20,6 +25,7 @@ fails: exit code 2 on UserPromptSubmit would reject every prompt the user types.
 """
 import json
 import os
+import re
 import shlex
 import stat
 import sys
@@ -31,6 +37,10 @@ PROMPT = 'UserPromptSubmit'
 AFTER_TOOL = 'PostToolUse'
 # The writer produces about 150 bytes; anything much bigger is not its file.
 MAX_BYTES = 4096
+ROUTINE_MAX_BYTES = 4096
+ROUTINE_HEADER = 'Session-end routine (from wake_watcher.routine_file, presented because the wake-up watcher fired):\n'
+# The notification of a finished background task names its output file (form seen on 14 Oct 2026).
+OUTPUT_FILE = re.compile(r'<output-file>([^<>\n]+)</output-file>')
 
 
 def read_state(directory: str, session_id, suffix: str = '.json') -> dict | None:
@@ -106,26 +116,120 @@ def wake_offer(directory: str, session_id: str, now: datetime) -> str:
         return ''
 
 
-def build_context(hook_input: dict, cfg: dict, directory: str, now: datetime) -> tuple[str, str] | None:
-    """(event, line) for the model, None to stay silent."""
-    event = hook_input.get('hook_event_name')
-    if event not in (PROMPT, AFTER_TOOL) or 'agent_id' in hook_input:
-        return None
+def _open_regular(path: str) -> tuple[int | None, str | None]:
+    """(descriptor, None) of a regular file of this user, opened without following a link and without blocking on
+    a named pipe; else (None, reason)."""
+    import _usage
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | _usage.NO_FOLLOW)
+    except FileNotFoundError:
+        return None, 'missing'
+    except OSError:
+        return None, 'a link' if os.path.islink(path) else 'not readable'
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        reason = 'not a regular file'
+    elif info.st_uid != os.getuid():
+        reason = 'owned by another user'
+    else:
+        return descriptor, None
+    os.close(descriptor)
+    return None, reason
+
+
+def is_wake_up_call(prompt, session_id: str) -> bool:
+    """True if the prompt is the notification of a finished background task whose output starts with the wake-up
+    call for this session. Only the start of the file is read, only an absolute path to a regular file of this
+    user counts."""
+    if not isinstance(prompt, str) or '<task-notification>' not in prompt:
+        return False
+    expected = f'Wake-up call for session {session_id}:'.encode('utf-8')
+    for path in OUTPUT_FILE.findall(prompt):
+        if not os.path.isabs(path):
+            continue
+        descriptor, _ = _open_regular(path)
+        if descriptor is None:
+            continue
+        try:
+            start = os.read(descriptor, len(expected))
+        finally:
+            os.close(descriptor)
+        if start == expected:
+            return True
+    return False
+
+
+def read_routine(path: str) -> tuple[str | None, str | None]:
+    """(text, None) of the routine file, or (None, reason): it must be a regular file of this user that neither
+    group nor others may write (its text reaches the model as an instruction), at most ROUTINE_MAX_BYTES, UTF-8
+    and not empty."""
+    descriptor, reason = _open_regular(path)
+    if descriptor is None:
+        return None, reason
+    try:
+        if os.fstat(descriptor).st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return None, 'writable by group or others'
+        raw = os.read(descriptor, ROUTINE_MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > ROUTINE_MAX_BYTES:
+        return None, f'larger than {ROUTINE_MAX_BYTES} bytes'
+    try:
+        routine = raw.decode('utf-8').strip()
+    except UnicodeDecodeError:
+        return None, 'not UTF-8'
+    return (routine, None) if routine else (None, 'empty')
+
+
+def wake_routine(hook_input: dict, cfg: dict) -> str:
+    """The routine with its header if this prompt delivers a wake-up call for this session, else ''. An unusable
+    routine file is logged (without its path) and gives ''; any other failure gives '' silently."""
+    try:
+        configured = cfg['wake_watcher']['routine_file']
+        if not configured or not is_wake_up_call(hook_input.get('prompt'), hook_input.get('session_id')):
+            return ''
+        routine, reason = read_routine(os.path.expanduser(configured))
+        if routine is None:
+            import _hookio
+            _hookio.write_log_line({'time': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                                    'hook': 'context_reporter', 'decision': 'no_routine',
+                                    'reason': f'wake_watcher.routine_file: {reason}'})
+            return ''
+        return ROUTINE_HEADER + routine
+    except Exception:
+        return ''
+
+
+def context_line(event: str, hook_input: dict, cfg: dict, directory: str, now: datetime) -> str:
+    """The line about the context window (with the offer of the watcher), '' to say nothing about it."""
     state = read_state(directory, hook_input.get('session_id'))
     if state is None or not is_fresh(state.get('measured_at'), now, cfg['context_reporter']['max_age_min']):
-        return None
+        return ''
     measured = numbers(state)
     if measured is None:
-        return None
+        return ''
     size, used = measured
     # The exact share against the limit, not the rounded one shown in the line
     if event == AFTER_TOOL and used * 100 < cfg['context_reporter']['after_tool_from'] * size:
-        return None
+        return ''
     line = text(size, used)
     from_k = cfg['wake_watcher']['from_k']
     if event == PROMPT and from_k > 0 and used >= from_k * 1000:
         line += wake_offer(directory, hook_input['session_id'], now)
-    return event, line
+    return line
+
+
+def build_context(hook_input: dict, cfg: dict, directory: str, now: datetime) -> tuple[str, str] | None:
+    """(event, text) for the model, None to stay silent."""
+    event = hook_input.get('hook_event_name')
+    if event not in (PROMPT, AFTER_TOOL) or 'agent_id' in hook_input:
+        return None
+    line = context_line(event, hook_input, cfg, directory, now)
+    if event == PROMPT:
+        routine = wake_routine(hook_input, cfg)
+        if routine:
+            line = f'{line}\n\n{routine}' if line else routine
+    return (event, line) if line else None
 
 
 def main() -> int:

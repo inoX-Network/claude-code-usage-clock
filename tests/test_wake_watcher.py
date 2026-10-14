@@ -542,6 +542,18 @@ def test_the_closing_message_when_it_fires_has_all_the_facts_and_the_instruction
         'now, without asking (save progress, commit, push, summary), then end the turn. Do not start a new watcher.')
 
 
+def test_with_a_routine_file_the_message_points_to_the_routine_that_comes_with_it(tmp_path):
+    cfg = cfg_with()
+    cfg['wake_watcher']['routine_file'] = '~/routine.md'
+    message, _ = run(tmp_path, ['fire'], cfg)
+    assert message == (
+        f'Wake-up call for session {SID}: the user has been away for about 52 min, the prompt cache has about 8 min '
+        'left, the context is 210k tokens (wake-up threshold 200k). The user is away. Run your session-end routine '
+        'now, without asking: it comes with this message (wake_watcher.routine_file); work through every step of it '
+        '(if it is missing: save progress, commit, push, summary), then end the turn. Do not start a new watcher.')
+    assert message.startswith(f'Wake-up call for session {SID}:')        # what the context reporter looks for
+
+
 def test_the_message_for_the_five_minute_cache_uses_its_lifetime(tmp_path):
     message, _ = run(tmp_path, [lambda c: write_state(c.tmp_path, c.t, ttl='5m', expires=int(c.t) + 45, measured=c.t)])
     assert 'away for about 4 min, the prompt cache has about 1 min left' in message
