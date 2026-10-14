@@ -360,7 +360,7 @@ Details: --project 0016 · --session aaaaaaaa · --full
 - **Where it went:** the projects by cost at API prices (the **cost weight**, see below), the five largest as rows and
   the rest as one line. A project is the name of the folder a session ran in, the same for everyone and without a
   setting: the report shows where you worked. It knows no paths, so folders of the same name in different places are one
-  project. A name longer than 24 characters loses its middle for a `…` in the table (`my-company-f…d-dashboard`); the
+  project. A name longer than 30 characters loses its middle for a `…` in the table (`my-company-fron…dmin-dashboard`); the
   JSON, `--full` and the `Details:` line always have the full name, and two projects that would look the same after
   shortening are both shown whole. `~week pts` is the estimated share of the weekly limit, in points (1 point
   = 1 percentage point of the week); `<1` is less than one point.

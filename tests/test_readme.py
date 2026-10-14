@@ -366,7 +366,7 @@ def usage_report_module():
 def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
     text = readme_text()
     body = flat(section(text, '### The overview'))
-    for needle in ('name of the folder', 'without a setting', 'no paths', '24 characters', '`my-company-f…d-dashboard`',
+    for needle in ('name of the folder', 'without a setting', 'no paths', '30 characters', '`my-company-fron…dmin-dashboard`',
                    'both shown whole', 'Where it went', 'Notable', '`~week pts`', '`<1`', 'thresholds.start_block_5h',
                    'below 90 %', 'more than half', 'unexplained', '--project NAME', '--session ID', 'beginning of it',
                    'exit code 2', 'docs/report-format.md', '`--json` has all projects and sessions'):

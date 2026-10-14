@@ -2823,15 +2823,16 @@ def table_rows(text):
 
 
 @pytest.mark.parametrize('name, shown', [
-    ('a' * 24, 'a' * 24),                                                       # exactly 24 characters: whole
-    ('abcdefghijklmnopqrstuvwxy', 'abcdefghijkl…opqrstuvwxy'),                  # 25: the start keeps the odd character
-    ('my-company-frontend-dashboard', 'my-company-f…d-dashboard'),
-    ('x' * 64, 'x' * 12 + '…' + 'x' * 11),                                       # 64 is the longest name the report keeps
+    ('a' * 30, 'a' * 30),                                                       # exactly 30 characters: whole
+    ('abcdefghijklmnopqrstuvwxyz01234', 'abcdefghijklmno…rstuvwxyz01234'),       # 31: the start keeps the odd character
+    ('my-company-frontend-admin-dashboard', 'my-company-fron…dmin-dashboard'),
+    ('inox-hub-0016-stripe-checkout', 'inox-hub-0016-stripe-checkout'),          # seen 14 Oct: 29 fits
+    ('x' * 64, 'x' * 15 + '…' + 'x' * 14),                                       # 64 is the longest name the report keeps
     ('short', 'short')])
-def test_a_project_name_longer_than_24_characters_loses_its_middle_in_the_table(world, name, shown):
+def test_a_project_name_longer_than_30_characters_loses_its_middle_in_the_table(world, name, shown):
     world.transcript('-p', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home(name))])
     rows = table_rows(world.overview('--day', DAY))
-    assert rows[0].split()[0] == shown and len(shown) <= 24 and len(rows) == 1
+    assert rows[0].split()[0] == shown and len(shown) <= 30 and len(rows) == 1
     assert rows[0].startswith('  ' + shown + ' ')
     # everywhere else the name is whole
     data = world.report('--day', DAY)
@@ -2848,19 +2849,19 @@ def test_the_table_columns_stay_aligned_with_a_shortened_name(world):
 
 
 def test_two_projects_with_the_same_short_form_are_both_shown_whole(world):
-    first, second = 'my-company-frontend-dashboard-one', 'my-company-frontend-legacy-d-dashboard-one'
+    first, second = 'my-company-frontend-dashboard-one', 'my-company-frontend-legacy-d-old-dashboard-one'
     assert report_module._shorten(first) == report_module._shorten(second)
     world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 5.0, cwd=home(first))])
     world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', 1.0, cwd=home(second))])
-    world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 0.5, cwd=home('x' * 30))])
+    world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 0.5, cwd=home('x' * 36))])
     rows = table_rows(world.overview('--day', DAY))
-    assert [row.split()[0] for row in rows] == [first, second, 'x' * 12 + '…' + 'x' * 11]
+    assert [row.split()[0] for row in rows] == [first, second, 'x' * 15 + '…' + 'x' * 14]
 
 
 def test_the_short_forms_of_a_list_of_names(world):
-    assert report_module.short_names(['x' * 30, 'ab', 'x' * 30 + 'y']) == [
-        'x' * 12 + '…' + 'x' * 11, 'ab', 'x' * 12 + '…' + 'x' * 10 + 'y']
-    assert report_module.short_names(['x' * 30, 'x' * 31]) == ['x' * 30, 'x' * 31]
+    assert report_module.short_names(['x' * 36, 'ab', 'x' * 36 + 'y']) == [
+        'x' * 15 + '…' + 'x' * 14, 'ab', 'x' * 15 + '…' + 'x' * 13 + 'y']
+    assert report_module.short_names(['x' * 36, 'x' * 37]) == ['x' * 36, 'x' * 37]
     assert report_module.short_names([]) == []
 
 
@@ -2940,3 +2941,50 @@ def test_the_details_line_suggests_the_largest_session_of_the_largest_project(wo
     world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 4.0, cwd=home('beta'))])
     assert world.report('--day', DAY)['overview']['details'] == {'project': 'alpha', 'session': 'bbbbbbbb'}
     assert world.overview('--day', DAY).endswith('Details: --project alpha · --session bbbbbbbb · --full\n')
+
+
+# --- The format document -------------------------------------------------------------------------------------------------
+
+REPORT_FORMAT = os.path.join(ROOT, 'docs', 'report-format.md')
+DATA_KEYED = {'.total.models', '.total.unpriced', '.total.subagents.by_type', '.clis[].models', '.clis[].subagents',
+              '.calibration.five.per_day', '.calibration.week.per_day', '.calibration.five.per_model',
+              '.calibration.week.per_model', '.guards', '.guard_reasons', '.overview.notable[].reasons'}
+
+
+def json_keys(value, path=''):
+    """The field names of a report: where a dict is keyed by data (model names, days, reasons) the key is not a field."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            fixed = path not in DATA_KEYED and not re.match(r'\.guards(\.[\w*]){0,2}$|\.guard_reasons(\.[\w*]){0,3}$', path)
+            if fixed:
+                yield key
+            yield from json_keys(child, f'{path}.{key if fixed else "*"}')
+    elif isinstance(value, list):
+        for child in value:
+            yield from json_keys(child, path + '[]')
+
+
+def test_the_format_document_explains_every_json_field_and_every_line_of_the_overview(world):
+    overview_world(world)
+    world.transcript('-p', 'iiiiiiii-9', [req('2026-10-13T12:40:00Z', 'u1', model='claude-mystery-9', out=10, request='ru',
+                                               cwd=home('0054'))])
+    world.history([row(f'2026-10-13T{clock}:00Z', five, week, FIVE_RESET, WEEK_RESET) for clock, five, week in
+                   (('10:00', 10, 0), ('10:30', 60, 20), ('11:00', 60, 20), ('11:30', 80, 38), ('12:00', 80, 38),
+                    ('12:30', 82, 39), ('13:00', 83, 41))])
+    data = world.report('--week')
+    assert {n['rule'] for n in data['overview']['notable']} == {
+        'gate_denied', 'gate_asked', 'five_hour_window', 'cache_hits_low', 'project_dominates', 'unexplained_rise'}
+    assert data['total']['unpriced'] and data['overview']['more']
+    with open(REPORT_FORMAT, encoding='utf-8') as f:
+        document = f.read()
+    keys = set(json_keys(data))
+    assert {'schema_version', 'overview', 'guard_reasons', 'project', 'session_ids', 'unpriced_requests', 'rise_points'} <= keys
+    assert [key for key in sorted(keys) if f'`{key}`' not in document] == []
+    for needle in ('Where it went', '`~`', '~week pts', 'sessions', 'N more', 'Main', 'top:', 'of output', 'cache hits',
+                   'Notable', 'Details:', '5h windows', 'at API prices', 'weekly limit used', 'no weekly measurement',
+                   'none measured', 'without a price', 'unexplained rise', 'cache hits under 90 %', 'would have denied',
+                   'shadow mode, nothing was blocked', 'reason not recorded', '`<1`', '--project', '--session', '--full',
+                   '--json', '30 characters', 'same name in different places', 'thresholds.start_block_5h', 'gate_denied', 'gate_asked',
+                   'five_hour_window', 'cache_hits_low', 'project_dominates', 'unexplained_rise', 'not your bill',
+                   'measured', 'estimate', 'point'):
+        assert needle in document, needle
