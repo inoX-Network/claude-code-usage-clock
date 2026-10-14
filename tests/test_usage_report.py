@@ -148,9 +148,20 @@ class World:
         return json.loads(self.capsys.readouterr().out)
 
     def text(self, *args, now=NOW):
+        """The full text report (--full), the report these tests were written for; --json is passed through."""
+        return self.overview(*args, *(() if '--json' in args else ('--full',)), now=now)
+
+    def overview(self, *args, now=NOW):
+        """What the command prints, with exactly the given arguments."""
         self.projects.mkdir(exist_ok=True)
         assert report_module.main(self.args(*args), now=now) == 0
         return self.capsys.readouterr().out
+
+    def configure(self, monkeypatch, **sections):
+        """A config file with the given sections, found through CCUC_CONFIG (the log folder stays the test's)."""
+        path = self.root / 'report-config.json'
+        path.write_text(json.dumps(sections), encoding='utf-8')
+        monkeypatch.setenv('CCUC_CONFIG', str(path))
 
 
 @pytest.fixture
@@ -1127,7 +1138,7 @@ def test_a_calibration_without_any_rise_has_no_value(world):
 
 def test_the_decisions_of_the_gates_are_counted_in_the_period(world):
     def entry(time, hook, mode, decision):
-        return {'time': time, 'hook': hook, 'mode': mode, 'decision': decision, 'reason': SECRET}
+        return {'time': time, 'hook': hook, 'mode': mode, 'decision': decision, 'reason': f'Checkpoint due: {SECRET}'}
     world.guard_log([entry('2026-10-13T08:00:00+00:00', 'spawn_gate', 'shadow', 'allow'),
                      entry('2026-10-13T08:00:01+00:00', 'spawn_gate', 'shadow', 'allow'),
                      entry('2026-10-13T08:00:02+00:00', 'spawn_gate', 'shadow', 'deny'),
@@ -1501,7 +1512,7 @@ def test_missing_sources_are_no_error_but_no_transcripts_at_all_is(world, capsys
     assert report_module.main(world.args('--day', DAY), now=NOW) == 1
     assert 'No transcripts' in capsys.readouterr().out
     world.projects.mkdir()
-    assert report_module.main(world.args('--day', DAY), now=NOW) == 0          # a folder without sessions: an empty report
+    assert report_module.main(world.args('--day', DAY, '--full'), now=NOW) == 0     # a folder without sessions: empty
     assert 'Requests: 0' in capsys.readouterr().out
 
 
@@ -1558,7 +1569,8 @@ def test_the_shipped_price_file_has_the_agreed_prices():
 
 def test_the_json_has_a_fixed_set_of_sections(world):
     data = day_report(world, paid('2026-10-13T10:00:00Z', 'a', 1.0))
-    assert list(data) == ['period', 'coverage', 'subscription', 'total', 'clis', 'allocation', 'calibration', 'guards']
+    assert list(data) == ['schema_version', 'period', 'coverage', 'overview', 'subscription', 'total', 'clis', 'allocation',
+                          'calibration', 'guards', 'guard_reasons']
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
     assert set(data['coverage']) == {'transcript_files', 'archive_days', 'unreadable_history_lines',
                                      'unreadable_archive_lines', 'unreadable_transcript_lines'}
@@ -1568,7 +1580,7 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert set(data['total']['subagents']) == {'requests', 'cost_usd', 'by_type'}
     assert set(data['clis'][0]) == {'id', 'label', 'start', 'requests', 'cost_usd', 'tokens', 'models', 'subagents',
                                     'cache_hit_rate', 'cold_starts', 'estimated_share', 'thinking_tokens', 'thinking_share',
-                                    'web_searches', 'web_fetches'}
+                                    'web_searches', 'web_fetches', 'project'}
     assert set(data['calibration']) == {'five', 'week'}
     assert set(data['calibration']['five']) == {'status', 'sections', 'usd_per_point', 'per_day', 'per_model'}
 
@@ -1584,7 +1596,8 @@ def test_the_text_report(world):
     text = world.text('--day', DAY)
     for needle in ('Usage report 2026-10-13', 'Week: 20 % -> 21 %', '5h windows: 1', 'peak 14 %',
                    'Requests: 2 (main 1, subagents 1)', 'Cost weight: 4.00 USD', 'arbeiter-bauen', 'proj-a', 'aaaaaaaa',
-                   '~4.0', 'Allocation', 'Calibration', 'not calibrated yet', 'spawn gate (shadow): allowed 1'):
+                   '~4.0', 'Allocation', 'Calibration', 'not calibrated yet',
+                   'spawn gate (shadow mode, only logged): allowed 1'):
         assert needle in text, needle
 
 
@@ -1598,8 +1611,10 @@ def test_the_example_in_the_readme_has_the_shape_of_the_real_report(world):
     world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:05:00Z', 'a', 3.0, cwd='/home/u/Projekte/proj-a')])
     world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:06:00Z', 'b', 1.0)], sub='x1',
                      meta={'agentType': 'reviewer'})
-    world.guard_log([{'time': '2026-10-13T10:00:00Z', 'hook': 'spawn_gate', 'mode': 'shadow', 'decision': 'allow'},
-                     {'time': '2026-10-13T10:00:01Z', 'hook': 'soft_stop', 'mode': 'shadow', 'decision': 'warn'}])
+    world.guard_log([gate('2026-10-13T10:00:00Z', 'spawn_gate', 'shadow', 'allow'),
+                     gate('2026-10-13T10:00:01Z', 'spawn_gate', 'shadow', 'warn', 'Call model: overrides'),
+                     gate('2026-10-13T10:00:02Z', 'spawn_gate', 'shadow', 'deny', '5h window at 78 %: no new blocks'),
+                     gate('2026-10-13T10:00:03Z', 'soft_stop', 'shadow', 'warn', 'Checkpoint due: save')])
     real = world.text('--day', DAY).splitlines()
 
     def headings(lines):
@@ -2076,3 +2091,833 @@ def test_a_later_segment_that_starts_at_the_same_value_is_the_same_window():
     target = [{'start': {'t': 100, 'value': 10}, 'end': {'t': 500, 'value': 38}, 'resets': None}]
     report_module._merge_weeks(target, [{'start': {'t': 900, 'value': 38}, 'end': {'t': 950, 'value': 40}, 'resets': None}])
     assert [(s['start']['value'], s['end']['value']) for s in target] == [(10, 40)]
+
+
+# --- The overview: a world of a week ---------------------------------------------------------------------------------------
+
+WEEK_RESET = T('2026-10-19T07:00:00Z')      # Mon 19 Oct 09:00 local
+FIVE_RESET = T('2026-10-13T15:00:00Z')
+
+
+def home(name):
+    return f'/home/u/Projekte/{name}'
+
+
+def sonnet(ts, message, out, **more):
+    return req(ts, message=message, request='r-' + message, model='claude-sonnet-5-5', out=out, **more)
+
+
+def haiku(ts, message, out, **more):
+    return req(ts, message=message, request='r-' + message, model='claude-haiku-5-5', out=out, **more)
+
+
+def gate(time, hook, mode, decision, reason=''):
+    return {'time': time, 'hook': hook, 'mode': mode, 'decision': decision, 'reason': reason}
+
+
+def overview_world(world, monkeypatch):
+    """Eight sessions in seven projects (the pattern takes the four digits of the folder), a week of measurements, gate
+    decisions. Costs in USD: 0016 60.276, 0034 28.96, 0022 6, 0050 3, 0051 1.5, 0052 0.5, 0053 0.25; total 100.486."""
+    world.configure(monkeypatch, report={'project_pattern': r'(\d{4})'})
+    home16, home34 = home('0016-billing'), home('0034-agents')
+    world.transcript('-p16', 'aaaaaaaa-1', [
+        extras(paid('2026-10-13T10:10:00Z', 'a1', 40.0, cwd=home16), thinking=500_000),
+        req('2026-10-13T10:12:00Z', 'a2', inp=20_000, cr=980_000, request='r-a2', cwd=home16)])
+    world.transcript('-p16', 'aaaaaaaa-1', [paid('2026-10-13T10:15:00Z', 'a3', 20.0, cwd=home16)], sub='s1',
+                     meta={'agentType': 'stripe-meister'})
+    world.transcript('-p34', 'bbbbbbbb-2', [
+        paid('2026-10-13T11:10:00Z', 'b1', 15.0, cwd=home34),
+        req('2026-10-13T11:14:00Z', 'b2', inp=200_000, cr=800_000, request='r-b2', cwd=home34)])
+    world.transcript('-p34', 'bbbbbbbb-2', [paid('2026-10-13T11:12:00Z', 'b3', 5.0, cwd=home34)], sub='s1',
+                     meta={'agentType': 'arbeiter-bauen'})
+    world.transcript('-p34', 'cccccccc-3', [sonnet('2026-10-13T11:20:00Z', 'c1', 800_000, cwd=home('0034-hub'))])
+    world.transcript('-p22', 'dddddddd-4', [paid('2026-10-13T12:10:00Z', 'd1', 6.0, cwd=home('0022-web'))])
+    world.transcript('-p50', 'eeeeeeee-5', [paid('2026-10-13T12:12:00Z', 'e1', 3.0, cwd=home('0050-x'))])
+    world.transcript('-p51', 'ffffffff-6', [paid('2026-10-13T12:14:00Z', 'f1', 1.5, cwd=home('0051-y'))])
+    world.transcript('-p52', 'gggggggg-7', [haiku('2026-10-13T12:16:00Z', 'g1', 1_000_000, cwd=home('0052-z'))])
+    world.transcript('-p53', 'hhhhhhhh-8', [haiku('2026-10-13T12:18:00Z', 'h1', 500_000, cwd=home('0053-w'))])
+    world.history([row(f'2026-10-13T{clock}:00Z', five, week, FIVE_RESET, WEEK_RESET) for clock, five, week in
+                   (('10:00', 10, 0), ('10:30', 60, 20), ('11:00', 60, 20), ('11:30', 80, 38), ('12:00', 80, 38),
+                    ('12:30', 82, 39))])
+    checkpoint, usage_pause = 'Checkpoint due: 15 calls without a checkpoint', 'Usage pause: 5h window at 90 %'
+    world.guard_log(
+        [gate(f'2026-10-13T09:0{i}:00Z', 'soft_stop', 'enforce', 'deny', checkpoint) for i in range(3)]
+        + [gate('2026-10-13T09:05:00Z', 'soft_stop', 'enforce', 'deny', usage_pause)]
+        + [gate(f'2026-10-13T09:1{i}:00Z', 'soft_stop', 'shadow', 'deny', checkpoint) for i in range(2)]
+        + [gate('2026-10-13T09:20:00Z', 'spawn_gate', 'enforce', 'ask', '7-day window at 82 %: ask first'),
+           gate('2026-10-13T09:21:00Z', 'spawn_gate', 'enforce', 'deny', '5h window at 78 %: no new blocks'),
+           gate('2026-10-13T09:22:00Z', 'spawn_gate', 'enforce', 'deny', '5h window at 80 %: no new blocks'),
+           gate('2026-10-13T09:23:00Z', 'spawn_gate', 'enforce', 'allow'),
+           gate('2026-10-13T09:24:00Z', 'soft_stop', 'enforce', 'warn', 'Checkpoint due: soon')])
+
+
+OVERVIEW_OF_THE_WEEK = """\
+Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
+5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
+
+Where it went            USD   share  ~week pts  sessions
+  0016                    60    60 %       20.0         1
+  0034                    29    29 %       18.0         2
+  0022                   6.0     6 %         <1         1
+  0050                   3.0     3 %         <1         1
+  0051                   1.5     1 %         <1         1
+  2 more                0.75    <1 %         <1         2
+
+Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
+Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
+
+Notable
+  spawn gate denied 2 agent starts (5h window at N % 2)
+  spawn gate asked before 1 agent start (7-day window at N % 1)
+  soft stop denied 4 subagent calls (checkpoint due 3, usage pause 1)
+  soft stop would have denied 2 subagent calls (checkpoint due 2; shadow mode, nothing was blocked)
+  one 5h window reached 82 % (Tue 13 Oct)
+  cache hits under 90 %: 0034 80 %
+  0016 made 60 % of the cost (60 USD)
+
+Details: --project 0016 · --session aaaaaaaa · --full
+"""
+
+
+def test_the_overview_of_a_week_exactly(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    text = world.overview('--week')
+    assert text == OVERVIEW_OF_THE_WEEK
+    assert len(text.splitlines()) <= 25
+
+
+def test_the_overview_is_the_default_for_every_period(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    for args, title in ((('--day', DAY), 'Day 2026-10-13 · '), (('--month', '2026-10'), 'Month 2026-10 · '),
+                        (('--since', DAY, '--until', '2026-10-14'), 'Days 2026-10-13 to 2026-10-14 · '),
+                        (('--week',), 'Week to Mon 19 Oct 09:00 · ')):
+        text = world.overview(*args)
+        assert text.startswith(title) and 'Where it went' in text and 'Usage report' not in text, args
+    assert world.overview().startswith('Day 2026-10-14 · ')           # no switch at all: today
+
+
+def test_the_overview_says_so_when_nothing_was_measured_or_requested(world):
+    world.projects.mkdir()
+    text = world.overview('--day', DAY)
+    assert text == ('Day 2026-10-13 · no weekly measurement · 0.00 USD at API prices\n'
+                    '5h windows: none measured\n\nNo requests in this period.\n\nDetails: --full\n')
+
+
+def test_the_overview_json_carries_the_same_numbers(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    data = world.report('--week')
+    assert data['schema_version'] == 1 and list(data)[:4] == ['schema_version', 'period', 'coverage', 'overview']
+    view = data['overview']
+    assert view['title'] == 'Week to Mon 19 Oct 09:00' and view['cost_usd'] == pytest.approx(100.486)
+    assert view['week'] == {'used_percent': 39, 'rise_points': 39, 'resets_at': iso(WEEK_RESET)}
+    assert view['five_hour'] == {'windows': 1, 'highest_percent': 82, 'highest_at': '2026-10-13T12:30:00Z'}
+    assert [p['name'] for p in view['projects']] == ['0016', '0034', '0022', '0050', '0051', '0052', '0053']
+    first = view['projects'][0]
+    assert first['cost_usd'] == pytest.approx(60.276) and first['share'] == pytest.approx(60.276 / 100.486)
+    assert first['week_points'] == pytest.approx(20.0) and first['sessions'] == 1 and first['session_ids'] == ['aaaaaaaa']
+    assert first['cache_hit_rate'] == pytest.approx(0.98)
+    assert view['projects'][1]['session_ids'] == ['bbbbbbbb', 'cccccccc'] and view['projects'][2]['cache_hit_rate'] is None
+    assert view['max_projects'] == 5
+    assert view['more'] == {'projects': 2, 'cost_usd': pytest.approx(0.75), 'share': pytest.approx(0.75 / 100.486),
+                            'week_points': pytest.approx(0.0667, abs=1e-3),
+                            'five_points': pytest.approx(0.0667 * 2, abs=1e-2),
+                            'sessions': 2}
+    assert view['split']['main_usd'] == pytest.approx(75.486) and view['split']['subagents_usd'] == pytest.approx(25)
+    assert view['split']['top_subagent'] == {'type': 'stripe-meister', 'cost_usd': pytest.approx(20)}
+    assert [(m['name'], round(m['cost_usd'], 2)) for m in view['models']['families']] == [
+        ('Opus', 91.74), ('Sonnet', 8.0), ('Haiku', 0.75)]
+    assert view['models']['unpriced_requests'] == 0 and view['thinking_share'] == pytest.approx(0.25)
+    assert view['cache_hit_rate'] == pytest.approx(0.89)
+    assert [n['rule'] for n in view['notable']] == ['gate_denied', 'gate_asked', 'gate_denied', 'gate_denied',
+                                                    'five_hour_window', 'cache_hits_low', 'project_dominates']
+    assert view['notable'][2] == {'rule': 'gate_denied', 'gate': 'soft_stop', 'mode': 'enforce', 'count': 4,
+                                  'reasons': {'checkpoint due': 3, 'usage pause': 1}, 'text': view['notable'][2]['text']}
+    assert view['details'] == {'project': '0016', 'session': 'aaaaaaaa'}
+    # the text is made of this object and nothing else: the printed overview is the overview of the printed JSON
+    text = world.overview('--week')
+    assert report_module.render_overview(json.loads(json.dumps(data))) + '\n' == text
+    for needle in ('39 %', '+39 points', '100 USD', 'highest 82 %', '2 more'):
+        assert needle in text
+
+
+def test_json_without_pattern_has_the_folder_names_as_projects(world):
+    spend(world, ('2026-10-13T10:00:00Z', 2.0), session='aaaaaaaa-1', project='-home-u-proj-a')
+    data = world.report('--day', DAY)
+    assert [p['name'] for p in data['overview']['projects']] == ['proj-a']
+    assert data['clis'][0]['project'] == 'proj-a'
+
+
+# --- Projects ---------------------------------------------------------------------------------------------------------
+
+def folders_world(world, *names):
+    for number, name in enumerate(names):
+        world.transcript('-p', f'{number:08d}-s', [paid(f'2026-10-13T10:0{number}:00Z', f'm{number}', 1.0, cwd=home(name))])
+
+
+def project_names(world):
+    return [p['name'] for p in world.report('--day', DAY)['overview']['projects']]
+
+
+def test_a_project_is_the_folder_name_when_the_pattern_is_empty(world, monkeypatch):
+    folders_world(world, '0016-billing', '0034-agents')
+    assert project_names(world) == ['0016-billing', '0034-agents']
+    world.configure(monkeypatch, report={'project_pattern': ''})
+    assert project_names(world) == ['0016-billing', '0034-agents']
+
+
+def test_the_group_of_the_pattern_is_the_project_and_sessions_of_a_project_are_one_row(world, monkeypatch):
+    folders_world(world, '0016-billing', '0016-docs', '0034-agents')
+    world.configure(monkeypatch, report={'project_pattern': r'^(\d{4})-'})
+    view = world.report('--day', DAY)['overview']
+    assert [(p['name'], p['sessions'], p['cost_usd']) for p in view['projects']] == [('0016', 2, 2.0), ('0034', 1, 1.0)]
+
+
+@pytest.mark.parametrize('pattern', [r'zzz(\d)', r'(x)?(\d{4})', r'(\d{4})(', r'(\d)(\d)'])
+def test_a_folder_the_pattern_does_not_match_or_a_bad_pattern_keeps_the_folder_name(world, monkeypatch, pattern):
+    folders_world(world, 'billing', '0034-agents')
+    world.configure(monkeypatch, report={'project_pattern': pattern})
+    assert project_names(world) == ['0034-agents', 'billing']
+
+
+def test_a_group_that_did_not_take_part_or_matched_nothing_keeps_the_folder_name(world, monkeypatch):
+    folders_world(world, 'alpha-1', 'beta-2')
+    world.configure(monkeypatch, report={'project_pattern': r'^(?:alpha|beta)-\d|(Z)'})
+    assert project_names(world) == ['alpha-1', 'beta-2']
+    world.configure(monkeypatch, report={'project_pattern': r'^(a*)'})      # matches the empty text for beta
+    assert project_names(world) == ['a', 'beta-2']
+
+
+def test_the_pattern_of_the_config_given_with_dash_dash_config_is_used(world, tmp_path):
+    folders_world(world, '0016-billing')
+    config = tmp_path / 'other.json'
+    config.write_text(json.dumps({'log_dir': str(world.log), 'report': {'project_pattern': r'(\d{4})'}}), encoding='utf-8')
+    assert [p['name'] for p in world.report('--day', DAY, '--config', str(config))['overview']['projects']] == ['0016']
+
+
+# --- Top 5 and "N more" -----------------------------------------------------------------------------------------------
+
+def many_projects(world, count):
+    for number in range(count):
+        world.transcript('-p', f'{number:08d}-s', [paid(f'2026-10-13T10:{number:02d}:00Z', f'm{number}', 10.0 - number,
+                                                         cwd=home(f'proj{number}'))])
+
+
+@pytest.mark.parametrize('count, more', [(1, None), (5, None), (6, 1), (8, 3)])
+def test_at_most_five_projects_are_shown_and_the_rest_is_one_line(world, count, more):
+    many_projects(world, count)
+    text = world.overview('--day', DAY)
+    rows = text.split('Where it went', 1)[1].split('\n\n', 1)[0].splitlines()[1:]
+    other = [row for row in rows if row.split()[1:2] == ['more']]
+    rows = [row for row in rows if row not in other]
+    assert len(rows) == min(count, 5) and [r.split()[0] for r in rows] == [f'proj{i}' for i in range(min(count, 5))]
+    if more is None:
+        assert other == []
+    else:
+        assert len(other) == 1 and other[0].split()[:2] == [str(more), 'more']
+        view = world.report('--day', DAY)['overview']
+        assert view['more']['projects'] == more and len(view['projects']) == count
+        assert view['more']['cost_usd'] == pytest.approx(sum(10.0 - n for n in range(5, count)))
+
+
+def test_projects_with_the_same_cost_are_ordered_by_name(world):
+    for number, name in enumerate(('zeta', 'alpha', 'mid')):
+        world.transcript('-p', f'{number:08d}-s', [paid(f'2026-10-13T10:0{number}:00Z', f'm{number}', 1.0, cwd=home(name))])
+    assert project_names(world) == ['alpha', 'mid', 'zeta']
+
+
+# --- Points below one -------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('value, decimals, expected', [(0, 1, '0'), (0.04, 1, '<1'), (0.96, 1, '<1'), (0.999999, 2, '<1'),
+                                                       (1.0, 1, '1.0'), (1.04, 1, '1.0'), (16.44, 1, '16.4'),
+                                                       (3.456, 2, '3.46')])
+def test_points_below_one_are_shown_as_less_than_one(value, decimals, expected):
+    assert report_module.points_text(value, decimals) == expected
+
+
+@pytest.mark.parametrize('value, expected', [(0, '0.00'), (0.004, '0.00'), (0.56, '0.56'), (0.994, '0.99'), (1.0, '1.0'),
+                                             (9.94, '9.9'), (9.96, '10'), (99.4, '99'), (268.4, '268'), (1234.5, '1234')])
+def test_usd_text_keeps_two_decimals_below_one_one_below_ten_and_none_above(value, expected):
+    assert report_module.usd_text(value) == expected
+
+
+def test_the_full_report_shows_tiny_estimates_as_less_than_one(world):
+    r1, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T10:00:00Z', 10, 20, r1, week), row('2026-10-13T10:10:00Z', 12, 21, r1, week)])
+    world.transcript('-p', 'aaaaaaaa-1', [paid('2026-10-13T10:05:00Z', 'a', 1.0, cwd=home('big'))])
+    world.transcript('-p', 'bbbbbbbb-2', [paid('2026-10-13T10:06:00Z', 'b', 0.03, cwd=home('small'))])
+    text = world.text('--day', DAY)
+    big = next(line for line in text.splitlines() if line.startswith('  big'))
+    small = next(line for line in text.splitlines() if line.startswith('  small'))
+    assert big.endswith('~1.9 5h points  <1 week points')       # 0.97 week points are not "~0.97" and not "~1.0"
+    assert small.endswith('<1 5h points  <1 week points') and '~0.0' not in big + small and '~1.0 ' not in big + small
+
+
+# --- Notable: every rule on its own -----------------------------------------------------------------------------------
+
+def notable(world, *args):
+    lines = world.overview(*args).split('\nNotable\n', 1)
+    return [line.strip() for line in lines[1].split('\n\n', 1)[0].splitlines()] if len(lines) == 2 else []
+
+
+def test_a_quiet_period_has_no_notable_block(world):
+    two_projects(world, 1.0, 1.0)
+    text = world.overview('--day', DAY)
+    assert 'Notable' not in text and world.report('--day', DAY)['overview']['notable'] == []
+
+
+def two_projects(world, first, second, **more):
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', first, cwd=home('alpha'), **more)])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', second, cwd=home('beta'))])
+
+
+@pytest.mark.parametrize('first, second, expected', [
+    (5.0, 5.0, []), (5.01, 4.99, ['alpha made 50 % of the cost (5.0 USD)']),
+    (9.0, 1.0, ['alpha made 90 % of the cost (9.0 USD)']),
+    (3.0, 7.0, ['beta made 70 % of the cost (7.0 USD)'])])
+def test_a_project_with_more_than_half_of_the_cost_is_notable(world, first, second, expected):
+    two_projects(world, first, second)
+    assert notable(world, '--day', DAY) == expected
+
+
+def test_the_dominating_project_is_notable_even_when_it_is_the_only_one(world):
+    spend(world, ('2026-10-13T10:00:00Z', 2.0))
+    assert notable(world, '--day', DAY) == ['proj-a made 100 % of the cost (2.0 USD)']
+
+
+def cached(world, name, session, inp, cr):
+    world.transcript('-p', session, [req('2026-10-13T10:00:00Z', 'm-' + session, inp=inp, cr=cr, request='r-' + session,
+                                         cwd=home(name))])
+
+
+@pytest.mark.parametrize('inp, cr, fires', [(100_000, 900_000, False), (100_001, 899_999, True), (10, 990, False),
+                                            (400_000, 600_000, True), (0, 5, False)])
+def test_a_project_below_ninety_percent_cache_hits_is_notable(world, inp, cr, fires):
+    cached(world, 'alpha', 'aaaaaaaa-1', inp, cr)
+    spend(world, ('2026-10-13T10:00:00Z', 1.0), session='bbbbbbbb-2', project='-p2')       # a project without cache numbers
+    lines = [line for line in notable(world, '--day', DAY) if line.startswith('cache')]
+    rate = cr / (inp + cr)
+    assert lines == ([f'cache hits under 90 %: alpha {int(100 * rate)} %'] if fires else [])
+
+
+def test_the_projects_below_ninety_percent_are_listed_in_one_line_by_cost(world):
+    world.transcript('-p1', 'aaaaaaaa-1', [req('2026-10-13T10:00:00Z', 'a', inp=500, cr=500, out=dollars(1.0), request='ra',
+                                               cwd=home('alpha'))])
+    world.transcript('-p2', 'bbbbbbbb-2', [req('2026-10-13T10:01:00Z', 'b', inp=700, cr=300, out=dollars(3.0), request='rb',
+                                               cwd=home('beta'))])
+    world.transcript('-p3', 'cccccccc-3', [req('2026-10-13T10:02:00Z', 'c', inp=10, cr=990, out=dollars(2.0), request='rc',
+                                               cwd=home('gamma'))])
+    assert [line for line in notable(world, '--day', DAY) if line.startswith('cache')] == [
+        'cache hits under 90 %: beta 30 %, alpha 50 %']
+
+
+def sections_world(world, rise_five, rise_week, with_request, five_resets=FIVE_RESET):
+    """Two measurements with a rise and (or without) a request in between."""
+    world.history([row('2026-10-13T10:00:00Z', 10, 20, five_resets, WEEK_RESET),
+                   row('2026-10-13T10:30:00Z', 10 + rise_five, 20 + rise_week, five_resets, WEEK_RESET)])
+    cwd = home('alpha')
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:15:00Z' if with_request else '2026-10-13T09:00:00Z', 'a', 1.0,
+                                                 cwd=cwd)])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:16:00Z' if with_request else '2026-10-13T09:01:00Z', 'b', 1.0,
+                                                 cwd=home('beta'))])
+
+
+@pytest.mark.parametrize('rise_five, rise_week, with_request, expected', [
+    (7, 3, False, ['unexplained rise (no request with a price in between): week 3.0 points, 5h 7.0 points']),
+    (0, 3, False, ['unexplained rise (no request with a price in between): week 3.0 points']),
+    (7, 0, False, ['unexplained rise (no request with a price in between): 5h 7.0 points']),
+    (0, 0, False, []),
+    (7, 3, True, [])])
+def test_a_rise_without_a_request_is_notable(world, rise_five, rise_week, with_request, expected):
+    sections_world(world, rise_five, rise_week, with_request)
+    assert [line for line in notable(world, '--day', DAY) if line.startswith('unexplained')] == expected
+    entries = [n for n in world.report('--day', DAY)['overview']['notable'] if n['rule'] == 'unexplained_rise']
+    assert [e['text'] for e in entries] == expected
+    if expected:
+        assert entries[0]['week_points'] == rise_week and entries[0]['five_points'] == rise_five
+
+
+def window_world(world, peaks):
+    """One 5h window per peak value, each with its own reset time, on the days 13 and 14."""
+    rows = []
+    for number, peak in enumerate(peaks):
+        reset = T(f'2026-10-13T{10 + 5 * number:02d}:00:00Z') + 3600
+        rows += [row(f'2026-10-13T{9 + 5 * number:02d}:00:00Z', peak - 1, 20, reset, WEEK_RESET),
+                 row(f'2026-10-13T{9 + 5 * number:02d}:30:00Z', peak, 20, reset, WEEK_RESET)]
+    world.history(rows)
+    spend(world, ('2026-10-13T09:10:00Z', 1.0))
+
+
+@pytest.mark.parametrize('peaks, expected', [
+    ([74], []), ([75], ['one 5h window reached 75 % (Tue 13 Oct)']), ([85], ['one 5h window reached 85 % (Tue 13 Oct)']),
+    ([40, 80], ['one 5h window reached 80 % (Tue 13 Oct)']),
+    ([76, 90], ['2 5h windows reached 75 % or more (highest 90 %, Tue 13 Oct)']),
+    ([76, 90, 80], ['3 5h windows reached 75 % or more (highest 90 %, Tue 13 Oct)'])])
+def test_a_five_hour_window_from_the_start_block_threshold_is_notable(world, peaks, expected):
+    window_world(world, peaks)
+    assert [line for line in notable(world, '--day', DAY) if '5h window' in line] == expected
+
+
+def test_the_threshold_of_the_five_hour_rule_is_the_one_of_the_spawn_gate(world, monkeypatch):
+    window_world(world, [60])
+    assert [line for line in notable(world, '--day', DAY) if '5h window' in line] == []
+    world.configure(monkeypatch, thresholds={'start_block_5h': 60})
+    lines = [line for line in notable(world, '--day', DAY) if '5h window' in line]
+    assert lines == ['one 5h window reached 60 % (Tue 13 Oct)']
+
+
+def gates_world(world, entries):
+    spend(world, ('2026-10-13T10:00:00Z', 1.0))
+    world.guard_log(entries)
+
+
+def test_a_denial_or_a_question_of_a_gate_is_notable_with_its_reasons(world):
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', 'Checkpoint due: save first')] * 64)
+    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 64 subagent calls (checkpoint due 64)']
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', 'Checkpoint due: x')])
+    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 1 subagent call (checkpoint due 1)']
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'spawn_gate', 'enforce', 'ask', 'Usage pause: 81 %')] * 2)
+    assert notable(world, '--day', DAY)[:1] == ['spawn gate asked before 2 agent starts (usage pause 2)']
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'spawn_gate', 'shadow', 'ask', 'Usage pause: x')])
+    assert notable(world, '--day', DAY)[:1] == [
+        'spawn gate would have asked before 1 agent start (usage pause 1; shadow mode, nothing was blocked)']
+
+
+@pytest.mark.parametrize('decision', ['allow', 'warn', 'other'])
+def test_allowed_and_warned_decisions_alone_are_not_notable(world, decision):
+    gates_world(world, [gate('2026-10-13T08:00:00Z', hook, 'enforce', decision, 'Checkpoint due: x')
+                        for hook in ('soft_stop', 'spawn_gate')])
+    assert not [line for line in notable(world, '--day', DAY) if 'gate' in line or 'soft stop' in line]
+
+
+def test_a_reason_is_the_text_before_the_first_colon_with_percentages_replaced(world):
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'spawn_gate', 'enforce', 'deny', reason) for reason in (
+        '5h window at 78 %: no new blocks', '5h window at 80 %: no new blocks', 'Agent …: model unknown',
+        'No colon in this one', '', ': leading colon', 'X' * 200 + ': long', 'Tab\tand\x07bell: odd')])
+    reasons = world.report('--day', DAY)['guard_reasons']['spawn_gate']['enforce']['deny']
+    assert reasons == {'5h window at N %': 2, 'agent …': 1, 'no colon in this one': 1, 'no reason': 2, 'x' + 'X' * 59: 1,
+                       'tab?and?bell': 1}
+
+
+def test_more_than_three_reasons_are_shortened_and_unrecorded_ones_are_named(world):
+    reasons = ['Alpha: a'] * 4 + ['Beta: b'] * 3 + ['Gamma: c'] * 2 + ['Delta: d', 'Epsilon: e']
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', reason) for reason in reasons])
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 11 subagent calls (alpha 4, beta 3, gamma 2, other 2)'
+
+
+def test_the_notable_lines_come_in_a_fixed_order(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    lines = notable(world, '--week')
+    assert [line.split()[0] for line in lines] == ['spawn', 'spawn', 'soft', 'soft', 'one', 'cache', '0016']
+
+
+# --- Details: --project and --session ---------------------------------------------------------------------------------
+
+def cli_blocks(text):
+    """The blocks of the "By CLI" section: a line with two spaces of indent starts one, deeper lines belong to it."""
+    lines = text.split('\nBy CLI', 1)[1].split('\n', 1)[1].split('\n\n', 1)[0].splitlines()
+    blocks = []
+    for line in lines:
+        if line.startswith('  ') and not line.startswith('    '):
+            blocks.append([])
+        blocks[-1].append(line)
+    return blocks
+
+
+def sum_block(text):
+    return text.split('\n\nSum of ', 1)[1].splitlines()
+
+
+def test_a_project_shows_the_blocks_of_the_full_report_for_its_sessions_and_their_sum(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    full = world.overview('--week', '--full')
+    detail = world.overview('--week', '--project', '0034')
+    wanted = [block for block in cli_blocks(full) if block[0].split()[1] in ('bbbbbbbb', 'cccccccc')]
+    assert len(wanted) == 2 and cli_blocks(detail) == wanted
+    assert sum_block(detail)[0] == '2 CLIs'
+    assert sum_block(detail)[1] == '  28.96 USD  4 requests  ~20.0 5h points  ~18.00 week points'
+    assert [line.strip() for line in sum_block(detail)[2:]] == [
+        'tokens input 200k, cache write 5m 0, cache write 1h 0, cache read 800k, output 1.8M',
+        'models Opus 5.5 20.96, Sonnet 5.x 8.00', 'output thinking n/a, web searches n/a, web fetches n/a',
+        'subagents arbeiter-bauen 5.00 USD (1)', 'cache hits 80.0 %, cold starts 0']
+    head = detail.splitlines()[:2]
+    assert head[0] == 'Usage report week to Mon 19 Oct 09:00 (local time, UTC+02:00) - project 0034'
+    assert head[1].startswith('Sources: ') and 'Where it went' not in detail and 'Notable' not in detail
+
+
+def test_a_session_prefix_shows_that_session_and_a_longer_text_than_the_id_works_too(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    full = world.overview('--week', '--full')
+    wanted = [block for block in cli_blocks(full) if block[0].split()[1] == 'bbbbbbbb']
+    for given in ('b', 'bbbb', 'bbbbbbbb', 'bbbbbbbb-2', 'bbbbbbbb-2-and-more-than-an-id'):
+        detail = world.overview('--week', '--session', given)
+        assert cli_blocks(detail) == wanted, given
+        assert sum_block(detail)[0] == '1 CLI' and detail.splitlines()[0].endswith(' - session bbbbbbbb')
+
+
+def test_project_and_session_together_narrow_down_and_the_periods_combine(world, monkeypatch):
+    overview_world(world, monkeypatch)
+    detail = world.overview('--day', DAY, '--project', '0034', '--session', 'c')
+    assert [block[0].split()[1] for block in cli_blocks(detail)] == ['cccccccc']
+    assert detail.splitlines()[0].endswith('- project 0034, session cccccccc')
+
+
+def selection_error(world, capsys, *args):
+    world.projects.mkdir(exist_ok=True)
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args(*args), now=NOW)
+    assert stop.value.code == 2
+    return capsys.readouterr().err
+
+
+def ambiguous_world(world):
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0, cwd=home('alpha'))])
+    world.transcript('-p2', 'aaaaaaab-2', [paid('2026-10-13T10:01:00Z', 'b', 2.0, cwd=home('beta'))])
+
+
+def test_an_ambiguous_session_prefix_names_the_candidates(world, capsys):
+    ambiguous_world(world)
+    error = selection_error(world, capsys, '--day', DAY, '--session', 'aaaaaaa')
+    assert "--session 'aaaaaaa' matches 2 sessions: aaaaaaab (beta), aaaaaaaa (alpha)" in error
+    assert 'give more characters' in error and 'Traceback' not in error
+    assert cli_blocks(world.overview('--day', DAY, '--session', 'aaaaaaaa'))[0][0].split()[1] == 'aaaaaaaa'
+
+
+def test_an_unknown_session_or_project_is_an_error_with_what_exists(world, capsys):
+    ambiguous_world(world)
+    error = selection_error(world, capsys, '--day', DAY, '--session', 'zz')
+    assert "--session 'zz' matches no session in this period" in error
+    error = selection_error(world, capsys, '--day', DAY, '--project', 'gamma')
+    assert "--project 'gamma' matches no project in this period (projects: beta, alpha)" in error
+    assert "--session 'aaaaaaaa' matches no session in project beta" in selection_error(
+        world, capsys, '--day', DAY, '--project', 'beta', '--session', 'aaaaaaaa')
+    assert 'must not be empty' in selection_error(world, capsys, '--day', DAY, '--session', '')
+    assert 'must not be empty' in selection_error(world, capsys, '--day', DAY, '--project', '')
+
+
+def test_a_project_name_must_match_exactly(world, capsys):
+    ambiguous_world(world)
+    assert 'matches no project' in selection_error(world, capsys, '--day', DAY, '--project', 'alph')
+    assert 'matches no project' in selection_error(world, capsys, '--day', DAY, '--project', 'Alpha')
+
+
+def test_in_an_empty_period_a_selection_finds_nothing(world, capsys):
+    world.projects.mkdir()
+    error = selection_error(world, capsys, '--day', DAY, '--project', 'x')
+    assert 'matches no project in this period (projects: none)' in error
+
+
+@pytest.mark.parametrize('args', [('--json', '--full'), ('--json', '--project', 'x'), ('--json', '--session', 'x'),
+                                  ('--archive', '--full'), ('--archive', '--project', 'x'), ('--archive', '--session', 'x')])
+def test_the_choices_that_do_not_go_together_are_bad_arguments(world, capsys, args):
+    error = selection_error(world, capsys, *args)
+    assert ('--json' in error and 'all projects and sessions' in error) or ('--archive' in error)
+
+
+def test_the_new_options_are_in_the_help(capsys):
+    with pytest.raises(SystemExit):
+        report_module.main(['--help'])
+    text = capsys.readouterr().out
+    for option in ('--full', '--project', '--session'):
+        assert option in text
+
+
+# --- The full report: the old report with its corrections -------------------------------------------------------------
+
+def readme_world(world):
+    session = 'aaaaaaaa-1111'
+    r1, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T10:00:00Z', 10, 20, r1, week), row('2026-10-13T10:10:00Z', 14, 21, r1, week)])
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:05:00Z', 'a', 3.0, cwd='/home/u/Projekte/proj-a')])
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:06:00Z', 'b', 1.0)], sub='x1',
+                     meta={'agentType': 'arbeiter-bauen'})
+    world.guard_log([gate('2026-10-13T10:00:00Z', 'spawn_gate', 'shadow', 'allow'),
+                     gate('2026-10-13T10:00:01Z', 'soft_stop', 'enforce', 'warn', 'Checkpoint due: save'),
+                     gate('2026-10-13T10:00:02Z', 'soft_stop', 'enforce', 'deny', 'Checkpoint due: save'),
+                     gate('2026-10-13T10:00:03Z', 'soft_stop', 'enforce', 'deny', 'Usage pause: 5h window at 90 %')])
+
+
+FULL_REPORT = """\
+Usage report 2026-10-13 (local time, UTC+02:00)
+Sources: 2 transcript file(s) read
+
+Subscription
+  Week: 20 % -> 21 % (+1 points), resets Mon 19 Oct 09:00
+  5h windows: 1
+    reset 15:00, peak 14 % at Tue 13 Oct 12:10 (first seen 12:00)
+
+Total
+  Requests: 2 (main 1, subagents 1)
+  Tokens: input 0, cache write 5m 0, cache write 1h 0, cache read 0, output 200k
+  Cost weight: 4.00 USD at API prices (main 3.00, subagents 1.00)
+  Output: thinking n/a, web searches n/a, web fetches n/a
+  Cache: hit rate n/a, cold starts 0
+  Subagents by type: arbeiter-bauen 1.00 USD (1)
+  Models:
+    model Opus 5.5: 4.00 USD, 2 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits n/a
+
+By CLI (main session and its subagents, most expensive first; ~ = estimate)
+  proj-a  aaaaaaaa  started Tue 13 Oct 12:05  4.00 USD  2 requests  ~4.0 5h points  ~1.00 week points
+    tokens input 0, cache write 5m 0, cache write 1h 0, cache read 0, output 200k
+    models Opus 5.5 4.00
+    output thinking n/a, web searches n/a, web fetches n/a
+    subagents arbeiter-bauen 1.00 USD (1)
+    cache hits n/a, cold starts 0
+
+Allocation of the subscription rise (estimate)
+  5h: 4 points counted, ~4.0 shared by cost between the CLIs, 0 unexplained (no request with a price in between)
+      0 stretch(es) not counted (a reset, or over 60 minutes between measurements), 0 points rise in them
+  week: 1 points counted, ~1.0 shared by cost between the CLIs, 0 unexplained (no request with a price in between)
+      0 stretch(es) not counted (a reset, or over 60 minutes between measurements), 0 points rise in them
+
+Calibration (USD per point, from stretches in which only one CLI was active)
+  5h: not calibrated yet (1 of 50 stretches)
+  week: not calibrated yet (1 of 50 stretches)
+
+Gates
+  spawn gate (shadow mode, only logged): allowed 1, warned 0, asked 0, denied 0
+  soft stop (enforce mode): warnings 1, denied 2
+      warned by reason: checkpoint due 1
+      denied by reason: checkpoint due 1, usage pause 1"""
+
+
+def test_the_full_report_is_the_old_report_with_its_corrections(world):
+    readme_world(world)
+    assert world.overview('--day', DAY, '--full').rstrip('\n') == FULL_REPORT
+
+
+def test_the_five_hour_windows_name_weekday_and_date_of_the_peak(world):
+    readme_world(world)
+    assert 'reset 15:00, peak 14 % at Tue 13 Oct 12:10 (first seen 12:00)' in world.text('--day', DAY)
+
+
+def test_the_calibration_names_only_days_with_enough_stretches(world):
+    rows = (steady_sections(world, 19, cost=2.0) + steady_sections(world, 20, cost=3.0, start='2026-10-14T08:00:00Z',
+                                                                    session='bbbbbbbb-2', project='-home-u-proj-b')
+            + steady_sections(world, 31, cost=4.0, start='2026-10-15T08:00:00Z', session='cccccccc-3',
+                              project='-home-u-proj-c'))
+    world.history(rows)
+    text = world.text('--since', DAY, '--until', '2026-10-15')
+    assert 'per day: 10-14 3.00 (20), 10-15 4.00 (31)' in text and '10-13' not in text.split('Calibration')[1]
+    days = world.report('--since', DAY, '--until', '2026-10-15')['calibration']['five']['per_day']
+    assert sorted(days) == ['2026-10-13', '2026-10-14', '2026-10-15']          # the JSON keeps every day with its count
+
+
+def test_a_single_day_with_enough_stretches_is_not_listed_per_day(world):
+    rows = steady_sections(world, 19, cost=2.0) + steady_sections(world, 40, cost=3.0, start='2026-10-14T08:00:00Z',
+                                                                   session='bbbbbbbb-2', project='-home-u-proj-b')
+    world.history(rows)
+    assert 'per day' not in world.text('--since', DAY, '--until', '2026-10-14')
+
+
+def test_the_gates_have_no_shadow_sentence_in_the_heading_and_name_the_mode_of_each(world):
+    readme_world(world)
+    text = world.text('--day', DAY)
+    assert '\nGates\n' in text and 'nothing is blocked' not in text
+    assert 'spawn gate (shadow mode, only logged): allowed 1' in text
+    assert 'soft stop (enforce mode): warnings 1, denied 2' in text
+
+
+# --- Reasons of the gates ---------------------------------------------------------------------------------------------
+
+def test_the_json_counts_the_reasons_by_gate_mode_and_decision(world):
+    readme_world(world)
+    data = world.report('--day', DAY)
+    assert data['guards']['soft_stop'] == {'enforce': {'warn': 1, 'deny': 2}}
+    assert data['guard_reasons'] == {'soft_stop': {'enforce': {'warn': {'checkpoint due': 1},
+                                                               'deny': {'checkpoint due': 1, 'usage pause': 1}}}}
+
+
+def test_the_reasons_survive_the_archive(world):
+    readme_world(world)
+    live = world.report('--day', DAY)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    (world.log / 'log.jsonl').unlink()
+    archived = world.report('--day', DAY)
+    assert archived['coverage']['archive_days'] == [DAY]
+    assert archived['guard_reasons'] == live['guard_reasons']
+    assert archived['overview']['notable'] == live['overview']['notable']
+
+
+def test_an_archive_line_without_reasons_still_merges_and_says_so(world):
+    readme_world(world)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    path = world.log / ARCHIVE
+    lines = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    for line in lines:
+        del line['stats']['guard_reasons']
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n', encoding='utf-8')
+    for source in world.projects.rglob('*.jsonl'):
+        source.unlink()
+    (world.log / 'log.jsonl').write_text(json.dumps(gate('2026-10-14T08:00:00Z', 'soft_stop', 'enforce', 'deny',
+                                                          'Checkpoint due: save')) + '\n', encoding='utf-8')
+    data = world.report('--since', DAY, '--until', '2026-10-14')
+    assert data['coverage']['archive_days'] == [DAY] and data['coverage']['unreadable_archive_lines'] == 0
+    assert data['guards']['soft_stop']['enforce']['deny'] == 3
+    assert data['overview']['notable'][0]['reasons'] == {'checkpoint due': 1, 'reason not recorded': 2}
+    assert data['overview']['notable'][0]['text'] == (
+        'soft stop denied 3 subagent calls (reason not recorded 2, checkpoint due 1)')
+
+
+def test_gate_entries_from_the_future_or_other_hooks_carry_no_reasons(world):
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'config', 'enforce', 'deny', 'x: y'),
+                        gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'allow', 'x: y'),
+                        {'time': '2026-10-13T08:00:00Z', 'hook': 'soft_stop', 'mode': 'enforce', 'decision': 'deny'}])
+    assert world.report('--day', DAY)['guard_reasons'] == {'soft_stop': {'enforce': {'deny': {'no reason': 1}}}}
+
+
+# --- The overview: the headline and the edges -------------------------------------------------------------------------
+
+def test_the_headline_of_a_period_with_a_weekly_reset_adds_the_rises_of_both_windows(world):
+    old, new = T('2026-10-13T12:00:00Z'), T('2026-10-20T12:00:00Z')
+    five = T('2026-10-13T17:00:00Z')
+    world.history([row('2026-10-13T08:00:00Z', 5, 90, five, old), row('2026-10-13T11:00:00Z', 20, 100, five, old),
+                   row('2026-10-13T12:30:00Z', 1, 0, five, new), row('2026-10-13T15:00:00Z', 9, 12, five, new)])
+    spend(world, ('2026-10-13T10:00:00Z', 2.0))
+    assert world.overview('--day', DAY).splitlines()[0] == (
+        'Day 2026-10-13 · 12 % of the weekly limit used (+22 points) · 2.0 USD at API prices')
+    assert world.report('--day', DAY)['overview']['week'] == {'used_percent': 12, 'rise_points': 22,
+                                                              'resets_at': iso(new)}
+
+
+def test_a_weekly_value_without_a_reset_time_has_no_reset_in_the_overview(world):
+    world.history([row('2026-10-13T08:00:00Z', 5, 50), row('2026-10-13T09:00:00Z', 6, 60.5)])
+    spend(world, ('2026-10-13T08:30:00Z', 2.0))
+    first = world.overview('--day', DAY).splitlines()[0]
+    assert first.startswith('Day 2026-10-13 · 60.5 % of the weekly limit used (+10.5 points)')
+    assert world.report('--day', DAY)['overview']['week']['resets_at'] is None
+
+
+def test_a_model_without_a_price_is_counted_in_the_models_line_of_the_overview(world):
+    world.transcript('-p', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home('alpha')),
+                                          req('2026-10-13T10:01:00Z', 'm2', model='claude-mystery-9', out=10, request='r2',
+                                              cwd=home('alpha'))])
+    assert 'Opus 2.0 USD · 1 request(s) without a price · thinking n/a · cache hits n/a' in world.overview('--day', DAY)
+    assert world.report('--day', DAY)['overview']['models']['unpriced_requests'] == 1
+
+
+def test_without_any_price_there_are_no_shares(world):
+    for number in range(6):
+        world.transcript('-p', f'{number:08d}-s', [req(f'2026-10-13T10:0{number}:00Z', f'm{number}', out=10,
+                                                       model='claude-mystery-9', request=f'r{number}',
+                                                       cwd=home(f'proj{number}'))])
+    view = world.report('--day', DAY)['overview']
+    assert all(p['share'] is None for p in view['projects']) and view['more']['share'] is None
+    text = world.overview('--day', DAY)
+    assert text.count('n/a %') == 0 and text.count('  n/a') >= 6 and 'Notable' not in text
+    assert 'Opus' not in text and text.splitlines()[0].endswith('0.00 USD at API prices')
+
+
+def test_the_subagent_line_names_the_most_expensive_type_only_when_there_is_one(world):
+    spend(world, ('2026-10-13T10:00:00Z', 2.0))
+    assert 'Main 2.0 USD · subagents 0.00 USD\n' in world.overview('--day', DAY)
+    assert world.report('--day', DAY)['overview']['split']['top_subagent'] is None
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1',
+                     [paid('2026-10-13T10:01:00Z', 'x', 1.0), paid('2026-10-13T10:02:00Z', 'y', 3.0)],
+                     sub='s1', meta={'agentType': 'big'})
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:03:00Z', 'z', 1.0)], sub='s2',
+                     meta={'agentType': 'small'})
+    assert 'Main 2.0 USD · subagents 5.0 USD (top: big 4.0 USD)\n' in world.overview('--day', DAY)
+
+
+def test_a_long_project_name_widens_the_table_and_a_thinking_share_is_named(world):
+    long_name = 'a-rather-long-project-folder-name-of-sixty-characters-in-all-xx'
+    line = extras(paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home(long_name)), thinking=1_000_000)
+    world.transcript('-p', 'aaaaaaaa-1', [line])
+    lines = world.overview('--day', DAY).splitlines()
+    header, row_line = lines[3], lines[4]
+    assert header.index('USD') + 3 == row_line.index('2.0') + 3 and row_line.startswith('  ' + long_name[:64])
+    assert 'thinking 100 % of output' in lines[7]
+
+
+def test_the_overview_in_the_readme_is_the_overview_of_the_test_world(world, monkeypatch):
+    with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as f:
+        readme = f.read()
+    assert '```\n' + OVERVIEW_OF_THE_WEEK + '```' in readme
+    overview_world(world, monkeypatch)
+    assert world.overview('--week') == OVERVIEW_OF_THE_WEEK
+
+
+# --- Edges found by the mutation probe -------------------------------------------------------------------------------------
+
+def test_the_pattern_finds_the_group_anywhere_in_the_folder_name(world, monkeypatch):
+    folders_world(world, 'inox-hub-0034-agents', 'x-0034')
+    world.configure(monkeypatch, report={'project_pattern': r'(\d{4})'})
+    assert project_names(world) == ['0034']
+
+
+def test_the_cache_hit_rate_of_a_project_counts_all_its_sessions(world):
+    world.transcript('-p1', 'aaaaaaaa-1', [req('2026-10-13T10:00:00Z', 'a', inp=100, cr=900, request='ra', cwd=home('alpha'),
+                                               out=dollars(2.0))])
+    world.transcript('-p2', 'bbbbbbbb-2', [req('2026-10-13T10:01:00Z', 'b', inp=900, cr=100, request='rb', cwd=home('alpha'),
+                                               out=dollars(1.0))])
+    first = world.report('--day', DAY)['overview']['projects'][0]
+    assert first['sessions'] == 2 and first['cache_hit_rate'] == pytest.approx(0.5)
+    assert 'cache hits under 90 %: alpha 50 %' in world.overview('--day', DAY)
+
+
+def test_the_line_for_the_rest_adds_up_the_sessions_of_the_projects_in_it(world):
+    for number in range(8):
+        for session in range(2):
+            world.transcript('-p', f'{number}{session}000000-s', [paid(f'2026-10-13T{10 + number}:0{session}:00Z',
+                                                                       f'm{number}{session}', 8.0 - number,
+                                                                       cwd=home(f'proj{number}'))])
+    view = world.report('--day', DAY)['overview']
+    assert view['more']['projects'] == 3 and view['more']['sessions'] == 6 and view['projects'][5]['sessions'] == 2
+    assert next(line for line in world.overview('--day', DAY).splitlines() if ' more ' in line).split()[-1] == '6'
+
+
+def test_a_share_of_exactly_one_percent_is_shown_as_one_percent(world):
+    two_projects(world, 1.0, 99.0)
+    rows = world.overview('--day', DAY).split('Where it went', 1)[1].split('\n\n', 1)[0].splitlines()[1:]
+    assert [row.split()[-4:-2] for row in rows] == [['99', '%'], ['1', '%']]
+
+
+def test_a_cli_without_any_estimated_points_has_no_tilde(world):
+    spend(world, ('2026-10-13T10:00:00Z', 2.0))
+    assert '  2.00 USD  1 requests  0 5h points  0 week points' in world.text('--day', DAY)
+
+
+def test_exactly_one_unrecorded_decision_is_named(world):
+    readme_world(world)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    path = world.log / ARCHIVE
+    lines = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    for line in lines:
+        line['stats']['guard_reasons']['soft_stop']['enforce']['deny'] = {'checkpoint due': 1}      # of 2 denials
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n', encoding='utf-8')
+    notes = world.report('--day', DAY)['overview']['notable']
+    assert notes[0]['reasons'] == {'checkpoint due': 1, 'reason not recorded': 1}
+
+
+def test_exactly_three_reasons_are_all_named_and_a_fourth_is_other(world):
+    names = ['Alpha', 'Beta', 'Gamma']
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', f'{name}: x') for name in names])
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 3 subagent calls (alpha 1, beta 1, gamma 1)'
+    gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', f'{name}: x')
+                        for name in names + ['Delta']])
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 4 subagent calls (alpha 1, beta 1, delta 1, other 1)'
+
+
+def test_the_highest_window_is_the_one_with_the_highest_peak(world):
+    window_world(world, [76, 90, 80])
+    assert world.report('--day', DAY)['overview']['five_hour'] == {'windows': 3, 'highest_percent': 90,
+                                                                  'highest_at': '2026-10-13T14:30:00Z'}
+    assert '5h windows: 3, highest 90 % (Tue 13 Oct 16:30)' in world.overview('--day', DAY)
+
+
+def test_every_unpriced_request_is_counted(world):
+    world.transcript('-p', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home('alpha'))]
+                     + [req(f'2026-10-13T10:0{n}:00Z', f'm{n}', model='claude-mystery-9', out=10, request=f'r{n}',
+                            cwd=home('alpha')) for n in (1, 2)])
+    assert world.report('--day', DAY)['overview']['models']['unpriced_requests'] == 2
+    assert '2 request(s) without a price' in world.overview('--day', DAY)
+
+
+def test_the_details_line_suggests_the_largest_session_of_the_largest_project(world):
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0, cwd=home('alpha'))])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', 5.0, cwd=home('alpha'))])
+    world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 4.0, cwd=home('beta'))])
+    assert world.report('--day', DAY)['overview']['details'] == {'project': 'alpha', 'session': 'bbbbbbbb'}
+    assert world.overview('--day', DAY).endswith('Details: --project alpha · --session bbbbbbbb · --full\n')

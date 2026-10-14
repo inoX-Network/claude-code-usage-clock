@@ -352,3 +352,49 @@ def test_the_report_section_names_the_limits_the_code_has():
                    'hook_additional_context', 'unreadable_transcript_lines', 'modified first', 'RECOVERY_S',
                    'parse_archive_line'):
         assert needle in architecture, needle
+
+
+# --- The overview of the usage report: the text must match the tool -------------------------------------------------------
+
+def usage_report_module():
+    spec = importlib.util.spec_from_file_location('usage_report_for_overview_test', USAGE_REPORT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
+    text = readme_text()
+    body = flat(section(text, '### The overview'))
+    for needle in ('report.project_pattern', 'exactly one group', '`(\\d{4})`', 'Where it went', 'Notable', '`~week pts`',
+                   '`<1`', 'thresholds.start_block_5h', 'below 90 %', 'more than half', 'unexplained', '--project NAME',
+                   '--session ID', 'exit code 2', 'docs/report-format.md', '`--json` has all projects and sessions'):
+        assert needle in body, needle
+    ask = flat(section(text, '### Ask your agent about your usage'))
+    for needle in ('docs/report-format.md', '--json', 'overview.notable', 'transcripts', 'measurement history',
+                   'day archive', 'no model call', 'never message text'):
+        assert needle in ask, needle
+    gates = flat(section(text, '## Reports: what was used'))
+    for needle in ('by reason', '`reason not recorded`', 'checkpoint due', 'at least 20 stretches', '`<1`, not `~0.0`'):
+        assert needle in gates, needle
+
+
+def test_the_architecture_names_the_overview_the_projects_the_reasons_and_the_details():
+    usage_report = usage_report_module()
+    architecture = flat(section(architecture_text(), '## Usage report'))
+    for needle in ('project_of', 'report.project_pattern', 'build_overview', 'render_overview', 'points_text', 'usd_text',
+                   f'`MAX_PROJECTS` ({usage_report.MAX_PROJECTS})', f'`CACHE_LOW` ({usage_report.CACHE_LOW})',
+                   f'`MIN_DAY_SECTIONS` ({usage_report.MIN_DAY_SECTIONS})', 'reason_kind', 'guard_reasons',
+                   'reason not recorded', 'select_clis', 'SelectionError', '_cli_block', '_merge_cli', 'SCHEMA_VERSION',
+                   'schema_version', 'docs/report-format.md', 'Sum of N CLIs'):
+        assert needle in architecture, needle
+    assert 'report.project_pattern' in flat(section(architecture_text(), '## Configuration'))
+    layout = section(architecture_text(), '## Layout')
+    assert 'docs/report-format.md' in layout and '--project/--session' in layout
+
+
+def test_the_configuration_documents_say_the_same_about_the_project_pattern():
+    import _config
+    assert _config.DEFAULTS['report'] == {'project_pattern': ''}
+    row = next(row for row in table_after(readme_text(), '| Key |') if row[0] == '`report.project_pattern`')
+    assert row[1] == '`""`' and 'exactly one group' in row[2] and 'name of the session folder' in row[2]
