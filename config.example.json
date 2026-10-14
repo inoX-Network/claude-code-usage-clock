@@ -41,9 +41,6 @@
     "max_kb": 1024
   },
   "checkpoint_dir_suffix": "/agent-checkpoints",
-  "report": {
-    "project_pattern": ""
-  },
   "spawn_rules": {
     "model_effort_action": "warn",
     "model_pattern": "sonnet|opus|haiku|fable|inherit|claude-[a-z0-9-]+",

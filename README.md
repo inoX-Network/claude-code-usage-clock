@@ -358,18 +358,20 @@ Details: --project 0016 · --session aaaaaaaa · --full
 ```
 
 - **Where it went:** the projects by cost at API prices (the **cost weight**, see below), the five largest as rows and
-  the rest as one line. A project is a group of sessions: by default the name of the session folder. If your
-  folders have a number or a name inside, set `report.project_pattern` to a regular expression with exactly one group,
-  for example `(\d{4})` for folders like `0016-billing` and `0016-docs`: what the group matches in the folder name is
-  the project (no match: the folder name). `~week pts` is the estimated share of the weekly limit, in points (1 point
+  the rest as one line. A project is the name of the folder a session ran in, the same for everyone and without a
+  setting: the report shows where you worked. It knows no paths, so folders of the same name in different places are one
+  project. A name longer than 24 characters loses its middle for a `…` in the table (`my-company-f…d-dashboard`); the
+  JSON, `--full` and the `Details:` line always have the full name, and two projects that would look the same after
+  shortening are both shown whole. `~week pts` is the estimated share of the weekly limit, in points (1 point
   = 1 percentage point of the week); `<1` is less than one point.
 - **Notable:** a line appears only if one of these fixed rules hits, and then for everything it hits, however small
   the project: a gate denied or asked about something (with the reasons, see below), a 5h window reached
   `thresholds.start_block_5h` (default 75 %), a project's cache hit rate is below 90 %, one project made more than half
   of the cost, or the subscription rose with no request with a price in between ("unexplained"). Without a hit the
   block is left out.
-- **Details:** `--project NAME` (the project exactly as the table writes it) and `--session ID` (the beginning of a
-  session id; it must be unique, else the report lists the candidates and stops with exit code 2) print the blocks that
+- **Details:** `--project NAME` (the full name of the project, or the beginning of it) and `--session ID` (the
+  beginning of a session id). Either must be unique, else the report lists the candidates and stops with exit code 2.
+  They print the blocks that
   `--full` has for those sessions, and their sum. They combine with every period and with each other. `--json` has
   all projects and sessions in one object and takes none of the three.
 
@@ -534,7 +536,6 @@ that key and writes one line to the log.
 | `thresholds.week_action` | `warn` | Above `start_block_week`: `warn`, `ask` (permission prompt) or `deny`. |
 | `thresholds.ask_verified_in_bypass` | `false` | `true` lets `ask` prompt in modes such as `bypassPermissions`; set it only after you saw the prompt there. |
 | `checkpoint_dir_suffix` | `/agent-checkpoints` | What counts as a checkpoint directory. |
-| `report.project_pattern` | `""` | Which sessions the usage report groups into one project, see [Reports](#reports-what-was-used). Empty: a project is the name of the session folder. Otherwise a regular expression with exactly one group; its match in the folder name is the project (no match: the folder name). |
 | `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `deny` refuses the start, `off` keeps only the usage part. |
 | `spawn_rules.model_pattern` | `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+` | Which `model` values are accepted, see below. |
 | `spawn_rules.effort_values` | `["low", "medium", "high", "xhigh", "max"]` | Which `effort` values are accepted, see below. |

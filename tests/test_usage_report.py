@@ -1580,7 +1580,7 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert set(data['total']['subagents']) == {'requests', 'cost_usd', 'by_type'}
     assert set(data['clis'][0]) == {'id', 'label', 'start', 'requests', 'cost_usd', 'tokens', 'models', 'subagents',
                                     'cache_hit_rate', 'cold_starts', 'estimated_share', 'thinking_tokens', 'thinking_share',
-                                    'web_searches', 'web_fetches', 'project'}
+                                    'web_searches', 'web_fetches'}
     assert set(data['calibration']) == {'five', 'week'}
     assert set(data['calibration']['five']) == {'status', 'sections', 'usd_per_point', 'per_day', 'per_model'}
 
@@ -2115,11 +2115,10 @@ def gate(time, hook, mode, decision, reason=''):
     return {'time': time, 'hook': hook, 'mode': mode, 'decision': decision, 'reason': reason}
 
 
-def overview_world(world, monkeypatch):
-    """Eight sessions in seven projects (the pattern takes the four digits of the folder), a week of measurements, gate
+def overview_world(world):
+    """Eight sessions in seven projects (named by their folders), a week of measurements, gate
     decisions. Costs in USD: 0016 60.276, 0034 28.96, 0022 6, 0050 3, 0051 1.5, 0052 0.5, 0053 0.25; total 100.486."""
-    world.configure(monkeypatch, report={'project_pattern': r'(\d{4})'})
-    home16, home34 = home('0016-billing'), home('0034-agents')
+    home16, home34 = home('0016'), home('0034')
     world.transcript('-p16', 'aaaaaaaa-1', [
         extras(paid('2026-10-13T10:10:00Z', 'a1', 40.0, cwd=home16), thinking=500_000),
         req('2026-10-13T10:12:00Z', 'a2', inp=20_000, cr=980_000, request='r-a2', cwd=home16)])
@@ -2130,12 +2129,12 @@ def overview_world(world, monkeypatch):
         req('2026-10-13T11:14:00Z', 'b2', inp=200_000, cr=800_000, request='r-b2', cwd=home34)])
     world.transcript('-p34', 'bbbbbbbb-2', [paid('2026-10-13T11:12:00Z', 'b3', 5.0, cwd=home34)], sub='s1',
                      meta={'agentType': 'arbeiter-bauen'})
-    world.transcript('-p34', 'cccccccc-3', [sonnet('2026-10-13T11:20:00Z', 'c1', 800_000, cwd=home('0034-hub'))])
-    world.transcript('-p22', 'dddddddd-4', [paid('2026-10-13T12:10:00Z', 'd1', 6.0, cwd=home('0022-web'))])
-    world.transcript('-p50', 'eeeeeeee-5', [paid('2026-10-13T12:12:00Z', 'e1', 3.0, cwd=home('0050-x'))])
-    world.transcript('-p51', 'ffffffff-6', [paid('2026-10-13T12:14:00Z', 'f1', 1.5, cwd=home('0051-y'))])
-    world.transcript('-p52', 'gggggggg-7', [haiku('2026-10-13T12:16:00Z', 'g1', 1_000_000, cwd=home('0052-z'))])
-    world.transcript('-p53', 'hhhhhhhh-8', [haiku('2026-10-13T12:18:00Z', 'h1', 500_000, cwd=home('0053-w'))])
+    world.transcript('-p34', 'cccccccc-3', [sonnet('2026-10-13T11:20:00Z', 'c1', 800_000, cwd=home('0034'))])
+    world.transcript('-p22', 'dddddddd-4', [paid('2026-10-13T12:10:00Z', 'd1', 6.0, cwd=home('0022'))])
+    world.transcript('-p50', 'eeeeeeee-5', [paid('2026-10-13T12:12:00Z', 'e1', 3.0, cwd=home('0050'))])
+    world.transcript('-p51', 'ffffffff-6', [paid('2026-10-13T12:14:00Z', 'f1', 1.5, cwd=home('0051'))])
+    world.transcript('-p52', 'gggggggg-7', [haiku('2026-10-13T12:16:00Z', 'g1', 1_000_000, cwd=home('0052'))])
+    world.transcript('-p53', 'hhhhhhhh-8', [haiku('2026-10-13T12:18:00Z', 'h1', 500_000, cwd=home('0053'))])
     world.history([row(f'2026-10-13T{clock}:00Z', five, week, FIVE_RESET, WEEK_RESET) for clock, five, week in
                    (('10:00', 10, 0), ('10:30', 60, 20), ('11:00', 60, 20), ('11:30', 80, 38), ('12:00', 80, 38),
                     ('12:30', 82, 39))])
@@ -2179,15 +2178,15 @@ Details: --project 0016 · --session aaaaaaaa · --full
 """
 
 
-def test_the_overview_of_a_week_exactly(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_the_overview_of_a_week_exactly(world):
+    overview_world(world)
     text = world.overview('--week')
     assert text == OVERVIEW_OF_THE_WEEK
     assert len(text.splitlines()) <= 25
 
 
-def test_the_overview_is_the_default_for_every_period(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_the_overview_is_the_default_for_every_period(world):
+    overview_world(world)
     for args, title in ((('--day', DAY), 'Day 2026-10-13 · '), (('--month', '2026-10'), 'Month 2026-10 · '),
                         (('--since', DAY, '--until', '2026-10-14'), 'Days 2026-10-13 to 2026-10-14 · '),
                         (('--week',), 'Week to Mon 19 Oct 09:00 · ')):
@@ -2203,8 +2202,8 @@ def test_the_overview_says_so_when_nothing_was_measured_or_requested(world):
                     '5h windows: none measured\n\nNo requests in this period.\n\nDetails: --full\n')
 
 
-def test_the_overview_json_carries_the_same_numbers(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_the_overview_json_carries_the_same_numbers(world):
+    overview_world(world)
     data = world.report('--week')
     assert data['schema_version'] == 1 and list(data)[:4] == ['schema_version', 'period', 'coverage', 'overview']
     view = data['overview']
@@ -2240,11 +2239,11 @@ def test_the_overview_json_carries_the_same_numbers(world, monkeypatch):
         assert needle in text
 
 
-def test_json_without_pattern_has_the_folder_names_as_projects(world):
+def test_the_projects_are_the_folder_names(world):
     spend(world, ('2026-10-13T10:00:00Z', 2.0), session='aaaaaaaa-1', project='-home-u-proj-a')
     data = world.report('--day', DAY)
     assert [p['name'] for p in data['overview']['projects']] == ['proj-a']
-    assert data['clis'][0]['project'] == 'proj-a'
+    assert data['clis'][0]['label'] == 'proj-a'
 
 
 # --- Projects ---------------------------------------------------------------------------------------------------------
@@ -2258,40 +2257,12 @@ def project_names(world):
     return [p['name'] for p in world.report('--day', DAY)['overview']['projects']]
 
 
-def test_a_project_is_the_folder_name_when_the_pattern_is_empty(world, monkeypatch):
-    folders_world(world, '0016-billing', '0034-agents')
-    assert project_names(world) == ['0016-billing', '0034-agents']
-    world.configure(monkeypatch, report={'project_pattern': ''})
-    assert project_names(world) == ['0016-billing', '0034-agents']
-
-
-def test_the_group_of_the_pattern_is_the_project_and_sessions_of_a_project_are_one_row(world, monkeypatch):
+def test_a_project_is_the_folder_name_and_sessions_of_one_folder_are_one_row(world):
     folders_world(world, '0016-billing', '0016-docs', '0034-agents')
-    world.configure(monkeypatch, report={'project_pattern': r'^(\d{4})-'})
+    world.transcript('-p', 'zzzzzzzz-s', [paid('2026-10-13T10:09:00Z', 'm9', 3.0, cwd=home('0016-billing'))])
     view = world.report('--day', DAY)['overview']
-    assert [(p['name'], p['sessions'], p['cost_usd']) for p in view['projects']] == [('0016', 2, 2.0), ('0034', 1, 1.0)]
-
-
-@pytest.mark.parametrize('pattern', [r'zzz(\d)', r'(x)?(\d{4})', r'(\d{4})(', r'(\d)(\d)'])
-def test_a_folder_the_pattern_does_not_match_or_a_bad_pattern_keeps_the_folder_name(world, monkeypatch, pattern):
-    folders_world(world, 'billing', '0034-agents')
-    world.configure(monkeypatch, report={'project_pattern': pattern})
-    assert project_names(world) == ['0034-agents', 'billing']
-
-
-def test_a_group_that_did_not_take_part_or_matched_nothing_keeps_the_folder_name(world, monkeypatch):
-    folders_world(world, 'alpha-1', 'beta-2')
-    world.configure(monkeypatch, report={'project_pattern': r'^(?:alpha|beta)-\d|(Z)'})
-    assert project_names(world) == ['alpha-1', 'beta-2']
-    world.configure(monkeypatch, report={'project_pattern': r'^(a*)'})      # matches the empty text for beta
-    assert project_names(world) == ['a', 'beta-2']
-
-
-def test_the_pattern_of_the_config_given_with_dash_dash_config_is_used(world, tmp_path):
-    folders_world(world, '0016-billing')
-    config = tmp_path / 'other.json'
-    config.write_text(json.dumps({'log_dir': str(world.log), 'report': {'project_pattern': r'(\d{4})'}}), encoding='utf-8')
-    assert [p['name'] for p in world.report('--day', DAY, '--config', str(config))['overview']['projects']] == ['0016']
+    assert [(p['name'], p['sessions'], p['cost_usd']) for p in view['projects']] == [
+        ('0016-billing', 2, 4.0), ('0016-docs', 1, 1.0), ('0034-agents', 1, 1.0)]
 
 
 # --- Top 5 and "N more" -----------------------------------------------------------------------------------------------
@@ -2504,8 +2475,8 @@ def test_more_than_three_reasons_are_shortened_and_unrecorded_ones_are_named(wor
     assert notable(world, '--day', DAY)[0] == 'soft stop denied 11 subagent calls (alpha 4, beta 3, gamma 2, other 2)'
 
 
-def test_the_notable_lines_come_in_a_fixed_order(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_the_notable_lines_come_in_a_fixed_order(world):
+    overview_world(world)
     lines = notable(world, '--week')
     assert [line.split()[0] for line in lines] == ['spawn', 'spawn', 'soft', 'soft', 'one', 'cache', '0016']
 
@@ -2527,8 +2498,8 @@ def sum_block(text):
     return text.split('\n\nSum of ', 1)[1].splitlines()
 
 
-def test_a_project_shows_the_blocks_of_the_full_report_for_its_sessions_and_their_sum(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_a_project_shows_the_blocks_of_the_full_report_for_its_sessions_and_their_sum(world):
+    overview_world(world)
     full = world.overview('--week', '--full')
     detail = world.overview('--week', '--project', '0034')
     wanted = [block for block in cli_blocks(full) if block[0].split()[1] in ('bbbbbbbb', 'cccccccc')]
@@ -2544,8 +2515,8 @@ def test_a_project_shows_the_blocks_of_the_full_report_for_its_sessions_and_thei
     assert head[1].startswith('Sources: ') and 'Where it went' not in detail and 'Notable' not in detail
 
 
-def test_a_session_prefix_shows_that_session_and_a_longer_text_than_the_id_works_too(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_a_session_prefix_shows_that_session_and_a_longer_text_than_the_id_works_too(world):
+    overview_world(world)
     full = world.overview('--week', '--full')
     wanted = [block for block in cli_blocks(full) if block[0].split()[1] == 'bbbbbbbb']
     for given in ('b', 'bbbb', 'bbbbbbbb', 'bbbbbbbb-2', 'bbbbbbbb-2-and-more-than-an-id'):
@@ -2554,8 +2525,8 @@ def test_a_session_prefix_shows_that_session_and_a_longer_text_than_the_id_works
         assert sum_block(detail)[0] == '1 CLI' and detail.splitlines()[0].endswith(' - session bbbbbbbb')
 
 
-def test_project_and_session_together_narrow_down_and_the_periods_combine(world, monkeypatch):
-    overview_world(world, monkeypatch)
+def test_project_and_session_together_narrow_down_and_the_periods_combine(world):
+    overview_world(world)
     detail = world.overview('--day', DAY, '--project', '0034', '--session', 'c')
     assert [block[0].split()[1] for block in cli_blocks(detail)] == ['cccccccc']
     assert detail.splitlines()[0].endswith('- project 0034, session cccccccc')
@@ -2594,10 +2565,28 @@ def test_an_unknown_session_or_project_is_an_error_with_what_exists(world, capsy
     assert 'must not be empty' in selection_error(world, capsys, '--day', DAY, '--project', '')
 
 
-def test_a_project_name_must_match_exactly(world, capsys):
+def test_a_project_name_is_the_full_name_or_a_unique_start_of_it(world, capsys):
     ambiguous_world(world)
-    assert 'matches no project' in selection_error(world, capsys, '--day', DAY, '--project', 'alph')
+    for given in ('alpha', 'alph', 'a'):
+        detail = world.overview('--day', DAY, '--project', given)
+        assert [block[0].split()[0] for block in cli_blocks(detail)] == ['alpha']
+        assert detail.splitlines()[0].endswith(' - project alpha')
     assert 'matches no project' in selection_error(world, capsys, '--day', DAY, '--project', 'Alpha')
+    assert 'matches no project' in selection_error(world, capsys, '--day', DAY, '--project', 'lpha')
+
+
+def test_an_ambiguous_start_of_a_project_name_names_the_candidates_and_the_full_name_wins(world, capsys):
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0, cwd=home('shop'))])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', 2.0, cwd=home('shop-docs'))])
+    world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 3.0, cwd=home('shell'))])
+    error = selection_error(world, capsys, '--day', DAY, '--project', 'sh')
+    assert "--project 'sh' matches 3 projects: shell, shop-docs, shop - give more characters" in error
+    assert 'Traceback' not in error
+    assert 'matches 2 projects: shop-docs, shop' in selection_error(world, capsys, '--day', DAY, '--project', 'sho')
+    # the whole name of a project is chosen even though it starts another one
+    detail = world.overview('--day', DAY, '--project', 'shop')
+    assert [block[0].split()[0] for block in cli_blocks(detail)] == ['shop']
+    assert [block[0].split()[0] for block in cli_blocks(world.overview('--day', DAY, '--project', 'shop-'))] == ['shop-docs']
 
 
 def test_in_an_empty_period_a_selection_finds_nothing(world, capsys):
@@ -2821,31 +2810,61 @@ def test_the_subagent_line_names_the_most_expensive_type_only_when_there_is_one(
     assert 'Main 2.0 USD · subagents 5.0 USD (top: big 4.0 USD)\n' in world.overview('--day', DAY)
 
 
-def test_a_long_project_name_widens_the_table_and_a_thinking_share_is_named(world):
-    long_name = 'a-rather-long-project-folder-name-of-sixty-characters-in-all-xx'
-    line = extras(paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home(long_name)), thinking=1_000_000)
+def test_a_thinking_share_of_the_whole_output_is_a_hundred_percent(world):
+    line = extras(paid('2026-10-13T10:00:00Z', 'a', 2.0), thinking=1_000_000)
     world.transcript('-p', 'aaaaaaaa-1', [line])
+    assert 'thinking 100 % of output' in world.overview('--day', DAY)
+
+
+# --- Long project names ----------------------------------------------------------------------------------------------------
+
+def table_rows(text):
+    return text.split('Where it went', 1)[1].split('\n\n', 1)[0].splitlines()[1:]
+
+
+@pytest.mark.parametrize('name, shown', [
+    ('a' * 24, 'a' * 24),                                                       # exactly 24 characters: whole
+    ('abcdefghijklmnopqrstuvwxy', 'abcdefghijkl…opqrstuvwxy'),                  # 25: the start keeps the odd character
+    ('my-company-frontend-dashboard', 'my-company-f…d-dashboard'),
+    ('x' * 64, 'x' * 12 + '…' + 'x' * 11),                                       # 64 is the longest name the report keeps
+    ('short', 'short')])
+def test_a_project_name_longer_than_24_characters_loses_its_middle_in_the_table(world, name, shown):
+    world.transcript('-p', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 2.0, cwd=home(name))])
+    rows = table_rows(world.overview('--day', DAY))
+    assert rows[0].split()[0] == shown and len(shown) <= 24 and len(rows) == 1
+    assert rows[0].startswith('  ' + shown + ' ')
+    # everywhere else the name is whole
+    data = world.report('--day', DAY)
+    assert data['overview']['projects'][0]['name'] == name and data['clis'][0]['label'] == name
+    assert f'  {name}  aaaaaaaa  started' in world.text('--day', DAY)
+    assert f'Details: --project {name} ' in world.overview('--day', DAY)
+
+
+def test_the_table_columns_stay_aligned_with_a_shortened_name(world):
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 5.0, cwd=home('a' * 60))])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', 1.0, cwd=home('b'))])
     lines = world.overview('--day', DAY).splitlines()
-    header, row_line = lines[3], lines[4]
-    assert header.index('USD') + 3 == row_line.index('2.0') + 3 and row_line.startswith('  ' + long_name[:64])
-    assert 'thinking 100 % of output' in lines[7]
+    assert lines[3].index('USD') + 3 == lines[4].index('5.0') + 3 == lines[5].index('1.0') + 3
 
 
-def test_the_overview_in_the_readme_is_the_overview_of_the_test_world(world, monkeypatch):
-    with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as f:
-        readme = f.read()
-    assert '```\n' + OVERVIEW_OF_THE_WEEK + '```' in readme
-    overview_world(world, monkeypatch)
-    assert world.overview('--week') == OVERVIEW_OF_THE_WEEK
+def test_two_projects_with_the_same_short_form_are_both_shown_whole(world):
+    first, second = 'my-company-frontend-dashboard-one', 'my-company-frontend-legacy-d-dashboard-one'
+    assert report_module._shorten(first) == report_module._shorten(second)
+    world.transcript('-p1', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 5.0, cwd=home(first))])
+    world.transcript('-p2', 'bbbbbbbb-2', [paid('2026-10-13T10:01:00Z', 'b', 1.0, cwd=home(second))])
+    world.transcript('-p3', 'cccccccc-3', [paid('2026-10-13T10:02:00Z', 'c', 0.5, cwd=home('x' * 30))])
+    rows = table_rows(world.overview('--day', DAY))
+    assert [row.split()[0] for row in rows] == [first, second, 'x' * 12 + '…' + 'x' * 11]
+
+
+def test_the_short_forms_of_a_list_of_names(world):
+    assert report_module.short_names(['x' * 30, 'ab', 'x' * 30 + 'y']) == [
+        'x' * 12 + '…' + 'x' * 11, 'ab', 'x' * 12 + '…' + 'x' * 10 + 'y']
+    assert report_module.short_names(['x' * 30, 'x' * 31]) == ['x' * 30, 'x' * 31]
+    assert report_module.short_names([]) == []
 
 
 # --- Edges found by the mutation probe -------------------------------------------------------------------------------------
-
-def test_the_pattern_finds_the_group_anywhere_in_the_folder_name(world, monkeypatch):
-    folders_world(world, 'inox-hub-0034-agents', 'x-0034')
-    world.configure(monkeypatch, report={'project_pattern': r'(\d{4})'})
-    assert project_names(world) == ['0034']
-
 
 def test_the_cache_hit_rate_of_a_project_counts_all_its_sessions(world):
     world.transcript('-p1', 'aaaaaaaa-1', [req('2026-10-13T10:00:00Z', 'a', inp=100, cr=900, request='ra', cwd=home('alpha'),

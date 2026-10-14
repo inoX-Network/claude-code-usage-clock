@@ -366,9 +366,10 @@ def usage_report_module():
 def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
     text = readme_text()
     body = flat(section(text, '### The overview'))
-    for needle in ('report.project_pattern', 'exactly one group', '`(\\d{4})`', 'Where it went', 'Notable', '`~week pts`',
-                   '`<1`', 'thresholds.start_block_5h', 'below 90 %', 'more than half', 'unexplained', '--project NAME',
-                   '--session ID', 'exit code 2', 'docs/report-format.md', '`--json` has all projects and sessions'):
+    for needle in ('name of the folder', 'without a setting', 'no paths', '24 characters', '`my-company-f…d-dashboard`',
+                   'both shown whole', 'Where it went', 'Notable', '`~week pts`', '`<1`', 'thresholds.start_block_5h',
+                   'below 90 %', 'more than half', 'unexplained', '--project NAME', '--session ID', 'beginning of it',
+                   'exit code 2', 'docs/report-format.md', '`--json` has all projects and sessions'):
         assert needle in body, needle
     ask = flat(section(text, '### Ask your agent about your usage'))
     for needle in ('docs/report-format.md', '--json', 'overview.notable', 'transcripts', 'measurement history',
@@ -382,19 +383,12 @@ def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
 def test_the_architecture_names_the_overview_the_projects_the_reasons_and_the_details():
     usage_report = usage_report_module()
     architecture = flat(section(architecture_text(), '## Usage report'))
-    for needle in ('project_of', 'report.project_pattern', 'build_overview', 'render_overview', 'points_text', 'usd_text',
+    for needle in ('NAME_WIDTH', '_shorten', 'short_names', 'build_overview', 'render_overview', 'points_text', 'usd_text',
                    f'`MAX_PROJECTS` ({usage_report.MAX_PROJECTS})', f'`CACHE_LOW` ({usage_report.CACHE_LOW})',
                    f'`MIN_DAY_SECTIONS` ({usage_report.MIN_DAY_SECTIONS})', 'reason_kind', 'guard_reasons',
                    'reason not recorded', 'select_clis', 'SelectionError', '_cli_block', '_merge_cli', 'SCHEMA_VERSION',
                    'schema_version', 'docs/report-format.md', 'Sum of N CLIs'):
         assert needle in architecture, needle
-    assert 'report.project_pattern' in flat(section(architecture_text(), '## Configuration'))
+    assert 'project_pattern' not in architecture_text()
     layout = section(architecture_text(), '## Layout')
     assert 'docs/report-format.md' in layout and '--project/--session' in layout
-
-
-def test_the_configuration_documents_say_the_same_about_the_project_pattern():
-    import _config
-    assert _config.DEFAULTS['report'] == {'project_pattern': ''}
-    row = next(row for row in table_after(readme_text(), '| Key |') if row[0] == '`report.project_pattern`')
-    assert row[1] == '`""`' and 'exactly one group' in row[2] and 'name of the session folder' in row[2]

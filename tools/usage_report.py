@@ -16,8 +16,8 @@ both included. Without a switch the report is an overview of at most 25 lines: t
 sessions and their sum. --json prints the same figures as a stable JSON object, including the overview (see
 docs/report-format.md). --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
 nothing: Claude Code deletes transcripts after about 30 days, the archive keeps the day figures (run it daily).
-A project is a group of sessions: the name of the session folder, or, with `report.project_pattern` in the
-configuration, the one group of that regular expression in the folder name.
+A project is the name of the folder a session ran in (the report knows no paths: folders of the same name
+in different places are one project).
 
 The cost weight is what the tokens would cost at API prices (tools/prices.json); a model without a price is shown
 with its tokens as "no price", never estimated. The subscription rise per CLI is an ESTIMATE (marked ~): the rise of
@@ -61,6 +61,7 @@ COLD_START_TOKENS = 50_000  # a request that writes at least this much cache, af
 MIN_SECTIONS = 50           # sections with a single CLI needed before a cost per point is shown
 MIN_DAY_SECTIONS = 20       # sections a day needs before its cost per point is listed in the text
 MAX_PROJECTS = 5            # projects with a row in the overview; the rest is one line
+NAME_WIDTH = 24             # characters of a project name in the overview table; a longer one is shortened in the middle
 CACHE_LOW = 0.9             # a project whose cache hit rate is below this is notable
 MAX_REASONS = 3             # reasons named in a notable line; the rest is "other"
 REASON_LENGTH = 60          # characters of a reason kept
@@ -924,16 +925,8 @@ def _point(entry: dict) -> dict:
     return {'at': iso(entry['t']), 'value': entry['value']}
 
 
-def project_of(label: str, pattern) -> str:
-    """The project of a session: the group of the compiled `pattern` in the folder name (the folder name if there is no
-    pattern, no match or an empty group)."""
-    found = pattern.search(label) if pattern else None
-    return (found.group(1) if found else None) or label
-
-
-def _cli_report(ident: str, cli: dict, project: str) -> dict:
-    return {'id': ident, 'label': cli['label'], 'project': project, 'start': iso(cli['start']),
-            'requests': cli['requests'],
+def _cli_report(ident: str, cli: dict) -> dict:
+    return {'id': ident, 'label': cli['label'], 'start': iso(cli['start']), 'requests': cli['requests'],
             'cost_usd': cli['cost'], 'tokens': cli['tokens'],
             'models': dict(sorted(cli['models'].items(), key=lambda item: -item[1])),
             'subagents': _requests_and_cost(cli['subs']),
@@ -1040,12 +1033,12 @@ def _project_row(name: str, clis: list[dict], total: float) -> dict:
             'cache_hit_rate': _hit_rate(tokens), 'session_ids': [cli['id'] for cli in clis]}
 
 
-def build_overview(period: dict, report: dict, settings: dict) -> dict:
+def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
     """The overview from the other sections of the report; the text overview is made of this object alone."""
     total, abo = report['total'], report['subscription']
     by_project: dict[str, list[dict]] = {}
     for cli in report['clis']:
-        by_project.setdefault(cli['project'], []).append(cli)
+        by_project.setdefault(cli['label'], []).append(cli)
     projects = sorted((_project_row(name, clis, total['cost_usd']) for name, clis in by_project.items()),
                       key=lambda row: (-row['cost_usd'], row['name']))
     rest = projects[MAX_PROJECTS:]
@@ -1068,7 +1061,7 @@ def build_overview(period: dict, report: dict, settings: dict) -> dict:
     for name, model in total['models'].items():
         families[name.split()[0]] = families.get(name.split()[0], 0.0) + model['cost_usd']
     top_type = next(iter(total['subagents']['by_type'].items()), None)
-    notable = (_gate_notes(report) + _window_note(windows, settings['start_block_5h']) + _cache_note(projects)
+    notable = (_gate_notes(report) + _window_note(windows, start_block_5h) + _cache_note(projects)
                + _dominant_note(projects) + _unexplained_note(report['allocation']))
     return {'title': _title(period), 'cost_usd': total['cost_usd'], 'week': week,
             'five_hour': {'windows': len(windows), 'highest_percent': top['peak'] if top else None,
@@ -1084,10 +1077,9 @@ def build_overview(period: dict, report: dict, settings: dict) -> dict:
                         'session': projects[0]['session_ids'][0] if projects else None}}
 
 
-def build_report(stats: dict, period: dict, coverage: dict, settings: dict) -> dict:
-    """`settings` are the `project_pattern` (text) and `start_block_5h` (percent) of the configuration."""
+def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float) -> dict:
+    """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable."""
     abo = stats['abo']
-    pattern = re.compile(settings['project_pattern']) if settings['project_pattern'] else None
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
                for w in abo['five_windows']]
     subagents = {'requests': stats['sub']['requests'], 'cost_usd': stats['sub']['cost'],
@@ -1105,13 +1097,13 @@ def build_report(stats: dict, period: dict, coverage: dict, settings: dict) -> d
                   'subagents': subagents, 'models': _models_report(stats['models'], True),
                   'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
                   'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
-        'clis': [_cli_report(ident, cli, project_of(cli['label'], pattern)) for ident, cli in _by_cost(stats['clis'])],
+        'clis': [_cli_report(ident, cli) for ident, cli in _by_cost(stats['clis'])],
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
         'guards': stats['guards'],
         'guard_reasons': stats['guard_reasons'],
     }
-    report['overview'] = build_overview(period, report, settings)
+    report['overview'] = build_overview(period, report, start_block_5h)
     return report
 
 
@@ -1278,9 +1270,22 @@ def _guard_lines(report: dict) -> list[str]:
     return lines
 
 
+def _shorten(name: str) -> str:
+    head = NAME_WIDTH // 2
+    return name if len(name) <= NAME_WIDTH else name[:head] + '…' + name[len(name) - (NAME_WIDTH - 1 - head):]
+
+
+def short_names(names: list[str]) -> list[str]:
+    """The names as the table shows them: one longer than NAME_WIDTH loses its middle for a `…` (the start keeps the odd
+    character). Names whose short forms are the same are all kept whole."""
+    short = [_shorten(name) for name in names]
+    return [text if short.count(text) == 1 else name for name, text in zip(names, short)]
+
+
 def _table_lines(view: dict) -> list[str]:
     shown = view['projects'][:view['max_projects']]
-    rows = [(p['name'], p['cost_usd'], p['share'], p['week_points'], p['sessions']) for p in shown]
+    rows = [(name, p['cost_usd'], p['share'], p['week_points'], p['sessions'])
+            for name, p in zip(short_names([p['name'] for p in shown]), shown)]
     if view['more']:
         more = view['more']
         rows.append((f'{more["projects"]} more', more['cost_usd'], more['share'], more['week_points'], more['sessions']))
@@ -1329,17 +1334,23 @@ class SelectionError(Exception):
 
 
 def select_clis(report: dict, stats: dict, project: str | None, session: str | None) -> dict:
-    """The CLIs of one project and/or one session (given as a prefix of the id, or longer), with their sum.
-    Raises SelectionError with what to say when nothing, or more than one session, fits."""
+    """The CLIs of one project (its name or the start of it) and/or one session (the start of its id, or longer),
+    with their sum. Raises SelectionError with what to say when nothing, or more than one, fits."""
     clis = report['clis']
     parts = []
     if project is not None:
         if not project:
             raise SelectionError('--project must not be empty')
-        clis = [cli for cli in clis if cli['project'] == project]
-        if not clis:
-            names = ', '.join(p['name'] for p in report['overview']['projects']) or 'none'
-            raise SelectionError(f"--project '{project}' matches no project in this period (projects: {names})")
+        names = [p['name'] for p in report['overview']['projects']]
+        found = [project] if project in names else [name for name in names if name.startswith(project)]
+        if not found:
+            raise SelectionError(f"--project '{project}' matches no project in this period "
+                                 f"(projects: {', '.join(names) or 'none'})")
+        if len(found) > 1:
+            raise SelectionError(f"--project '{project}' matches {len(found)} projects: {', '.join(found)} "
+                                 '- give more characters')
+        project = found[0]
+        clis = [cli for cli in clis if cli['label'] == project]
         parts.append(f'project {project}')
     if session is not None:
         if not session:
@@ -1349,14 +1360,14 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
             raise SelectionError(f"--session '{session}' matches no session "
                                  + (f'in project {project}' if project is not None else 'in this period'))
         if len(found) > 1:
-            listing = ', '.join(f'{cli["id"]} ({cli["project"]})' for cli in found)
+            listing = ', '.join(f'{cli["id"]} ({cli["label"]})' for cli in found)
             raise SelectionError(f"--session '{session}' matches {len(found)} sessions: {listing} - give more characters")
         clis = found
         parts.append(f'session {found[0]["id"]}')
     merged: dict = {}
     for cli in clis:
         _merge_cli(merged, 'sum', stats['clis'][cli['id']])
-    return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum'], '')}
+    return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum'])}
 
 
 def render(report: dict, selection: dict | None = None) -> str:
@@ -1610,9 +1621,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
-    cfg = load_config(config)
-    settings = {'project_pattern': cfg['report']['project_pattern'], 'start_block_5h': cfg['thresholds']['start_block_5h']}
-    report = build_report(stats, shown, coverage, settings)
+    report = build_report(stats, shown, coverage, load_config(config)['thresholds']['start_block_5h'])
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

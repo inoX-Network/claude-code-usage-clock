@@ -391,39 +391,3 @@ def test_history_section_with_another_type_or_unknown_key(tmp_path):
     write_config(tmp_path, {'history': {'bogus': 1}})
     assert _config.load()['history'] == _config.DEFAULTS['history']
     assert 'history.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']
-
-
-# --- report -------------------------------------------------------------------------------------------------------
-
-def test_report_project_pattern_has_its_default_and_is_overridable(tmp_path):
-    assert _config.load()['report'] == {'project_pattern': ''}
-    write_config(tmp_path, {'report': {'project_pattern': r'(\d{4})'}})
-    assert _config.load()['report'] == {'project_pattern': r'(\d{4})'}
-    write_config(tmp_path, {'report': {'project_pattern': r'^proj-([a-z]+)$'}})
-    assert _config.load()['report']['project_pattern'] == r'^proj-([a-z]+)$'
-    assert log_lines(tmp_path) == []
-
-
-@pytest.mark.parametrize('value', [5, None, True, ['(a)']])
-def test_report_project_pattern_with_a_wrong_type_falls_back_and_logs(tmp_path, value):
-    write_config(tmp_path, {'report': {'project_pattern': value}})
-    assert _config.load()['report'] == {'project_pattern': ''}
-    assert 'report.project_pattern: wrong type' in log_lines(tmp_path)[0]['reason']
-
-
-@pytest.mark.parametrize('value', ['(unclosed', '[', 'no group', r'(\d+)(\w+)', '(?:a)', '(a)|(b)'])
-def test_report_project_pattern_must_compile_and_have_exactly_one_group(tmp_path, value):
-    write_config(tmp_path, {'report': {'project_pattern': value}})
-    assert _config.load()['report'] == {'project_pattern': ''}
-    lines = log_lines(tmp_path)
-    assert len(lines) == 1
-    assert ('report.project_pattern: not a valid regular expression with exactly one group, using default'
-            in lines[0]['reason'])
-
-
-def test_report_section_with_another_type_or_unknown_key(tmp_path):
-    write_config(tmp_path, {'report': 'on'})
-    assert _config.load()['report'] == _config.DEFAULTS['report']
-    write_config(tmp_path, {'report': {'bogus': 1}})
-    assert _config.load()['report'] == _config.DEFAULTS['report']
-    assert 'report.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']

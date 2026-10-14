@@ -153,10 +153,6 @@ finite number above 0 (default 10); anything else falls back to the default with
 itself loads the config without logging).
 `wake_watcher.routine_file` must be text (default `""` = off); `~` is expanded when it is read.
 
-`report.project_pattern` must be text (default `""`) that is empty or a regular expression that compiles and has exactly
-one group (`re.compile(...).groups == 1`); anything else falls back to the default with the usual log line. The usage
-report reads it (it does not log: the hooks do) together with `thresholds.start_block_5h`.
-
 Two switches are deliberately NOT in the config file but in the hook command in `settings.json`:
 `--mode=shadow|enforce` (default `shadow`) and `--week-ok-until=YYYY-MM-DD`. Where `settings.json` is
 protected against the model, the model cannot switch itself free.
@@ -494,13 +490,13 @@ twice, a day is never overwritten). Like the measurement history the file is 060
 `O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off
 last line gets a line break first.
 
-**Projects.** A project is a group of CLIs (sessions). `project_of(label, pattern)` takes the folder name of the CLI (its
-`label`) and returns the group of the compiled `report.project_pattern` found in it (`search`), else the label; an empty
-pattern, no match, a group that did not take part and an empty match all give the label. The grouping is made when the report is
-built, not when the figures are computed, so the archive holds no projects and a changed pattern applies to archived days
-too. Each entry of `clis` carries its `project`.
+**Projects.** A project is the folder name of a CLI (its `label`), for everyone and without a setting; CLIs of the same label
+are one project. The report knows no paths: folders of the same name in different places fall together. The grouping is made
+when the report is built, so the archive holds no projects. The table shortens a name longer than `NAME_WIDTH` (24) in the
+middle (`_shorten`: the first `NAME_WIDTH // 2` characters, `…`, the last `NAME_WIDTH - 1 - NAME_WIDTH // 2`); names whose short forms
+are equal stay whole (`short_names`). Only the table is shortened: the JSON, `--full` and the `Details:` line have full names.
 
-**Overview.** `build_overview(period, report, settings)` makes `report['overview']` from the other sections of the same
+**Overview.** `build_overview(period, report, start_block_5h)` makes `report['overview']` from the other sections of the same
 report and `render_overview` prints that object alone, so the JSON object is the text. Projects are summed from their
 CLIs (cost, estimated points, tokens for the cache hit rate), sorted by `(-cost_usd, name)`; the first `MAX_PROJECTS` (5) are rows, the
 others are the sum `more`. Points and costs below the display thresholds are formatted by `points_text` (`0`, `<1`,
@@ -520,7 +516,8 @@ show as `reason not recorded` (decisions minus the sum of the reasons, per gate,
 The reason text is the gate's own log text; a log line never carries values of the input (see Log), so this is no text
 of a transcript.
 
-**Details.** `--project NAME` matches the project exactly; `--session ID` matches a CLI whose 8-character id starts
+**Details.** `--project NAME` matches a project whose name is `NAME` or starts with it (an exact name wins over longer names it
+starts; several fit: an error with the candidates, exit 2); `--session ID` matches a CLI whose 8-character id starts
 with `ID` or is a prefix of `ID` (a full session id works), case-sensitive, and must be unique among the CLIs left by
 `--project` (`select_clis` raises `SelectionError`, which `main` turns into `parser.error`, exit 2: none, several with
 the candidates, empty text). The output is the head of `--full`, the `By CLI` blocks of the selected CLIs (the same

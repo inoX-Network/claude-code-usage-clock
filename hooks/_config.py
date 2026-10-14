@@ -54,9 +54,6 @@ DEFAULTS: dict = {
         'max_kb': 1024,
     },
     'checkpoint_dir_suffix': '/agent-checkpoints',
-    'report': {
-        'project_pattern': '',
-    },
     'spawn_rules': {
         'model_effort_action': 'warn',
         'model_pattern': 'sonnet|opus|haiku|fable|inherit|claude-[a-z0-9-]+',
@@ -187,14 +184,6 @@ def load(log_problems: bool = True) -> dict:
         if not (math.isfinite(history[key]) and history[key] > 0):
             problems.append(f'history.{key}: must be a positive number, using default')
             history[key] = DEFAULTS['history'][key]
-    # The usage report takes the group of the pattern as the project of a session folder: none or two would be no project.
-    try:
-        grouped = not cfg['report']['project_pattern'] or re.compile(cfg['report']['project_pattern']).groups == 1
-    except re.error:
-        grouped = False
-    if not grouped:
-        problems.append('report.project_pattern: not a valid regular expression with exactly one group, using default')
-        cfg['report']['project_pattern'] = DEFAULTS['report']['project_pattern']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')
