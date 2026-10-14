@@ -299,26 +299,27 @@ def test_context_reporter_section_with_another_type_or_unknown_key(tmp_path):
 # --- wake_watcher -------------------------------------------------------------------------------------------------
 
 def test_wake_watcher_keys_have_their_defaults_and_are_overridable(tmp_path):
-    assert _config.load()['wake_watcher'] == {'from_k': 0, 'lead_min': 10}
-    write_config(tmp_path, {'wake_watcher': {'from_k': 200, 'lead_min': 5.5}})
-    assert _config.load()['wake_watcher'] == {'from_k': 200, 'lead_min': 5.5}
+    assert _config.load()['wake_watcher'] == {'from_k': 0, 'lead_min': 10, 'routine_file': ''}
+    write_config(tmp_path, {'wake_watcher': {'from_k': 200, 'lead_min': 5.5, 'routine_file': '~/routine.md'}})
+    assert _config.load()['wake_watcher'] == {'from_k': 200, 'lead_min': 5.5, 'routine_file': '~/routine.md'}
     write_config(tmp_path, {'wake_watcher': {'from_k': 12.5}})
-    assert _config.load()['wake_watcher'] == {'from_k': 12.5, 'lead_min': 10}
+    assert _config.load()['wake_watcher'] == {'from_k': 12.5, 'lead_min': 10, 'routine_file': ''}
     assert log_lines(tmp_path) == []
 
 
 @pytest.mark.parametrize('value', ['200', True, None, [200]])
 def test_wake_watcher_keys_with_wrong_types_fall_back_and_log(tmp_path, value):
-    write_config(tmp_path, {'wake_watcher': {'from_k': value, 'lead_min': value}})
+    write_config(tmp_path, {'wake_watcher': {'from_k': value, 'lead_min': value, 'routine_file': [value]}})
     assert _config.load()['wake_watcher'] == _config.DEFAULTS['wake_watcher']
     reason = log_lines(tmp_path)[0]['reason']
     assert 'wake_watcher.from_k: wrong type' in reason and 'wake_watcher.lead_min: wrong type' in reason
+    assert 'wake_watcher.routine_file: wrong type' in reason
 
 
 @pytest.mark.parametrize('value', [-1, -0.01, float('nan'), float('inf'), float('-inf')])
 def test_from_k_that_is_not_a_finite_number_of_at_least_zero_falls_back_and_logs(tmp_path, value):
     write_config(tmp_path, '{"wake_watcher": {"from_k": %s, "lead_min": 7}}' % json.dumps(value))
-    assert _config.load()['wake_watcher'] == {'from_k': 0, 'lead_min': 7}
+    assert _config.load()['wake_watcher'] == {'from_k': 0, 'lead_min': 7, 'routine_file': ''}
     assert 'wake_watcher.from_k: must be a number of at least 0, using default' in log_lines(tmp_path)[0]['reason']
 
 
@@ -331,7 +332,7 @@ def test_from_k_zero_is_valid_it_means_off(tmp_path):
 @pytest.mark.parametrize('value', [0, -1, -0.5, float('nan'), float('inf'), float('-inf')])
 def test_lead_min_that_is_not_a_positive_finite_number_falls_back_and_logs(tmp_path, value):
     write_config(tmp_path, '{"wake_watcher": {"from_k": 200, "lead_min": %s}}' % json.dumps(value))
-    assert _config.load()['wake_watcher'] == {'from_k': 200, 'lead_min': 10}
+    assert _config.load()['wake_watcher'] == {'from_k': 200, 'lead_min': 10, 'routine_file': ''}
     assert 'wake_watcher.lead_min: must be a positive number, using default' in log_lines(tmp_path)[0]['reason']
 
 

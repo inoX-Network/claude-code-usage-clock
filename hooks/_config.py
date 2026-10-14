@@ -46,6 +46,7 @@ DEFAULTS: dict = {
     'wake_watcher': {
         'from_k': 0,
         'lead_min': 10,
+        'routine_file': '',
     },
     'history': {
         'enabled': True,
