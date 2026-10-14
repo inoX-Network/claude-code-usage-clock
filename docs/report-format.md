@@ -148,7 +148,7 @@ Startup context
   text is not printed; the user folder is `--claude-dir`, default `~/.claude`): characters divided by
   `start_estimate.chars_per_token`. `CLAUDE.md files` lists each file the
   folder loads at the start (`~/.claude/…` is the user folder, other names are relative to the working folder; a rule
-  with `paths:` in its frontmatter is not loaded at the start and not counted). `MEMORY.md` is the memory index of the
+  with `paths:` in its frontmatter is not loaded at the start and not counted). `MEMORY.md` is the memory index of the git repository (a linked worktree shares the one of its main working tree) or of the
   folder; main sessions load it, subagents do not (first 200 lines or 25 KB). `agent descriptions` and `skill
   descriptions` count the name and description of each definition. `not estimable` is what only Claude Code knows.
   The last line gives, for the subagent types of the period that have a definition, their share of the CLAUDE.md

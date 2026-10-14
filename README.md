@@ -492,7 +492,7 @@ Gates
   is never read into the report or printed): the CLAUDE.md files a start in the folder of the latest start loads
   (`~/.claude/CLAUDE.md` and `rules/`, then from the outermost folder to the working folder `CLAUDE.md`,
   `CLAUDE.local.md`, `.claude/CLAUDE.md` and `.claude/rules/`; a rule with `paths:` in its frontmatter is not loaded at the
-  start), `MEMORY.md` of the folder (main sessions only; the first 200 lines or 25 KB), and the `name` and `description`
+  start), `MEMORY.md` of the git repository (linked worktrees share it; else of the folder; main sessions only; the first 200 lines or 25 KB), and the `name` and `description`
   of the agents and skills of the user folder (`--claude-dir`, default `~/.claude`) and the project folders, turned into
   tokens at `start_estimate.chars_per_token` (default 2.3, measured on German Markdown; English text needs about 4).
   Not estimable, and said so: the system prompt, the built-in tools, MCP instructions, skills of plugins and other apps,

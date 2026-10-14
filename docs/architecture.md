@@ -541,7 +541,7 @@ type (most starts first) and each local day. `_overview_startup` is `overview.st
 from it. `estimate_start` (only for `--full` and `--json`) reads only sizes: `claude_md_files` (the user folder's
 CLAUDE.md and rules, then per folder from the outermost down to the working folder CLAUDE.md, CLAUDE.local.md,
 .claude/CLAUDE.md and .claude/rules; rules with `paths:` in the frontmatter are skipped; a file counts once by its real path), `memory_file`
-(`<projects dir>/<folder path with every character outside A-Za-z0-9 as "-">/memory/MEMORY.md`, cut at `MEMORY_LINES` (200) lines
+(`<projects dir>/<path with every character outside A-Za-z0-9 as "-">/memory/MEMORY.md` for the path of `repository_root` (the main working tree of the git repository: a linked worktree has a `.git` file naming `<main>/.git/worktrees/<name>`), else for the folder itself, cut at `MEMORY_LINES` (200) lines
 and `MEMORY_CHARS` (25 KB)), `agent_definitions` and `skill_definitions` (name plus folded `description` from
 `description_length`; project folders before the user folder, the first definition of a name wins), at most `MAX_FILE_CHARS`
 characters read per file, `NOT_ESTIMABLE` named and not guessed, and `omitClaudeMd` (`true`, any case) of the agent definition

@@ -404,7 +404,8 @@ def test_the_documents_explain_the_startup_context():
         assert needle in body, needle
     architecture = flat(section(architecture_text(), '## Usage report'))
     for needle in ('Request.source', 'start_indices', '_starts_between', '_merge_starts', 'startup_groups', '_start_report',
-                   '_overview_startup', 'estimate_start', 'claude_md_files', 'memory_file', 'agent_definitions',
+                   '_overview_startup', 'estimate_start', 'claude_md_files', 'memory_file', 'repository_root',
+                   'agent_definitions',
                    'skill_definitions', 'description_length', 'estimate_folder', 'NOT_ESTIMABLE', 'omitClaudeMd',
                    f'`MEMORY_LINES` ({usage_report.MEMORY_LINES})', '`MAX_FILE_CHARS`', 'FILE_NAME_CHARS'):
         assert needle in architecture, needle

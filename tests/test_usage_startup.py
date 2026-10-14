@@ -613,3 +613,61 @@ def test_the_subagent_types_of_an_estimate_come_in_name_order_whatever_the_order
     data = report_module.estimate_start('proj-x', str(work), str(user), str(world.projects), 2.3,
                                         ['agent-b', 'Explore', 'agent-a'])
     assert [s['type'] for s in data['subagents']] == ['agent-a', 'agent-b']
+
+
+# --- MEMORY.md belongs to the repository, not to the worktree -------------------------------------------------------------
+
+def memory_at(world, folder, chars):
+    put(world.projects / re.sub('[^A-Za-z0-9]', '-', str(folder)) / 'memory' / 'MEMORY.md', 'm' * chars)
+
+
+def one_start(world, cwd):
+    world.transcript('-p-x', 'xxxxxxxx-1', [req('2026-10-13T08:00:00Z', 'x1', cr=100, request='r1', cwd=str(cwd))])
+
+
+def memory_chars(world, user):
+    return [f['chars'] for f in estimate(world, user)['parts'][1]['files']]
+
+
+def test_a_linked_worktree_reads_the_memory_of_the_main_working_tree(world, tmp_path):
+    main, linked = tmp_path / 'hub', tmp_path / 'hub-wt'
+    (main / '.git' / 'worktrees' / 'wt').mkdir(parents=True)
+    put(linked / '.git', f'gitdir: {main}/.git/worktrees/wt\n')
+    memory_at(world, main, 46)
+    memory_at(world, linked, 23)
+    one_start(world, linked)
+    assert memory_chars(world, tmp_path / 'user') == [46]
+
+
+def test_a_subfolder_of_a_repository_reads_the_memory_of_the_repository(world, tmp_path):
+    (tmp_path / 'repo' / '.git').mkdir(parents=True)
+    (tmp_path / 'repo' / 'sub' / 'deeper').mkdir(parents=True)
+    memory_at(world, tmp_path / 'repo', 46)
+    one_start(world, tmp_path / 'repo' / 'sub' / 'deeper')
+    assert memory_chars(world, tmp_path / 'user') == [46]
+
+
+def test_the_memory_of_the_folder_itself_is_the_fallback(world, tmp_path):
+    (tmp_path / 'repo' / '.git').mkdir(parents=True)
+    (tmp_path / 'repo' / 'sub').mkdir()
+    memory_at(world, tmp_path / 'repo' / 'sub', 23)
+    one_start(world, tmp_path / 'repo' / 'sub')
+    assert memory_chars(world, tmp_path / 'user') == [23]
+
+
+@pytest.mark.parametrize('marker', ['gitdir: ../.git/modules/inner\n', 'not a git file', 'gitdir: /x/.git/worktrees/\n'])
+def test_a_git_file_that_is_no_linked_worktree_makes_its_own_folder_the_root(world, tmp_path, marker):
+    put(tmp_path / 'outer' / 'inner' / '.git', marker)
+    (tmp_path / 'outer' / '.git').mkdir()
+    memory_at(world, tmp_path / 'outer', 46)
+    memory_at(world, tmp_path / 'outer' / 'inner', 23)
+    one_start(world, tmp_path / 'outer' / 'inner')
+    assert memory_chars(world, tmp_path / 'user') == [23]
+
+
+def test_a_git_file_of_a_folder_above_names_that_folder_as_the_root(world, tmp_path):
+    put(tmp_path / 'outer' / '.git', 'gitdir: ../.git/modules/outer\n')           # a submodule, not a linked worktree
+    (tmp_path / 'outer' / 'sub').mkdir()
+    memory_at(world, tmp_path / 'outer', 46)
+    one_start(world, tmp_path / 'outer' / 'sub')
+    assert memory_chars(world, tmp_path / 'user') == [46]

@@ -1668,12 +1668,31 @@ def claude_md_files(user_dir: str, cwd: str) -> list[dict]:
     return files
 
 
+def repository_root(cwd: str) -> str:
+    """The main working tree of the git repository `cwd` is in: the memory of a repository is shared by its linked
+    worktrees (their `.git` is a file that names `<main>/.git/worktrees/<name>`) and its subfolders. `cwd` itself
+    if it is in no repository."""
+    for folder in _ancestors(cwd):
+        marker = os.path.join(folder, '.git')
+        if os.path.isdir(marker):
+            return folder
+        text = _read_chars(marker, 4096)
+        if text is not None:
+            found = re.match(r'gitdir: (.*)/\.git/worktrees/[^/\n]+\s*$', text)
+            return found.group(1) if found else folder
+    return cwd
+
+
 def memory_file(projects_dir: str, cwd: str) -> list[dict]:
-    """MEMORY.md of the folder, as far as Claude Code loads it (the first lines and bytes), as a list of zero or one file."""
-    path = os.path.join(projects_dir, re.sub('[^A-Za-z0-9]', '-', cwd), 'memory', 'MEMORY.md')
-    text = _read_chars(path, MAX_FILE_CHARS)
-    return [] if text is None else [{'file': 'MEMORY.md',
-                                     'chars': len(''.join(text.splitlines(keepends=True)[:MEMORY_LINES])[:MEMORY_CHARS])}]
+    """MEMORY.md of the repository of `cwd`, else of `cwd` itself (as the folder name is made from the path), as far as
+    Claude Code loads it (the first lines and bytes): a list of zero or one file."""
+    for folder in dict.fromkeys([repository_root(cwd), cwd]):
+        text = _read_chars(os.path.join(projects_dir, re.sub('[^A-Za-z0-9]', '-', folder), 'memory', 'MEMORY.md'),
+                           MAX_FILE_CHARS)
+        if text is not None:
+            lines = ''.join(text.splitlines(keepends=True)[:MEMORY_LINES])
+            return [{'file': 'MEMORY.md', 'chars': len(lines[:MEMORY_CHARS])}]
+    return []
 
 
 def agent_definitions(folders: list[str]) -> dict[str, dict]:
