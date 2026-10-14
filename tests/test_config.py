@@ -391,3 +391,26 @@ def test_history_section_with_another_type_or_unknown_key(tmp_path):
     write_config(tmp_path, {'history': {'bogus': 1}})
     assert _config.load()['history'] == _config.DEFAULTS['history']
     assert 'history.bogus: unknown key ignored' in log_lines(tmp_path)[-1]['reason']
+
+
+# --- start_estimate -------------------------------------------------------------------------------------------------
+
+def test_start_estimate_has_its_default_and_is_overridable(tmp_path):
+    assert _config.load()['start_estimate'] == {'chars_per_token': 2.3}
+    write_config(tmp_path, {'start_estimate': {'chars_per_token': 4}})
+    assert _config.load()['start_estimate'] == {'chars_per_token': 4}
+    assert log_lines(tmp_path) == []
+
+
+@pytest.mark.parametrize('value', ['2.3', None, [2.3], True])
+def test_start_estimate_with_a_wrong_type_falls_back_and_logs(tmp_path, value):
+    write_config(tmp_path, {'start_estimate': {'chars_per_token': value}})
+    assert _config.load()['start_estimate'] == _config.DEFAULTS['start_estimate']
+    assert 'start_estimate.chars_per_token: wrong type' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf')])
+def test_start_estimate_that_is_not_positive_and_finite_falls_back_and_logs(tmp_path, value):
+    write_config(tmp_path, '{"start_estimate": {"chars_per_token": %s}}' % json.dumps(value))
+    assert _config.load()['start_estimate'] == _config.DEFAULTS['start_estimate']
+    assert 'start_estimate.chars_per_token: must be a positive number, using default' in log_lines(tmp_path)[0]['reason']

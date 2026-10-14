@@ -34,6 +34,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 import time
 from unittest import mock
@@ -44,11 +45,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'hooks'))
 sys.path.insert(0, HERE)
 import _config  # noqa: E402
+import _spawn_check  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
 
 PRICES_FILE = os.path.join(HERE, 'prices.json')
 PROJECTS_DIR = '~/.claude/projects'
+CLAUDE_DIR = '~/.claude'
 HISTORY_FILE = 'usage-history.jsonl'
 ARCHIVE_FILE = 'usage-days.jsonl'
 ARCHIVE_VERSION = 1
@@ -65,6 +68,12 @@ NAME_WIDTH = 30             # characters of a project name in the overview table
 CACHE_LOW = 0.9             # a project whose cache hit rate is below this is notable
 MAX_REASONS = 3             # reasons named in a notable line; the rest is "other"
 REASON_LENGTH = 60          # characters of a reason kept
+MAX_FILE_CHARS = 1_000_000  # of a CLAUDE.md or rule file only this much is read (and counted)
+HEAD_CHARS = 65_536         # of an agent or skill file the front part is read for its description
+MEMORY_LINES = 200          # of MEMORY.md Claude Code loads the first 200 lines or 25 KB, whichever comes first
+MEMORY_CHARS = 25 * 1024
+NOT_ESTIMABLE = ('system prompt', 'built-in tools', 'MCP instructions', 'skills of plugins and other apps',
+                 'output of hooks')      # parts of the start that only Claude Code knows
 SCHEMA_VERSION = 1          # of the JSON object; changes when a field is renamed or removed
 FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
 WEEK_S = 7 * 86400
@@ -198,6 +207,7 @@ class Request(NamedTuple):
     thinking: int | None = None    # part of the output tokens; None = the transcript does not say
     searches: int | None = None
     fetches: int | None = None
+    source: str = ''               # the transcript the request stands in (never shown): its first request is a start
 
 
 class Measurement(NamedTuple):
@@ -362,12 +372,16 @@ class Data:
         self.label: dict[str, str] = {}
         self.start: dict[str, float] = {}
         self.first_main: dict[str, int] = {}
+        self.start_indices: list[int] = []        # the first request of every transcript, in time order
+        self.start_times: list[float] = []
         self.price_cache: dict[str, dict | None] = {}
 
     def set_requests(self, requests: list[Request]) -> None:
         self.requests = sorted(requests, key=lambda r: r.ts)
         self.times = [r.ts for r in self.requests]
+        first_of: dict[str, int] = {}
         for index, request in enumerate(self.requests):
+            first_of.setdefault(request.source, index)
             self.start.setdefault(request.session, request.ts)
             self.session_of.setdefault(request.session[:8], request.session)
             if request.session not in self.label and request.cwd:
@@ -376,6 +390,8 @@ class Data:
                     self.label[request.session] = folder
             if not request.sub:
                 self.first_main.setdefault(request.session, index)
+        self.start_indices = sorted(first_of.values())
+        self.start_times = [self.times[index] for index in self.start_indices]
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
         self.measurements = drop_noise(sorted(measurements, key=lambda m: m.t), self.week_anchor)
@@ -430,7 +446,7 @@ def read_transcripts(projects_dir: str, modified_since: float,
                         key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
                         known = best.get(key)
                         if known is None or tokens[4] > known[0] or (tokens[4] == known[0] and known[1] == path):
-                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details)
+                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path)
                             best[key] = (tokens[4], path, request)
                 if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
                     parsed = parse_usage_line(raw)
@@ -555,7 +571,7 @@ def new_stats() -> dict:
             'alloc': {m: {'counted': 0.0, 'attributed': 0.0, 'rest': 0.0, 'skipped_sections': 0, 'skipped_points': 0.0}
                       for m in METRICS},
             'cal': {m: {'all': new_sums(), 'models': {}, 'days': {}} for m in METRICS},
-            'guards': {}, 'guard_reasons': {}}
+            'guards': {}, 'guard_reasons': {}, 'starts': []}
 
 
 def _add_counts(target: dict, extra) -> None:
@@ -644,6 +660,27 @@ def _merge_abo(target: dict, extra) -> None:
     _merge_windows(target['five_windows'], extra.get('five_windows', []))
 
 
+START_COUNTS = ('input', 'cache_write', 'cache_read')
+START_TEXT = re.compile(r'[\w .:/?-]{1,64}')       # a model name of the price file, a model id or `?`
+
+
+def _merge_starts(target: list, extra) -> None:
+    """Adds the starts of `extra`, which must be a list of well-formed starts: a start of another shape is not read as
+    one (the archive line it comes from is not accepted)."""
+    if not isinstance(extra, list):
+        raise TypeError('starts')
+    for start in extra:
+        kind, model, session = start['type'], start['model'], start['session']
+        counts = [start[key] for key in START_COUNTS]
+        if not (_is_number(start['t']) and 0 < start['t'] < MAX_TIME and isinstance(session, str) and len(session) <= 8
+                and (kind is None or (isinstance(kind, str) and AGENT_TYPE.fullmatch(kind)))
+                and isinstance(model, str) and START_TEXT.fullmatch(model)
+                and all(_is_number(count) and 0 <= count <= MAX_COUNT for count in counts)):
+            raise ValueError('start')
+        target.append({'t': start['t'], 'session': session, 'type': kind, 'model': model,
+                       **dict(zip(START_COUNTS, counts))})
+
+
 def merge_stats(target: dict, extra) -> None:
     """Adds the figures `extra` (computed or from the archive) to `target`. Raises if `extra` is malformed; the
     caller merges into a copy then."""
@@ -653,6 +690,7 @@ def merge_stats(target: dict, extra) -> None:
     for key in ('extra', 'tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards',
                 'guard_reasons'):
         _add_counts(target[key], extra.get(key, {}))      # an archived day of an older version lacks the reasons
+    _merge_starts(target['starts'], extra.get('starts', []))     # an archived day of an earlier version has none
     for ident, cli in extra.get('clis', {}).items():
         _merge_cli(target['clis'], ident, cli)
     _merge_abo(target['abo'], extra.get('abo', {}))
@@ -691,11 +729,16 @@ def request_details(request: Request) -> dict:
     return counts
 
 
+def _model_name(entry: dict | None, model: str) -> str:
+    """The name the report shows for a model: the one of its price entry, else its id, else `?`."""
+    return entry['name'] if entry else (model if MODEL_NAME.fullmatch(model) else '?')
+
+
 def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> None:
     request = data.requests[index]
     entry = _price_of(data, prices, request.model)
     cost = request_cost(entry, request.tokens) if entry else 0.0
-    name = entry['name'] if entry else (request.model if MODEL_NAME.fullmatch(request.model) else '?')
+    name = _model_name(entry, request.model)
     details = request_details(request)
     tokens = dict(zip(KINDS, request.tokens))
     stats['requests'] += 1
@@ -724,6 +767,19 @@ def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> N
     elif index != data.first_main[request.session] and request.tokens[1] + request.tokens[2] >= COLD_START_TOKENS:
         cli['cold_starts'] += 1
         stats['cold_starts'] += 1
+
+
+def _starts_between(data: Data, prices: list[dict], start: float, end: float) -> list[dict]:
+    """The starts inside [start, end): the first request of every transcript, with the tokens it carries."""
+    lo, hi = bisect.bisect_left(data.start_times, start), bisect.bisect_left(data.start_times, end)
+    starts = []
+    for index in data.start_indices[lo:hi]:
+        request = data.requests[index]
+        starts.append({'t': request.ts, 'session': request.session[:8], 'type': request.agent_type if request.sub else None,
+                       'model': _model_name(_price_of(data, prices, request.model), request.model),
+                       'input': request.tokens[0], 'cache_write': request.tokens[1] + request.tokens[2],
+                       'cache_read': request.tokens[3]})
+    return starts
 
 
 def _cli(stats: dict, data: Data, session: str) -> dict:
@@ -866,6 +922,7 @@ def compute_stats(data: Data, prices: list[dict], intervals: list[tuple[float, f
         for index in range(bisect.bisect_left(data.times, start), bisect.bisect_left(data.times, end)):
             _count_request(stats, data, prices, index)
         _count_sections(stats, data, prices, start, end)
+        stats['starts'] += _starts_between(data, prices, start, end)
         _merge_abo(stats['abo'], _subscription(data, start, end))
         for ts, hook, mode, decision, kind in data.guards:
             if start <= ts < end:
@@ -1076,13 +1133,60 @@ def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
             'models': {'families': [{'name': name, 'cost_usd': cost} for name, cost in
                                     sorted(families.items(), key=lambda item: (-item[1], item[0]))],
                        'unpriced_requests': sum(model['requests'] for model in total['unpriced'].values())},
-            'thinking_share': total['thinking_share'], 'cache_hit_rate': total['cache_hit_rate'], 'notable': notable,
+            'thinking_share': total['thinking_share'], 'cache_hit_rate': total['cache_hit_rate'],
+            'startup': _overview_startup(report['startup']), 'notable': notable,
             'details': {'project': projects[0]['name'] if projects else None,
                         'session': projects[0]['session_ids'][0] if projects else None}}
 
 
-def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float) -> dict:
-    """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable."""
+def _group(starts: list[dict]) -> dict | None:
+    """Median, smallest and largest start in tokens and how many of the starts were warm (read the cache)."""
+    if not starts:
+        return None
+    totals = [start['tokens']['total'] for start in starts]
+    warm = sum(1 for start in starts if start['tokens']['cache_read'] > 0)
+    return {'starts': len(starts), 'median_tokens': round(statistics.median(totals)), 'min_tokens': min(totals),
+            'max_tokens': max(totals), 'warm_starts': warm, 'warm_share': warm / len(starts)}
+
+
+def startup_groups(starts: list[dict]) -> dict:
+    """The measured summary of starts in report form (see `_start_report`): main sessions, subagents (together and by
+    type, most starts first) and one row per local day."""
+    main = [start for start in starts if start['type'] is None]
+    subagents = [start for start in starts if start['type'] is not None]
+    types: dict[str, list[dict]] = {}
+    days: dict[str, list[dict]] = {}
+    for start in starts:
+        if start['type'] is not None:
+            types.setdefault(start['type'], []).append(start)
+        days.setdefault(local_day(parse_ts(start['at'])).isoformat(), []).append(start)
+    return {'main': _group(main),
+            'subagents': {'all': _group(subagents), 'by_type': {kind: _group(found) for kind, found in
+                                                                sorted(types.items(), key=lambda i: (-len(i[1]), i[0]))}},
+            'per_day': [{'day': day, 'main': _group([s for s in found if s['type'] is None]),
+                         'subagents': _group([s for s in found if s['type'] is not None])}
+                        for day, found in sorted(days.items())]}
+
+
+def _start_report(starts: list[dict], estimate: dict | None) -> dict:
+    shown = [{'at': iso(start['t']), 'session': start['session'], 'type': start['type'], 'model': start['model'],
+              'tokens': {'input': start['input'], 'cache_write': start['cache_write'], 'cache_read': start['cache_read'],
+                         'total': start['input'] + start['cache_write'] + start['cache_read']}}
+             for start in sorted(starts, key=lambda start: start['t'])]
+    return {'starts': shown, **startup_groups(shown), 'estimate': estimate}
+
+
+def _overview_startup(startup: dict) -> dict | None:
+    main, medians = startup['main'], [g['median_tokens'] for g in startup['subagents']['by_type'].values()]
+    if main is None and not medians:
+        return None
+    return {'main_median_tokens': main['median_tokens'] if main else None,
+            'subagent_type_median_tokens': {'min': min(medians), 'max': max(medians)} if medians else None}
+
+
+def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float, estimate: dict | None = None) -> dict:
+    """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable; `estimate`
+    the estimate of the fixed start (see `estimate_start`), if one was made."""
     abo = stats['abo']
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
                for w in abo['five_windows']]
@@ -1101,6 +1205,7 @@ def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: floa
                   'subagents': subagents, 'models': _models_report(stats['models'], True),
                   'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
                   'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
+        'startup': _start_report(stats['starts'], estimate),
         'clis': [_cli_report(ident, cli) for ident, cli in _by_cost(stats['clis'])],
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
@@ -1274,6 +1379,65 @@ def _guard_lines(report: dict) -> list[str]:
     return lines
 
 
+def _plural(count: int, noun: str) -> str:
+    return f'{count} {noun}' + ('' if count == 1 else 's')
+
+
+def _group_text(group: dict) -> str:
+    return (f'{_plural(group["starts"], "start")}, median {tokens_text(group["median_tokens"])} tokens, '
+            f'min {tokens_text(group["min_tokens"])}, max {tokens_text(group["max_tokens"])}, '
+            f'{group["warm_starts"]} warm ({_percent(group["warm_share"])})')
+
+
+def _day_part(name: str, group: dict | None) -> str:
+    return (f'{name} n/a' if group is None else
+            f'{name} {tokens_text(group["median_tokens"])} tokens ({_plural(group["starts"], "start")})')
+
+
+def _measured_start_lines(startup: dict) -> list[str]:
+    lines = ['  Measured, the first request of a session or subagent (input + cache write + cache read):']
+    if startup['main']:
+        lines.append(f'    main: {_group_text(startup["main"])}')
+    if startup['subagents']['by_type']:
+        lines.append('    subagents by type:')
+        lines += [f'      {kind}: {_group_text(group)}' for kind, group in startup['subagents']['by_type'].items()]
+    lines.append('    per day:')
+    for row in startup['per_day']:
+        lines.append(f'      {day_text(day_start(date.fromisoformat(row["day"])))}: {_day_part("main", row["main"])}, '
+                     f'{_day_part("subagents", row["subagents"])}')
+    return lines
+
+
+START_PARTS = {'claude_md': ('CLAUDE.md files', 'file'), 'memory': ('MEMORY.md', 'file'),
+               'agents': ('agent descriptions', 'agent'), 'skills': ('skill descriptions', 'skill')}
+
+
+def _estimate_lines(estimate: dict | None) -> list[str]:
+    if estimate is None:
+        return ['  Estimate (~): not available, no folder of a start in this period exists any more']
+    lines = [f'  Estimate (~) from the files as they are now, for the folder of {estimate["project"]}, at '
+             f'{estimate["chars_per_token"]:g} characters per token:']
+    for part in estimate['parts']:
+        label, noun = START_PARTS[part['name']]
+        lines.append(f'    {label}: ~{tokens_text(part["tokens"])} tokens ({_plural(part["items"], noun)})')
+        if part['name'] == 'claude_md':
+            lines += [f'      {file["file"]}: ~{tokens_text(file["tokens"])}' for file in part['files']]
+    lines.append(f'    together ~{tokens_text(estimate["total_tokens"])} tokens; not estimable: '
+                 + ', '.join(estimate['not_estimable']))
+    if estimate['subagents']:
+        lines.append('    subagents with their own definition: ' + '; '.join(
+            f'{agent["type"]}: omitClaudeMd, no CLAUDE.md files' if agent['omit_claude_md'] else
+            f'{agent["type"]}: CLAUDE.md files ~{tokens_text(agent["claude_md_tokens"])} tokens'
+            for agent in estimate['subagents']))
+    return lines
+
+
+def _startup_lines(startup: dict, title: str = 'Startup context', with_estimate: bool = True) -> list[str]:
+    if not startup['starts']:
+        return [title, '  no starts in this period']
+    return [title] + _measured_start_lines(startup) + (_estimate_lines(startup['estimate']) if with_estimate else [])
+
+
 def _shorten(name: str) -> str:
     head = NAME_WIDTH // 2
     return name if len(name) <= NAME_WIDTH else name[:head] + '…' + name[len(name) - (NAME_WIDTH - 1 - head):]
@@ -1312,7 +1476,17 @@ def _split_lines(view: dict) -> list[str]:
     thinking = view['thinking_share']
     models += ['thinking n/a' if thinking is None else f'thinking {_percent(thinking)} of output',
                f'cache hits {_percent(view["cache_hit_rate"])}']
-    return [main, ' · '.join(models)]
+    lines = [main, ' · '.join(models)]
+    start = view['startup']
+    if start:
+        main = start['main_median_tokens']
+        parts = [] if main is None else [f'main {tokens_text(main)} tokens (median)']
+        types = start['subagent_type_median_tokens']
+        if types:
+            low, high = tokens_text(types['min']), tokens_text(types['max'])
+            parts.append(f'subagents {low if low == high else low + "-" + high} (median per type)')
+        lines.append('Start: ' + ', '.join(parts))
+    return lines
 
 
 def render_overview(report: dict) -> str:
@@ -1376,7 +1550,10 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
     merged: dict = {}
     for cli in clis:
         _merge_cli(merged, 'sum', stats['clis'][cli['id']])
-    return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum'])}
+    ids = {cli['id'] for cli in clis}
+    starts = [start for start in report['startup']['starts'] if start['session'] in ids]
+    return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum']),
+            'startup': {'starts': starts, **startup_groups(starts)}}
 
 
 def render(report: dict, selection: dict | None = None) -> str:
@@ -1395,15 +1572,182 @@ def render(report: dict, selection: dict | None = None) -> str:
     if selection:
         count = len(selection['clis'])
         total = [f'Sum of {count} CLI{"" if count == 1 else "s"}'] + _cli_block('', selection['sum'])
-        sections = [head, _cli_lines(selection['clis']), total]
+        sections = [head, _cli_lines(selection['clis']), total,
+                    _startup_lines(selection['startup'], 'Startup context of the selected sessions', False)]
     else:
-        sections = [head, _subscription_lines(report['subscription']), _total_lines(report['total'])]
+        sections = [head, _subscription_lines(report['subscription']), _total_lines(report['total']),
+                    _startup_lines(report['startup'])]
         if report['clis']:
             sections.append(_cli_lines(report['clis']))
         sections += [_allocation_lines(report['allocation']), _calibration_lines(report['calibration'])]
         if report['guards']:
             sections.append(_guard_lines(report))
     return '\n\n'.join('\n'.join(section) for section in sections)
+
+
+# --- The estimate of the fixed start ------------------------------------------------------------------------------
+# Only the size of local files is read, never their text: how many characters a start would read at the beginning.
+
+FRONT_MATTER = re.compile(r'\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)', re.S)
+BLOCK_MARK = re.compile(r'[>|][+-]?\d*')
+FILE_NAME_CHARS = re.compile(r'[^\w .+@=/~-]')
+
+
+def _read_chars(path: str, limit: int) -> str | None:
+    """The first `limit` characters of a regular file (undecodable bytes become one character each), else None."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            return f.read(limit)
+    except OSError:
+        return None
+
+
+def description_length(text: str) -> int | None:
+    """The characters of the `description` in the frontmatter of an agent or skill file, folded to one line like a
+    YAML block or plain value is read; None if there is none or it is empty."""
+    match = FRONT_MATTER.match(text)
+    lines = match.group(1).splitlines() if match else []
+    start = next((number for number, line in enumerate(lines) if line.startswith('description:')), None)
+    if start is None:
+        return None
+    parts = [lines[start][len('description:'):]]
+    for line in lines[start + 1:]:
+        if line.strip() and not line[0].isspace():
+            break          # the next key
+        parts.append(line)
+    words = [part.strip() for part in parts if part.strip()]
+    if words and BLOCK_MARK.fullmatch(words[0]):
+        words = words[1:]
+    value = ' '.join(words)
+    if len(value) > 1 and value[0] == value[-1] and value[0] in '"\'':
+        value = value[1:-1]
+    return len(value) or None
+
+
+def _markdown_files(folder: str) -> list[str]:
+    """The .md files below a folder, in name order, without the rules that only apply to some paths (`paths:` in their
+    frontmatter): those are not read at the start."""
+    found = []
+    for root, folders, files in os.walk(folder):
+        folders.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            head = _spawn_check._read_head(path) if name.endswith('.md') else {'paths': ''}
+            if 'paths' not in (head or {}):
+                found.append(path)
+    return found
+
+
+def _ancestors(folder: str) -> list[str]:
+    """The folder and every folder above it, the folder first."""
+    found = [folder]
+    while os.path.dirname(found[-1]) != found[-1]:
+        found.append(os.path.dirname(found[-1]))
+    return found
+
+
+def claude_md_files(user_dir: str, cwd: str) -> list[dict]:
+    """The memory files a start in `cwd` loads: CLAUDE.md and rules of the user folder, then, from the outermost folder
+    to `cwd`, CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md and .claude/rules of each. A file counts once. Names are
+    relative to the user folder (`~/.claude/...`) or to `cwd`."""
+    candidates = [('~/.claude/CLAUDE.md', os.path.join(user_dir, 'CLAUDE.md'))]
+    candidates += [('~/.claude/' + os.path.relpath(path, user_dir), path)
+                   for path in _markdown_files(os.path.join(user_dir, 'rules'))]
+    for folder in reversed(_ancestors(cwd)):
+        paths = [os.path.join(folder, 'CLAUDE.md'), os.path.join(folder, 'CLAUDE.local.md'),
+                 os.path.join(folder, '.claude', 'CLAUDE.md')] + _markdown_files(os.path.join(folder, '.claude', 'rules'))
+        candidates += [(os.path.relpath(path, cwd), path) for path in paths]
+    files, seen = [], set()
+    for label, path in candidates:
+        text = _read_chars(path, MAX_FILE_CHARS)
+        if text is not None and os.path.realpath(path) not in seen:
+            seen.add(os.path.realpath(path))
+            files.append({'file': FILE_NAME_CHARS.sub('?', label), 'chars': len(text)})
+    return files
+
+
+def memory_file(projects_dir: str, cwd: str) -> list[dict]:
+    """MEMORY.md of the folder, as far as Claude Code loads it (the first lines and bytes), as a list of zero or one file."""
+    path = os.path.join(projects_dir, re.sub('[^A-Za-z0-9]', '-', cwd), 'memory', 'MEMORY.md')
+    text = _read_chars(path, MAX_FILE_CHARS)
+    return [] if text is None else [{'file': 'MEMORY.md',
+                                     'chars': len(''.join(text.splitlines(keepends=True)[:MEMORY_LINES])[:MEMORY_CHARS])}]
+
+
+def agent_definitions(folders: list[str]) -> dict[str, dict]:
+    """name -> {'chars': characters of name and description, 'omit': omitClaudeMd} of the agents (every .md file with a
+    name and a description) in the folders; the first definition of a name wins."""
+    found: dict[str, dict] = {}
+    for folder in folders:
+        for root, subfolders, files in os.walk(folder):
+            subfolders.sort()
+            for file in sorted(name for name in files if name.endswith('.md')):
+                path = os.path.join(root, file)
+                head = _spawn_check._read_head(path)
+                name = head.get('name') if head else None
+                length = description_length(_read_chars(path, HEAD_CHARS)) if name and name not in found else None
+                if length:
+                    found[name] = {'chars': len(name) + length, 'omit': head.get('omitClaudeMd', '').lower() == 'true'}
+    return found
+
+
+def skill_definitions(folders: list[str]) -> dict[str, int]:
+    """name -> characters of name and description of the skills (`<folder>/<skill>/SKILL.md` with a description; the name
+    is the `name` of the frontmatter, else the name of the skill's folder); the first definition of a name wins."""
+    found: dict[str, int] = {}
+    for folder in folders:
+        try:
+            skills = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for skill in skills:
+            text = _read_chars(os.path.join(folder, skill, 'SKILL.md'), HEAD_CHARS)
+            length = description_length(text) if text is not None else None
+            name = (_spawn_check._head(text).get('name') or skill) if length else None
+            if name and name not in found:
+                found[name] = len(name) + length
+    return found
+
+
+def estimate_start(project: str, cwd: str, user_dir: str, projects_dir: str, factor: float, types: list[str]) -> dict:
+    """The estimate (marked ~) of what a start in `cwd` reads from local files, at `factor` characters per token: the
+    CLAUDE.md files, MEMORY.md, the descriptions of agents and skills. `types` are the agent types of the subagent starts
+    of the period: those with a definition get their share of the CLAUDE.md files (none with omitClaudeMd)."""
+    def tokens(chars: int) -> int:
+        return round(chars / factor)
+
+    def with_tokens(files: list[dict]) -> list[dict]:
+        return [{**file, 'tokens': tokens(file['chars'])} for file in files]
+
+    def part(name: str, items: int, chars: int, files: list[dict] | None = None) -> dict:
+        return {'name': name, 'items': items, **({} if files is None else {'files': with_tokens(files)}),
+                'chars': chars, 'tokens': tokens(chars)}
+
+    chain, memory = claude_md_files(user_dir, cwd), memory_file(projects_dir, cwd)
+    folders = [os.path.join(folder, '.claude') for folder in _ancestors(cwd)] + [user_dir]
+    agents = agent_definitions([os.path.join(folder, 'agents') for folder in folders])
+    skills = skill_definitions([os.path.join(folder, 'skills') for folder in folders])
+    parts = [part('claude_md', len(chain), sum(f['chars'] for f in chain), chain),
+             part('memory', len(memory), sum(f['chars'] for f in memory), memory),
+             part('agents', len(agents), sum(a['chars'] for a in agents.values())),
+             part('skills', len(skills), sum(skills.values()))]
+    return {'project': project, 'chars_per_token': factor, 'parts': parts, 'total_tokens': sum(p['tokens'] for p in parts),
+            'not_estimable': list(NOT_ESTIMABLE),
+            'subagents': [{'type': kind, 'omit_claude_md': agents[kind]['omit'],
+                           'claude_md_tokens': 0 if agents[kind]['omit'] else parts[0]['tokens']}
+                          for kind in sorted(types) if kind in agents]}
+
+
+def estimate_folder(data: Data, start: float, end: float) -> tuple[str, str] | None:
+    """(project, folder) of the latest start in the period whose working folder still exists, else None."""
+    lo, hi = bisect.bisect_left(data.start_times, start), bisect.bisect_left(data.start_times, end)
+    for index in reversed(data.start_indices[lo:hi]):
+        request = data.requests[index]
+        if request.cwd and os.path.isabs(request.cwd) and os.path.isdir(request.cwd):
+            return data.label.get(request.session, '?'), request.cwd
+    return None
 
 
 # --- The archive --------------------------------------------------------------------------------------------------
@@ -1454,6 +1798,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--archive', action='store_true',
                         help='write the finished days that are not in the archive yet, print nothing')
     parser.add_argument('--projects-dir', metavar='DIR', help=f'transcripts (default: {PROJECTS_DIR})')
+    parser.add_argument('--claude-dir', metavar='DIR', help=f'the user folder of Claude Code for the estimate of the '
+                        f'start (default: {CLAUDE_DIR})')
     parser.add_argument('--config', metavar='PATH', help='config.json to take log_dir from (as for log_summary.py)')
     return parser
 
@@ -1622,6 +1968,8 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
             except (TypeError, ValueError, KeyError, AttributeError):
                 unfit = day       # does not fit the live figures: all is computed again with this day from the transcripts
                 break
+            if 'starts' not in archive[day.isoformat()]:      # archived by an earlier version: from the transcripts
+                stats['starts'] += _starts_between(data, prices, *day_bounds(day))
             used.append(day.isoformat())
         if unfit is None:
             break
@@ -1630,7 +1978,12 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
-    report = build_report(stats, shown, coverage, load_config(config)['thresholds']['start_block_5h'])
+    settings = load_config(config)
+    folder = estimate_folder(data, start, end) if args.json or args.full else None
+    estimate = None if folder is None else estimate_start(
+        folder[0], folder[1], os.path.expanduser(args.claude_dir or CLAUDE_DIR), projects_dir,
+        settings['start_estimate']['chars_per_token'], sorted({s['type'] for s in stats['starts'] if s['type']}))
+    report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate)
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

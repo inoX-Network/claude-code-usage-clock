@@ -22,6 +22,8 @@ token counts, models, times, folder names and ids, never message text), the meas
 | **session**, **CLI** | One main Claude Code session together with its subagents. It is named by the last name of its working folder and the first 8 characters of its session id (the **id**). |
 | **project** | The name of the folder a session ran in: the same for everyone, without a setting, because the report shows where you worked. Sessions in the same folder are one project. |
 | **subagent** | An agent started by a session. Its cost belongs to that session. It is listed under its agent type. |
+| **start**, **startup context** | The first request of a main session or of a subagent. The tokens it carries (input + cache write + cache read) are everything read before the session did anything of its own, plus the first prompt. Measured. |
+| **warm start**, **cold start** (of a start) | A start is *warm* if it read the prompt cache (cache read above 0), else *cold*. Not the same as `cold_starts` in `total`, which counts expensive requests later in a session. |
 | **cache hit rate**, **cache hits** | Part of the input that was read from the prompt cache: cache reads divided by all input (input, cache writes, cache reads). Measured. A high rate is cheap. |
 | **thinking** | The part of the output that was thinking. It is part of the output tokens and already in their price. Where a transcript does not say, it is unknown (`n/a` in the text, `null` in the JSON), not zero. |
 | **unexplained** | A rise of the subscription percentage between two measurements in which no request with a price happened. It comes from something else (another app, a request without a transcript) and is not given to any project. |
@@ -77,6 +79,16 @@ Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · ca
 - **cache hits … %:** the cache hit rate of the whole period.
 
 ```
+Start: main 45k tokens (median), subagents 36k-61k (median per type)
+```
+
+- **Start:** the size of the start in tokens (measured, see **start** above): `main` is the median over all main
+  sessions that began in the period; `subagents` is the lowest and the highest of the medians of the agent types
+  (one value if there is one type or the two are equal). Without main starts the part `main` is left out, without
+  subagent starts the part `subagents`; without any start the whole line is left out. The sizes use `k` for
+  thousands from 10 000 tokens on.
+
+```
 Notable
   soft stop denied 4 subagent tool calls (checkpoint due: 3, usage pause: 1)
   one 5h window reached 82 % (Tue 13 Oct)
@@ -103,10 +115,46 @@ Details: --project webshop · --session aaaaaaaa · --full
 
 ## `--full`
 
-`--full` prints the full report: the sections `Subscription`, `Total`, `By CLI`, `Allocation`, `Calibration` and
-`Gates`, in the same order as the JSON sections below, with every figure. In it, an estimate of a session below one
+`--full` prints the full report: the sections `Subscription`, `Total`, `Startup context`, `By CLI`, `Allocation`,
+`Calibration` and `Gates`, in the same order as the JSON sections below, with every figure. In it, an estimate of a session below one
 point is written `<1`; a 5h window names the weekday and date of its peak; the calibration lists a day only with at
 least 20 stretches; each gate is listed with its mode and, per warning, question and denial, with its reasons.
+
+### `Startup context` in `--full`
+
+```
+Startup context
+  Measured, the first request of a session or subagent (input + cache write + cache read):
+    main: 2 starts, median 63k tokens, min 60k, max 66k, 2 warm (100 %)
+    subagents by type:
+      reviewer: 6 starts, median 38k tokens, min 36k, max 41k, 5 warm (83 %)
+    per day:
+      Wed 14 Jan: main 63k tokens (2 starts), subagents 38k tokens (6 starts)
+  Estimate (~) from the files as they are now, for the folder of shop, at 2.3 characters per token:
+    CLAUDE.md files: ~12k tokens (3 files)
+      ~/.claude/CLAUDE.md: ~1500
+    MEMORY.md: ~3300 tokens (1 file)
+    agent descriptions: ~7400 tokens (42 agents)
+    skill descriptions: ~5600 tokens (61 skills)
+    together ~28k tokens; not estimable: system prompt, built-in tools, MCP instructions, skills of plugins and other apps, output of hooks
+    subagents with their own definition: reviewer: CLAUDE.md files ~12k tokens
+```
+
+- **Measured part (no `~`):** per group the number of starts, the median, smallest (`min`) and largest (`max`) size
+  in tokens, and how many starts were `warm` (read the cache) with their share. `main` are the main sessions,
+  `subagents by type` the subagents by their agent type (most starts first), `per day` one row per local day, the
+  median over all subagent types together. The time of a start is that of the last line of its request.
+- **Estimate (`~`):** how the fixed part of a start could split up. It is made from the *sizes* of local files (the
+  text is not printed; the user folder is `--claude-dir`, default `~/.claude`): characters divided by
+  `start_estimate.chars_per_token`. `CLAUDE.md files` lists each file the
+  folder loads at the start (`~/.claude/…` is the user folder, other names are relative to the working folder; a rule
+  with `paths:` in its frontmatter is not loaded at the start and not counted). `MEMORY.md` is the memory index of the
+  folder; main sessions load it, subagents do not (first 200 lines or 25 KB). `agent descriptions` and `skill
+  descriptions` count the name and description of each definition. `not estimable` is what only Claude Code knows.
+  The last line gives, for the subagent types of the period that have a definition, their share of the CLAUDE.md
+  files; with `omitClaudeMd: true` they read none. The estimate uses the files as they are now and the folder of the
+  latest start of the period that still exists; it is `not available` if there is none. `--project` and `--session`
+  print the measured part for their sessions only.
 
 ## `--json`
 
@@ -126,6 +174,7 @@ The top-level fields are, in this order:
 | `overview` | The numbers of the text overview, see below. |
 | `subscription` | The measured percentages of the subscription, see below. |
 | `total` | The figures of the whole period. |
+| `startup` | What the sessions and subagents of the period read at their start, see below. |
 | `clis` | The figures of each session, highest cost first. |
 | `allocation` | How the rises of the subscription were shared between the sessions. |
 | `calibration` | USD per point, a cross-check of the sharing. |
@@ -149,6 +198,7 @@ Measured unless it says estimate. The text overview is made of this object alone
 | `models` | `families`: a list of `name` (the first word of the model name in `tools/prices.json`, for example `Opus`) and `cost_usd`, highest first; `unpriced_requests`: how many requests had a model without a price (they are not in any USD figure). |
 | `thinking_share` | Part of the output that was thinking (0 to 1), among the requests that report it; `null` if none does. |
 | `cache_hit_rate` | The cache hit rate of the period (0 to 1, `null` without input tokens). |
+| `startup` | `null` without any start. Else `main_median_tokens` (median start of the main sessions in tokens, `null` without main starts) and `subagent_type_median_tokens` (`min` and `max` of the medians of the subagent types in tokens, `null` without subagent starts). Measured. |
 | `notable` | A list, one entry per hit of a fixed rule, in the order of the text. Each has `rule` and `text` (the line as printed), and the numbers of its rule: see below. |
 | `details` | `project` and `session`: what the `Details:` line suggests (both `null` without projects). |
 
@@ -186,6 +236,30 @@ Measured, from the measurement history (for the time before the history began, f
 | `thinking_tokens`, `thinking_share` | Thinking tokens (part of the output) among the requests that report them, and their share of those requests' output; `null` if none reports. |
 | `web_searches`, `web_fetches` | Counts of web searches and fetches among the requests that report them; `null` if none reports. |
 
+### `startup`
+
+The starts of the period: the first request of every main session and subagent transcript that began in it. Sizes
+are in tokens. Everything is measured except `estimate`.
+
+| Field | Meaning |
+|---|---|
+| `starts` | Every start, oldest first, never any content: `at` (time of the last line of the request), `session` (the 8-character id of its session, as in `clis`), `type` (the agent type, `null` for a main session; `unknown` or `other` where the transcript does not say), `model` (the name in the price file, else the model id, else `?`) and `tokens`: `input`, `cache_write` (5 minutes and 1 hour together), `cache_read` and `total` (their sum). |
+| `main` | The main-session starts as one group, or `null`. A group has `starts` (count), `median_tokens` (rounded), `min_tokens`, `max_tokens`, `warm_starts` (how many read the cache) and `warm_share` (0 to 1). |
+| `subagents` | `all` (the group of all subagent starts, or `null`) and `by_type`: each agent type to its group, most starts first. |
+| `per_day` | One entry per local day with starts: `day` (`2026-10-13`), `main` and `subagents` (groups, `null` if there was none that day; `subagents` are all types together). |
+| `estimate` | `null` if none could be made (only made for `--full` and `--json`). Else the estimate, see below. |
+
+The `estimate` (all numbers are estimates, from the sizes of local files as they are now):
+
+| Field | Meaning |
+|---|---|
+| `project` | The name of the folder it was made for: that of the latest start in the period whose folder still exists. |
+| `chars_per_token` | The factor used (`start_estimate.chars_per_token`, default 2.3). |
+| `parts` | Four entries in this order, each with `name`, `items` (count), `chars` (characters), `tokens` (`chars` divided by `chars_per_token`, rounded). `claude_md`: the CLAUDE.md and rule files read at the start; `memory`: MEMORY.md of the folder (main sessions only); `agents` and `skills`: the name and description of each definition. `claude_md` and `memory` also have `files`: a list of `file` (the name, relative to `~/.claude` or to the working folder), `chars` and `tokens`. |
+| `total_tokens` | The sum of the `tokens` of the four parts. |
+| `not_estimable` | What only Claude Code knows and the report does not guess: the system prompt, the built-in tools, MCP instructions, skills of plugins and other apps, the output of hooks. |
+| `subagents` | For each subagent type of the period that has an agent definition: `type`, `omit_claude_md` (`true` if the definition says `omitClaudeMd: true`) and `claude_md_tokens` (the `tokens` of `claude_md`, 0 with `omit_claude_md`). |
+
 ### `clis`
 
 One entry per session, highest cost first. `id` (8 characters of the session id), `label` (the working folder's last name: the project of the session),
@@ -221,4 +295,9 @@ Decisions of days archived before reasons were kept are in `guards` but not in `
 
 - **Projects are folder names.** The report knows no paths, on purpose. Two folders of the same name in different places are
   one project.
+- **A start is the first request of a transcript.** A session that is continued in a new transcript has a start there
+  with the old context in it. The first prompt is part of a start, and the output of the hooks that ran at the start.
+- A day archived before the starts were kept (version 1.1.1 and earlier) has none in the archive; they are read from
+  the transcripts, which Claude Code deletes after about 30 days.
+- The estimate does not see `@` imports inside CLAUDE.md files, plugin agents, or what an older start read before a file changed.
 - An estimate (`~`) is a share of a measured rise, not a measurement. Percentages of the subscription are whole points.
