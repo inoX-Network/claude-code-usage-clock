@@ -492,7 +492,7 @@ last line gets a line break first.
 
 **Projects.** A project is the folder name of a CLI (its `label`), for everyone and without a setting; CLIs of the same label
 are one project. The report knows no paths: folders of the same name in different places fall together. The grouping is made
-when the report is built, so the archive holds no projects. The table shortens a name longer than `NAME_WIDTH` (24) in the
+when the report is built, so the archive holds no projects. The table shortens a name longer than `NAME_WIDTH` (30) in the
 middle (`_shorten`: the first `NAME_WIDTH // 2` characters, `…`, the last `NAME_WIDTH - 1 - NAME_WIDTH // 2`); names whose short forms
 are equal stay whole (`short_names`). Only the table is shortened: the JSON, `--full` and the `Details:` line have full names.
 

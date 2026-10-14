@@ -383,7 +383,8 @@ def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
 def test_the_architecture_names_the_overview_the_projects_the_reasons_and_the_details():
     usage_report = usage_report_module()
     architecture = flat(section(architecture_text(), '## Usage report'))
-    for needle in ('NAME_WIDTH', '_shorten', 'short_names', 'build_overview', 'render_overview', 'points_text', 'usd_text',
+    for needle in (f'`NAME_WIDTH` ({usage_report.NAME_WIDTH})', '_shorten', 'short_names', 'build_overview', 'render_overview',
+                   'points_text', 'usd_text',
                    f'`MAX_PROJECTS` ({usage_report.MAX_PROJECTS})', f'`CACHE_LOW` ({usage_report.CACHE_LOW})',
                    f'`MIN_DAY_SECTIONS` ({usage_report.MIN_DAY_SECTIONS})', 'reason_kind', 'guard_reasons',
                    'reason not recorded', 'select_clis', 'SelectionError', '_cli_block', '_merge_cli', 'SCHEMA_VERSION',

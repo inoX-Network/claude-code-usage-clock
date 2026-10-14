@@ -2166,10 +2166,10 @@ Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
 
 Notable
-  spawn gate denied 2 agent starts (5h window at N % 2)
-  spawn gate asked before 1 agent start (7-day window at N % 1)
-  soft stop denied 4 subagent calls (checkpoint due 3, usage pause 1)
-  soft stop would have denied 2 subagent calls (checkpoint due 2; shadow mode, nothing was blocked)
+  spawn gate denied 2 agent starts (5h window at N %: 2)
+  spawn gate asked before 1 agent start (7-day window at N %: 1)
+  soft stop denied 4 subagent tool calls (checkpoint due: 3, usage pause: 1)
+  soft stop would have denied 2 subagent tool calls (checkpoint due: 2; shadow mode, nothing was blocked)
   one 5h window reached 82 % (Tue 13 Oct)
   cache hits under 90 %: 0034 80 %
   0016 made 60 % of the cost (60 USD)
@@ -2208,7 +2208,7 @@ def test_the_overview_json_carries_the_same_numbers(world):
     assert data['schema_version'] == 1 and list(data)[:4] == ['schema_version', 'period', 'coverage', 'overview']
     view = data['overview']
     assert view['title'] == 'Week to Mon 19 Oct 09:00' and view['cost_usd'] == pytest.approx(100.486)
-    assert view['week'] == {'used_percent': 39, 'rise_points': 39, 'resets_at': iso(WEEK_RESET)}
+    assert view['week'] == {'used_percent': 39, 'rise_points': 39, 'windows': 1, 'reset_at': WEEK_RESET}
     assert view['five_hour'] == {'windows': 1, 'highest_percent': 82, 'highest_at': '2026-10-13T12:30:00Z'}
     assert [p['name'] for p in view['projects']] == ['0016', '0034', '0022', '0050', '0051', '0052', '0053']
     first = view['projects'][0]
@@ -2443,14 +2443,14 @@ def gates_world(world, entries):
 
 def test_a_denial_or_a_question_of_a_gate_is_notable_with_its_reasons(world):
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', 'Checkpoint due: save first')] * 64)
-    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 64 subagent calls (checkpoint due 64)']
+    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 64 subagent tool calls (checkpoint due: 64)']
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', 'Checkpoint due: x')])
-    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 1 subagent call (checkpoint due 1)']
+    assert notable(world, '--day', DAY)[:1] == ['soft stop denied 1 subagent tool call (checkpoint due: 1)']
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'spawn_gate', 'enforce', 'ask', 'Usage pause: 81 %')] * 2)
-    assert notable(world, '--day', DAY)[:1] == ['spawn gate asked before 2 agent starts (usage pause 2)']
+    assert notable(world, '--day', DAY)[:1] == ['spawn gate asked before 2 agent starts (usage pause: 2)']
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'spawn_gate', 'shadow', 'ask', 'Usage pause: x')])
     assert notable(world, '--day', DAY)[:1] == [
-        'spawn gate would have asked before 1 agent start (usage pause 1; shadow mode, nothing was blocked)']
+        'spawn gate would have asked before 1 agent start (usage pause: 1; shadow mode, nothing was blocked)']
 
 
 @pytest.mark.parametrize('decision', ['allow', 'warn', 'other'])
@@ -2472,7 +2472,7 @@ def test_a_reason_is_the_text_before_the_first_colon_with_percentages_replaced(w
 def test_more_than_three_reasons_are_shortened_and_unrecorded_ones_are_named(world):
     reasons = ['Alpha: a'] * 4 + ['Beta: b'] * 3 + ['Gamma: c'] * 2 + ['Delta: d', 'Epsilon: e']
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', reason) for reason in reasons])
-    assert notable(world, '--day', DAY)[0] == 'soft stop denied 11 subagent calls (alpha 4, beta 3, gamma 2, other 2)'
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 11 subagent tool calls (alpha: 4, beta: 3, gamma: 2, other: 2)'
 
 
 def test_the_notable_lines_come_in_a_fixed_order(world):
@@ -2665,8 +2665,8 @@ Calibration (USD per point, from stretches in which only one CLI was active)
 Gates
   spawn gate (shadow mode, only logged): allowed 1, warned 0, asked 0, denied 0
   soft stop (enforce mode): warnings 1, denied 2
-      warned by reason: checkpoint due 1
-      denied by reason: checkpoint due 1, usage pause 1"""
+      warned by reason: checkpoint due: 1
+      denied by reason: checkpoint due: 1, usage pause: 1"""
 
 
 def test_the_full_report_is_the_old_report_with_its_corrections(world):
@@ -2746,7 +2746,7 @@ def test_an_archive_line_without_reasons_still_merges_and_says_so(world):
     assert data['guards']['soft_stop']['enforce']['deny'] == 3
     assert data['overview']['notable'][0]['reasons'] == {'checkpoint due': 1, 'reason not recorded': 2}
     assert data['overview']['notable'][0]['text'] == (
-        'soft stop denied 3 subagent calls (reason not recorded 2, checkpoint due 1)')
+        'soft stop denied 3 subagent tool calls (reason not recorded: 2, checkpoint due: 1)')
 
 
 def test_gate_entries_from_the_future_or_other_hooks_carry_no_reasons(world):
@@ -2765,9 +2765,9 @@ def test_the_headline_of_a_period_with_a_weekly_reset_adds_the_rises_of_both_win
                    row('2026-10-13T12:30:00Z', 1, 0, five, new), row('2026-10-13T15:00:00Z', 9, 12, five, new)])
     spend(world, ('2026-10-13T10:00:00Z', 2.0))
     assert world.overview('--day', DAY).splitlines()[0] == (
-        'Day 2026-10-13 · 12 % of the weekly limit used (+22 points) · 2.0 USD at API prices')
-    assert world.report('--day', DAY)['overview']['week'] == {'used_percent': 12, 'rise_points': 22,
-                                                              'resets_at': iso(new)}
+        'Day 2026-10-13 · weekly limit at 12 % now · +22 points over 2 weekly windows · 2.0 USD at API prices')
+    assert world.report('--day', DAY)['overview']['week'] == {'used_percent': 12, 'rise_points': 22, 'windows': 2,
+                                                              'reset_at': new}
 
 
 def test_a_weekly_value_without_a_reset_time_has_no_reset_in_the_overview(world):
@@ -2775,7 +2775,7 @@ def test_a_weekly_value_without_a_reset_time_has_no_reset_in_the_overview(world)
     spend(world, ('2026-10-13T08:30:00Z', 2.0))
     first = world.overview('--day', DAY).splitlines()[0]
     assert first.startswith('Day 2026-10-13 · 60.5 % of the weekly limit used (+10.5 points)')
-    assert world.report('--day', DAY)['overview']['week']['resets_at'] is None
+    assert world.report('--day', DAY)['overview']['week']['reset_at'] is None
 
 
 def test_a_model_without_a_price_is_counted_in_the_models_line_of_the_overview(world):
@@ -2914,10 +2914,10 @@ def test_exactly_one_unrecorded_decision_is_named(world):
 def test_exactly_three_reasons_are_all_named_and_a_fourth_is_other(world):
     names = ['Alpha', 'Beta', 'Gamma']
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', f'{name}: x') for name in names])
-    assert notable(world, '--day', DAY)[0] == 'soft stop denied 3 subagent calls (alpha 1, beta 1, gamma 1)'
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 3 subagent tool calls (alpha: 1, beta: 1, gamma: 1)'
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'deny', f'{name}: x')
                         for name in names + ['Delta']])
-    assert notable(world, '--day', DAY)[0] == 'soft stop denied 4 subagent calls (alpha 1, beta 1, delta 1, other 1)'
+    assert notable(world, '--day', DAY)[0] == 'soft stop denied 4 subagent tool calls (alpha: 1, beta: 1, delta: 1, other: 1)'
 
 
 def test_the_highest_window_is_the_one_with_the_highest_peak(world):
@@ -2988,3 +2988,38 @@ def test_the_format_document_explains_every_json_field_and_every_line_of_the_ove
                    'five_hour_window', 'cache_hits_low', 'project_dominates', 'unexplained_rise', 'not your bill',
                    'measured', 'estimate', 'point'):
         assert needle in document, needle
+
+
+# --- Findings of the independent review (14 Oct 2026) ------------------------------------------------------------------
+
+@pytest.mark.parametrize('reason, kind', [
+    ('Usage stale and 3 agents in the block: wait', 'usage stale and N agents in the block'),
+    ('Usage stale and 12 agents in the block: wait', 'usage stale and N agents in the block'),
+    ('5h window at 78 %: above', '5h window at N %'),
+    ('7-day window at 85.5%: above', '7-day window at N %'),
+    ('Agent "secret-name" has no model: x', 'agent … has no model'),
+    ("Skill 'x y' forks: z", 'skill … forks'),
+    ('Checkpoint due: 15 calls: since your last', 'checkpoint due'),          # only the text before the first colon
+    ('Rule v2.1 and retry-3 failed: x', 'rule v2.1 and retry-3 failed'),             # parts of words stay
+    ('', 'no reason')])
+def test_the_kind_of_a_reason_drops_numbers_and_quoted_names(reason, kind):
+    assert report_module.reason_kind(reason) == kind
+
+
+def test_full_does_not_combine_with_a_selection(world, capsys):
+    spend(world, ('2026-10-13T10:00:00Z', 1.0))
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args('--day', DAY, '--project', 'proj-a', '--full'), now=NOW)
+    assert stop.value.code == 2 and '--full shows everything' in capsys.readouterr().err
+
+
+def test_a_day_with_enough_stretches_but_no_rise_has_no_calibration_value(world):
+    # 25 single-CLI stretches of 10 minutes, the weekly and 5h values never move: no USD per point for that day
+    rows = [row(f'2026-10-13T{8 + i // 6:02d}:{i % 6 * 10:02d}:00Z', 10, 20) for i in range(26)]
+    world.history(rows)
+    spend(world, *[(f'2026-10-13T{8 + i // 6:02d}:{i % 6 * 10 + 5:02d}:00Z', 1.0) for i in range(25)])
+    data = world.report('--day', DAY)
+    assert data['calibration']['five']['per_day']['2026-10-13']['usd_per_point'] is None
+    assert data['calibration']['five']['per_day']['2026-10-13']['sections'] >= 20
+    assert 'per day' not in world.text('--day', DAY).split('Calibration', 1)[1].split('\n\n')[0]
+

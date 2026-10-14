@@ -26,7 +26,7 @@ token counts, models, times, folder names and ids, never message text), the meas
 | **thinking** | The part of the output that was thinking. It is part of the output tokens and already in their price. Where a transcript does not say, it is unknown (`n/a` in the text, `null` in the JSON), not zero. |
 | **unexplained** | A rise of the subscription percentage between two measurements in which no request with a price happened. It comes from something else (another app, a request without a transcript) and is not given to any project. |
 | **gate**, **mode** | The `spawn gate` (start of agents) and the `soft stop` (checkpoint rule for subagents) of this tool. In mode `enforce` a denial was real; in `shadow` mode it is only what the gate would have done. |
-| **reason** | Why a gate warned, asked or denied: the text of the gate's own log line before its first colon, in lower case, with percentages written as `N %` (for example `checkpoint due`, `usage pause`, `5h window at N %`). `reason not recorded` marks decisions of days that were archived before reasons were kept. |
+| **reason** | Why a gate warned, asked or denied: the text of the gate's own log line before its first colon, starting in lower case, with percentages written as `N %`, other numbers as `N` and quoted names as `…` (for example `checkpoint due`, `usage pause`, `5h window at N %`). `reason not recorded` marks decisions of days that were archived before reasons were kept. |
 
 ## The text overview, line by line
 
@@ -39,7 +39,8 @@ Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 US
 
 - **Line 1:** the period (`Day …`, `Week to <reset time>`, `Month …`, `Days a to b`); how far the weekly limit was
   used at the end of the period in percent (measured, from the status line), and by how many points it rose within
-  the period (measured; across a weekly reset the rises of both weeks are added); and the cost weight of everything
+  the period (measured). If the period spans more than one weekly window, the line says `weekly limit at N % now ·
+  +M points over K weekly windows`: N is the last window, M adds the rises of all of them; and the cost weight of everything
   in the period in USD at API prices (measured tokens times prices). Without a weekly measurement it says
   `no weekly measurement`.
 - **Line 2:** how many 5h windows had a measurement in the period, and the highest peak among them in percent with
@@ -77,12 +78,12 @@ Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · ca
 
 ```
 Notable
-  soft stop denied 4 subagent calls (checkpoint due 3, usage pause 1)
+  soft stop denied 4 subagent tool calls (checkpoint due: 3, usage pause: 1)
   one 5h window reached 82 % (Tue 13 Oct)
 ```
 
 - **Notable:** every line is one fixed rule that hit. The rules are, in this order:
-  1. **A gate denied or asked** (`spawn gate`, `soft stop`; `agent starts` or `subagent calls`), per mode, with the
+  1. **A gate denied or asked** (`spawn gate`, `soft stop`; `agent starts` or `subagent tool calls`), per mode, with the
      number and the reasons (the three largest, then `other`). In `shadow` mode it says `would have denied` and
      `shadow mode, nothing was blocked`.
   2. **A 5h window reached `thresholds.start_block_5h`** (default 75 %) or more: the number of such windows and the highest peak.
@@ -113,7 +114,7 @@ least 20 stretches; each gate is listed with its mode and, per warning, question
 is made of. `--full`, `--project` and `--session` do not apply to it (each CLI carries its `label`, the project, so a reader can
 filter). Percentages are numbers from 0 to 100 (`used_percent`, `peak`, `highest_percent`, `threshold_percent`); a
 `share` or `*_rate` is a number from 0 to 1. Costs ending in `_usd` are USD at API prices. Times are UTC in the form
-`2026-10-13T12:30:00Z`, except `reset_at` and `resets`, which are Unix seconds. A value that is not known is `null`.
+`2026-10-13T12:30:00Z`, except `reset_at` and `resets`, which are Unix seconds (in every section). A value that is not known is `null`.
 
 The top-level fields are, in this order:
 
@@ -139,7 +140,7 @@ Measured unless it says estimate. The text overview is made of this object alone
 |---|---|
 | `title` | The period as the first line says it (`Day 2026-10-13`, `Week to Mon 19 Oct 09:00`, `Month 2026-10`, `Days a to b`). |
 | `cost_usd` | The cost weight of the period, USD at API prices. |
-| `week` | `null` without a weekly measurement. Else `used_percent` (the weekly limit used at the end of the period, percent), `rise_points` (points it rose within the period, across weekly resets added up) and `resets_at` (the weekly reset time, or `null`). |
+| `week` | `null` without a weekly measurement. Else `used_percent` (the weekly limit used at the end of the period, percent), `rise_points` (points it rose within the period, across weekly resets added up), `windows` (how many weekly windows the period touches) and `reset_at` (the weekly reset time of the last one in Unix seconds, or `null`). |
 | `five_hour` | `windows` (count of 5h windows with a measurement), `highest_percent` and `highest_at` (the highest peak and its time; `null` without windows). |
 | `projects` | Every project, highest cost first (ties by name): `name` (the whole folder name); `cost_usd`; `share` (part of the whole cost, 0 to 1, `null` if the whole cost is 0); `week_points` and `five_points` (estimates: the points of the weekly and of the 5h limit that fall to the project); `sessions` (count); `session_ids` (the 8-character ids, highest cost first); `cache_hit_rate` (0 to 1, `null` without input tokens). |
 | `max_projects` | How many projects the text shows as rows (5). |

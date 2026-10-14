@@ -327,7 +327,7 @@ python3 tools/usage_report.py --archive             # see below
 
 ### The overview
 
-Without a switch the report is an overview that anyone can read at a glance, at most about 25 lines. An example, with
+Without a switch the report is an overview that anyone can read at a glance, about 20 lines. An example, with
 invented numbers (every column and line is explained in [`docs/report-format.md`](docs/report-format.md)):
 
 ```
@@ -346,10 +346,10 @@ Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
 
 Notable
-  spawn gate denied 2 agent starts (5h window at N % 2)
-  spawn gate asked before 1 agent start (7-day window at N % 1)
-  soft stop denied 4 subagent calls (checkpoint due 3, usage pause 1)
-  soft stop would have denied 2 subagent calls (checkpoint due 2; shadow mode, nothing was blocked)
+  spawn gate denied 2 agent starts (5h window at N %: 2)
+  spawn gate asked before 1 agent start (7-day window at N %: 1)
+  soft stop denied 4 subagent tool calls (checkpoint due: 3, usage pause: 1)
+  soft stop would have denied 2 subagent tool calls (checkpoint due: 2; shadow mode, nothing was blocked)
   one 5h window reached 82 % (Tue 13 Oct)
   cache hits under 90 %: 0034 80 %
   0016 made 60 % of the cost (60 USD)
@@ -431,10 +431,10 @@ Calibration (USD per point, from stretches in which only one CLI was active)
 
 Gates
   spawn gate (shadow mode, only logged): allowed 7, warned 1, asked 0, denied 1
-      warned by reason: call model 1
-      denied by reason: 5h window at N % 1
+      warned by reason: call model: 1
+      denied by reason: 5h window at N %: 1
   soft stop (shadow mode, only logged): warnings 1, denied 0
-      warned by reason: checkpoint due 1
+      warned by reason: checkpoint due: 1
 ```
 
 - **Measured:** requests, tokens by kind (cache writes of 5 minutes and 1 hour apart), the share of the output that

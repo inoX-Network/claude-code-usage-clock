@@ -11,7 +11,7 @@ Usage: python3 usage_report.py [--day [YYYY-MM-DD] | --week | --month [YYYY-MM] 
 
 The default is today. Days are local days; --week is the subscription week that ends at the weekly reset time
 (from the measurement history, else from the usage file; not a calendar week); --since and --until are whole days,
-both included. Without a switch the report is an overview of at most 25 lines: the projects by cost, what is notable.
+both included. Without a switch the report is an overview of about 20 lines: the projects by cost, what is notable.
 --full prints every figure, --project and --session (a prefix of the session id) print the blocks of --full for those
 sessions and their sum. --json prints the same figures as a stable JSON object, including the overview (see
 docs/report-format.md). --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
@@ -89,6 +89,8 @@ MODEL_NAME = re.compile(r'[A-Za-z0-9_.:/-]{1,64}')
 WORD = re.compile(r'[a-z_]{1,20}')
 PERCENT = re.compile(r'\d+(?:\.\d+)? ?%')
 REASON_CHARS = re.compile(r'[^\w .,…()/+%-]')
+NUMBER = re.compile(r'(?<![\w.-])\d+(?:\.\d+)?(?![\w.-])')      # a number of its own, not the 5 of `5h` or `7-day`
+QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # names and values a gate quotes in its reason
 REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
@@ -494,10 +496,12 @@ def _word(value, fallback: str) -> str:
 
 
 def reason_kind(reason) -> str:
-    """The kind of a reason from the log: the text before the first colon, without percentages (`5h window at 78 %` and
-    `... at 80 %` are one kind), made harmless, at most REASON_LENGTH characters, starting in lower case."""
+    """The kind of a reason from the log: the text before the first colon, without percentages and numbers (`5h window
+    at 78 %` and `... at 80 %` are one kind, so are `3 agents` and `4 agents`), quoted names replaced by `…`, made
+    harmless, at most REASON_LENGTH characters, starting in lower case."""
     prefix = reason.split(':', 1)[0] if isinstance(reason, str) else ''
-    prefix = REASON_CHARS.sub('?', PERCENT.sub('N %', prefix).strip())[:REASON_LENGTH]
+    prefix = NUMBER.sub('N', PERCENT.sub('N %', QUOTED.sub('…', prefix)))
+    prefix = REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]
     return prefix[:1].lower() + prefix[1:] or 'no reason'
 
 
@@ -955,10 +959,10 @@ def _reasons_text(reasons: dict, limit: int | None = None) -> str:
     items = list(reasons.items())
     if limit is not None and len(items) > limit:
         items = items[:limit] + [('other', sum(count for _, count in items[limit:]))]
-    return ', '.join(f'{name} {count}' for name, count in items)
+    return ', '.join(f'{name}: {count}' for name, count in items)
 
 
-GATE_NAMES = (('spawn_gate', 'spawn gate', 'agent start'), ('soft_stop', 'soft stop', 'subagent call'))
+GATE_NAMES = (('spawn_gate', 'spawn gate', 'agent start'), ('soft_stop', 'soft stop', 'subagent tool call'))
 
 
 def _gate_notes(report: dict) -> list[dict]:
@@ -1055,7 +1059,7 @@ def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
         resets = segments[-1]['reset_at']
         week = {'used_percent': segments[-1]['end']['value'],
                 'rise_points': sum(seg['end']['value'] - seg['start']['value'] for seg in segments),
-                'resets_at': None if resets is None else iso(resets)}
+                'windows': len(segments), 'reset_at': resets}
     top = max(windows, key=lambda w: w['peak'], default=None)
     families: dict[str, float] = {}
     for name, model in total['models'].items():
@@ -1315,8 +1319,13 @@ def render_overview(report: dict) -> str:
     """The overview, made of `report['overview']` alone: the object in the JSON is what the text says."""
     view = report['overview']
     week, five = view['week'], view['five_hour']
-    used = ('no weekly measurement' if week is None else
-            f'{week["used_percent"]:g} % of the weekly limit used (+{week["rise_points"]:g} points)')
+    if week is None:
+        used = 'no weekly measurement'
+    elif week['windows'] == 1:
+        used = f'{week["used_percent"]:g} % of the weekly limit used (+{week["rise_points"]:g} points)'
+    else:      # the rises of several weekly windows add up, the percentage is that of the last one
+        used = (f'weekly limit at {week["used_percent"]:g} % now · +{week["rise_points"]:g} points over '
+                f'{week["windows"]} weekly windows')
     windows = ('none measured' if not five['windows'] else
                f'{five["windows"]}, highest {five["highest_percent"]:g} % ({clock(parse_ts(five["highest_at"]), True)})')
     blocks = [[f'{view["title"]} · {used} · {usd_text(view["cost_usd"])} USD at API prices', f'5h windows: {windows}']]
@@ -1625,6 +1634,8 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:
+        if args.full:
+            parser.error('--full shows everything; --project and --session already show the full blocks of their sessions')
         try:
             print(render(report, select_clis(report, stats, args.project, args.session)))
         except SelectionError as error:
