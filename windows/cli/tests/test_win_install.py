@@ -1,9 +1,11 @@
 """tools/install.py on Windows: commands for Git Bash, Git Bash as a precondition, the files that are copied."""
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -90,6 +92,48 @@ def test_the_installed_files_run_without_the_checkout(paths):
                           cwd=str(target.parent))
     assert done.returncode == 0, done.stderr
     assert os.path.samefile(done.stdout.strip(), target / '_win.py')
+
+
+def test_settings_json_is_written_with_plain_line_feeds(paths):
+    settings, target = paths
+    assert run('--settings', settings, '--target', target).returncode == 0
+    data = settings.read_bytes()
+    assert b'\r' not in data and data.endswith(b'}\n') and data.count(b'\n') > 10
+
+
+def installer_module():
+    spec = importlib.util.spec_from_file_location('install_under_test', INSTALL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_settings_json_is_replaced_although_another_process_has_it_open(tmp_path):
+    """Windows refuses to replace a file that is open elsewhere; Claude Code reads settings.json all the time."""
+    module = installer_module()
+    settings = tmp_path / 'settings.json'
+    settings.write_text('{}', encoding='utf-8')
+    reader = open(settings, 'rb')
+    threading.Timer(0.3, reader.close).start()
+    try:
+        module.write_settings(str(settings), {'model': 'x'}, True)
+    finally:
+        reader.close()
+    assert json.loads(settings.read_text(encoding='utf-8')) == {'model': 'x'}
+
+
+def test_a_runtime_file_is_replaced_although_it_is_open(tmp_path):
+    module = installer_module()
+    source, target = tmp_path / 'source.py', tmp_path / 'target.py'
+    source.write_text('new', encoding='utf-8')
+    target.write_text('old', encoding='utf-8')
+    reader = open(target, 'rb')
+    threading.Timer(0.3, reader.close).start()
+    try:
+        module.copy_exclusively(str(source), str(target))
+    finally:
+        reader.close()
+    assert target.read_text(encoding='utf-8') == 'new' and not list(tmp_path.glob('*.tmp-usage-clock'))
 
 
 def test_the_second_run_changes_nothing(paths):

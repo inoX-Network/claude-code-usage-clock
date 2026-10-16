@@ -20,6 +20,9 @@ import _win
 import context_reporter
 from conftest import HOOKS, ROOT, WINDOWS_CLI
 
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import usage_report  # noqa: E402
+
 
 @pytest.fixture
 def sleeps(monkeypatch):
@@ -289,3 +292,33 @@ def test_several_processes_never_lose_a_measurement(tmp_path, monkeypatch):
     assert values == sorted(values), 'the history went back: two writers were inside at the same time'
     assert values[-1] == workers * rounds
     assert json.loads((tmp_path / 'usage.json').read_text())['five_hour']['used_percentage'] == workers * rounds
+
+
+HOLD_ARCHIVE = textwrap.dedent('''
+    import os, sys, time
+    sys.path.insert(0, sys.argv[1])
+    import _usage
+    path, ready = sys.argv[2], sys.argv[3]
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0))
+    with os.fdopen(descriptor, 'r+b') as f, _usage.locked(f):
+        open(ready, 'w').close()
+        time.sleep(1.5)
+''')
+
+
+def test_the_archive_is_written_only_after_the_other_writer_let_go(tmp_path):
+    """The day archive is locked like the usage file: two runs of `--archive` never write a day twice."""
+    log = tmp_path / 'log'
+    log.mkdir()
+    archive, ready = log / usage_report.ARCHIVE_FILE, tmp_path / 'ready'
+    holder = subprocess.Popen([sys.executable, '-c', HOLD_ARCHIVE, HOOKS, str(archive), str(ready)])
+    deadline = time.monotonic() + 10
+    while not ready.exists():
+        assert time.monotonic() < deadline, 'the holder never got the lock'
+        time.sleep(0.01)
+    started = time.monotonic()
+    usage_report.write_archive(str(log), {'2026-01-01': {'n': 1}})
+    waited = time.monotonic() - started
+    holder.wait(timeout=10)
+    assert waited >= 0.8
+    assert archive.read_text(encoding='utf-8').count('2026-01-01') == 1 and b'\r' not in archive.read_bytes()

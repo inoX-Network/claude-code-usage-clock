@@ -82,6 +82,7 @@ def test_the_open_flags_are_the_ones_of_the_system():
 @pytest.mark.posix_only
 def test_nothing_is_translated_for_a_posix_system():
     assert _plat.normalize_path('C:\\Users\\x') == 'C:\\Users\\x' and _plat.normalize_path('/c/x') == '/c/x'
+    assert _plat.native_path('C:\\Users\\x') == 'C:\\Users\\x' and _plat.native_path('/c/x') == '/c/x'
     assert _plat.hook_shell() == '/bin/sh' and _plat.hook_shell({'a': 'b'}) == '/bin/sh'
 
 
