@@ -55,6 +55,25 @@ def test_from_a_venv_the_command_runs_the_python_the_venv_was_made_from(tmp_path
     assert _win.interpreter_command('C:\\a.py').startswith(_win.quote(_win.normalize_path(base)) + ' -X utf8 ')
 
 
+def test_a_venv_is_recognised_whatever_the_order_of_the_folder_names(tmp_path, monkeypatch):
+    base = touch(tmp_path / 'z-python' / 'python.exe')
+    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'a-venv' / 'Scripts' / 'python.exe'))
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'a-venv'))
+    monkeypatch.setattr(sys, 'base_prefix', os.path.dirname(base))
+    assert _win.interpreter() == base
+
+
+def test_outside_a_venv_the_running_python_is_kept_even_beside_a_python_exe(tmp_path, monkeypatch):
+    """Equal prefixes, also as two different string objects: no venv, so the interpreter that runs stays."""
+    touch(tmp_path / 'Python313' / 'python.exe')
+    running = touch(tmp_path / 'Python313' / 'python3.13.exe')
+    monkeypatch.setattr(sys, 'executable', running)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'Python313'))
+    monkeypatch.setattr(sys, 'base_prefix', str(tmp_path / 'Python313'))
+    assert sys.prefix == sys.base_prefix and sys.prefix is not sys.base_prefix
+    assert _win.interpreter() == running
+
+
 def test_a_venv_whose_base_python_is_gone_keeps_its_own(tmp_path, monkeypatch):
     venv_python = str(tmp_path / '.venv' / 'Scripts' / 'python.exe')
     monkeypatch.setattr(sys, 'executable', venv_python)
@@ -116,6 +135,13 @@ def test_bash_is_found_next_to_git_on_the_path(tmp_path, git):
     git_exe = touch(root / git)
     bash = touch(root / 'bin' / 'bash.exe')
     assert _win.find_git_bash({'PATH': os.path.dirname(git_exe)}) == bash
+
+
+def test_a_bash_further_up_than_git_for_windows_puts_it_is_not_taken(tmp_path):
+    """git.exe three folders below a bin/bash.exe is no Git for Windows layout: nothing found."""
+    git_exe = touch(tmp_path / 'root' / 'a' / 'b' / 'c' / 'git.exe')
+    touch(tmp_path / 'root' / 'bin' / 'bash.exe')
+    assert _win.find_git_bash({'PATH': os.path.dirname(git_exe)}) is None
 
 
 def test_no_git_on_the_path_means_no_bash(tmp_path):

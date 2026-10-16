@@ -55,6 +55,18 @@ def test_waits_until_the_other_process_lets_go(tmp_path):
     assert acquired >= released_after
 
 
+def test_the_lock_is_taken_soon_after_the_other_process_lets_go(tmp_path):
+    """The waiter polls often: a slow poll would add up to a second to every hook that meets a writer."""
+    process, data, done = start_holder(tmp_path, hold=0.5)
+    with open(data, 'r+b') as f:
+        with _win.locked(f):
+            acquired = time.time()
+            with open(done) as marker:
+                released_after = float(marker.read())
+    process.wait(timeout=10)
+    assert acquired - released_after < 0.25
+
+
 def test_data_is_on_disk_when_the_lock_is_released(tmp_path):
     process, data, _ = start_holder(tmp_path, hold=0.3, linger=2.0)
     with open(data, 'r+b') as f:

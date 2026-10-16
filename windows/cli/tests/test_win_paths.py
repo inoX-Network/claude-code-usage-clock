@@ -9,12 +9,14 @@ import _win
     ('C:/Users/Bjoer/proj', 'C:/Users/Bjoer/proj'),
     ('c:\\users\\x', 'C:/users/x'),                       # only the drive letter is upper-cased, never the rest
     ('C:\\Users\\x\\', 'C:/Users/x'),                     # no trailing separator ...
+    ('a/', 'a'),                                          # also on a short relative path
     ('C:\\', 'C:/'),                                      # ... except on a drive root
     ('C:/', 'C:/'),
     ('C:', 'C:'),                                         # a drive-relative path stays one
     ('C:\\a\\\\b//c', 'C:/a/b/c'),                        # doubled separators collapse
     ('C:\\a\\..\\b', 'C:/a/../b'),                        # nothing is resolved: callers still look for ".."
     ('\\\\?\\C:\\Users\\x', 'C:/Users/x'),                # the long-path prefix goes
+    ('\\\\?\\Z:\\x', 'Z:/x'),                             # a drive late in the alphabet is no UNC path
     ('\\\\?\\UNC\\server\\share\\d', '//server/share/d'),
     ('\\\\server\\share\\dir\\file.txt', '//server/share/dir/file.txt'),
     ('/c/Users/x', 'C:/Users/x'),                         # the Git Bash spelling of a drive
