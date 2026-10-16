@@ -25,6 +25,7 @@ import os
 from datetime import datetime
 
 import _config
+import _plat
 import _usage
 
 FILE_NAME = 'usage-history.jsonl'
@@ -47,7 +48,7 @@ def _sample(merged, now: float) -> tuple | None:
 
 def _last_line(descriptor: int, size: int) -> tuple[tuple, float] | None:
     """(values, time as Unix seconds) of the last line, or None if there is none or it cannot be read."""
-    tail = os.pread(descriptor, TAIL_BYTES, max(0, size - TAIL_BYTES)).decode('utf-8', errors='replace')
+    tail = _plat.pread(descriptor, TAIL_BYTES, max(0, size - TAIL_BYTES)).decode('utf-8', errors='replace')
     rows = [row for row in tail.splitlines() if row.strip()]
     if not rows:
         return None
@@ -69,8 +70,8 @@ def _due(descriptor: int, size: int, sample: tuple, now: float, heartbeat_min: f
 
 
 def _open(path: str) -> int:
-    descriptor = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | _usage.NO_FOLLOW, 0o600)
-    os.fchmod(descriptor, 0o600)     # a file of any earlier umask becomes private, too
+    descriptor = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | _usage.NO_FOLLOW | _plat.O_BINARY, 0o600)
+    _plat.fchmod(descriptor, 0o600)     # a file of any earlier umask becomes private, too
     return descriptor
 
 
@@ -93,15 +94,16 @@ def append(log_dir: str, merged, now: float, heartbeat_min: float = _config.DEFA
             if not _due(descriptor, size, sample, now, heartbeat_min):
                 return
             if size > max_kb * 1024:
-                os.replace(path, path + '.1')      # a link as `.1` is replaced, never written through
-                renewed = _open(path)
-                os.close(descriptor)
-                descriptor = renewed
+                os.close(descriptor)      # Windows cannot rename a file that is open, not even in this process
+                descriptor = None
+                _usage.replace(path, path + '.1')      # a link as `.1` is replaced, never written through
+                descriptor = _open(path)
             size = os.fstat(descriptor).st_size      # after a rotation the file is new
-            if size and os.pread(descriptor, 1, size - 1) != b'\n':
+            if size and _plat.pread(descriptor, 1, size - 1) != b'\n':
                 line = '\n' + line      # a cut-off last line stays its own line, the new one stands alone
             os.write(descriptor, line.encode('utf-8'))
         finally:
-            os.close(descriptor)
+            if descriptor is not None:
+                os.close(descriptor)
     except Exception:
         pass

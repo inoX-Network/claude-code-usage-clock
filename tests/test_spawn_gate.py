@@ -17,7 +17,7 @@ import _config
 import _spawn_check
 import _usage
 import spawn_gate
-from conftest import HOOKS
+from conftest import HOOKS, WINDOWS_CLI
 
 SCRIPT = os.path.join(HOOKS, 'spawn_gate.py')
 THRESHOLDS = dict(_config.DEFAULTS['thresholds'], week_action='deny')   # the strict level; warn and ask have own tests
@@ -56,7 +56,7 @@ def config(tmp_path, env, spawn_rules=None, **sections):
 
 
 def run(hook_input, env, *args):
-    r = subprocess.run([sys.executable, SCRIPT, *args], input=json.dumps(hook_input), capture_output=True, text=True,
+    r = subprocess.run([sys.executable, SCRIPT, *args], input=json.dumps(hook_input), capture_output=True, text=True, encoding='utf-8',
                        env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout) if r.stdout.strip() else None
@@ -64,7 +64,7 @@ def run(hook_input, env, *args):
 
 def run_raw(path, text, env, *args):
     """Like run, but with any stdin and without an assumption about the exit code."""
-    r = subprocess.run([sys.executable, str(path), *args], input=text, capture_output=True, text=True, env=env,
+    r = subprocess.run([sys.executable, str(path), *args], input=text, capture_output=True, text=True, encoding='utf-8', env=env,
                        timeout=30)
     return r.returncode, (json.loads(r.stdout) if r.stdout.strip() else None), r.stderr
 
@@ -338,7 +338,7 @@ def test_log_masks_script_parts_model_literals_and_paths(tmp_path, env):
     cases = [workflow("await agent('a', {model: 'SECRET-MODEL', effort: 'low'})\n", tmp_path),
              workflow("const r = /SECRET-REGEX agent/\n", tmp_path),
              workflow("await agent('a', {'SECRET-ENTRY'})\n", tmp_path),
-             workflow(f"await workflow({{scriptPath: '{hidden}/child.js'}})\n", tmp_path),
+             workflow(f"await workflow({{scriptPath: '{hidden.as_posix()}/child.js'}})\n", tmp_path),
              workflow("await workflow('SECRET-NAME')\n", hidden),
              {'tool_name': 'Workflow', 'tool_input': {'scriptPath': str(hidden / 'wf.js')}, 'cwd': str(tmp_path)}]
     for hook_input in cases:
@@ -358,7 +358,7 @@ def test_synthetic_multi_step_script_through_the_hook(tmp_path, env):
     source = (WF_HEAD + "const found = await parallel(files.map(f => () => agent(`Check ${f}`, "
               "{ agentType: 'worker-fast' })))\n"
               "await pipeline([() => agent('Merge', { model: 'sonnet', effort: big ? 'max' : 'high' })])\n"
-              f"await workflow({{ scriptPath: '{child}' }})\n")
+              f"await workflow({{ scriptPath: '{child.as_posix()}' }})\n")      # backslashes in a literal are refused
     assert run(workflow(source, tmp_path), env, '--mode=enforce') is None
     usage(tmp_path, 10, age_min=60)
     out = run(workflow(source, tmp_path), env, '--mode=enforce')
@@ -372,14 +372,15 @@ def copy_hooks(tmp_path, *names, folder='copy'):
     target = tmp_path / folder
     target.mkdir(exist_ok=True)
     for name in names:
-        shutil.copy(os.path.join(HOOKS, name), target / name)
+        shutil.copy(os.path.join(WINDOWS_CLI if name == '_win.py' else HOOKS, name), target / name)
     return target
 
 
 def test_spawn_gate_without_the_check_module_denies(tmp_path, env):
     # a ModuleNotFoundError must not end with exit 1 and no deny: the spawn would run anyway
     usage(tmp_path, 10)
-    without = copy_hooks(tmp_path, 'spawn_gate.py', '_hookio.py', '_config.py', '_usage.py')
+    without = copy_hooks(tmp_path, 'spawn_gate.py', '_hookio.py', '_config.py', '_usage.py', '_plat.py',
+                         *(['_win.py'] if os.name == 'nt' else []))
     text = json.dumps({'tool_name': 'Agent', 'tool_input': {}})
     code, out, _ = run_raw(without / 'spawn_gate.py', text, env, '--mode=enforce')
     assert code == 0 and is_deny(out) and 'ModuleNotFoundError' in reason(out)

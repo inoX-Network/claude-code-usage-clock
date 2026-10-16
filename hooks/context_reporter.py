@@ -26,7 +26,6 @@ fails: exit code 2 on UserPromptSubmit would reject every prompt the user types.
 import json
 import os
 import re
-import shlex
 import stat
 import sys
 from datetime import datetime, timezone
@@ -47,6 +46,7 @@ def read_state(directory: str, session_id, suffix: str = '.json') -> dict | None
     """The state of one session, None for every reason to stay silent. Never follows a link. `suffix` picks the
     file: the state file of the status line, or the heartbeat of the wake-up watcher (`.watch`, see _wake.py)."""
     import _context_state
+    import _plat
     import _usage
     if not isinstance(session_id, str) or not _context_state.SESSION_ID.fullmatch(session_id):
         return None      # the session id becomes a file name: no path tricks
@@ -55,7 +55,7 @@ def read_state(directory: str, session_id, suffix: str = '.json') -> dict | None
     try:
         # O_NONBLOCK: a named pipe planted as the file must not block the hook
         descriptor = os.open(os.path.join(directory, f'{session_id}{suffix}'),
-                             os.O_RDONLY | os.O_NONBLOCK | _usage.NO_FOLLOW)
+                             os.O_RDONLY | _plat.O_NONBLOCK | _usage.NO_FOLLOW | _plat.O_BINARY)
     except OSError:
         return None
     try:
@@ -106,12 +106,13 @@ def wake_offer(directory: str, session_id: str, now: datetime) -> str:
     """The sentence that offers the wake-up watcher, '' if one lives or has fired lately or if anything fails: the
     context line is worth more than the offer."""
     try:
+        import _plat
         import _wake
         if _wake.blocks_hint(_wake.read_heartbeat(directory, session_id), now.timestamp()):
             return ''
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wake_watcher.py')
         return (' Wake-up watcher: start it once now in the background (Bash, run_in_background true, '
-                f'timeout 7200000): python3 {shlex.quote(script)} {session_id}')
+                f'timeout 7200000): {_plat.script_command(script, session_id)}')
     except Exception:
         return ''
 
@@ -119,9 +120,10 @@ def wake_offer(directory: str, session_id: str, now: datetime) -> str:
 def _open_regular(path: str) -> tuple[int | None, str | None]:
     """(descriptor, None) of a regular file of this user, opened without following a link and without blocking on
     a named pipe; else (None, reason)."""
+    import _plat
     import _usage
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | _usage.NO_FOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | _plat.O_NONBLOCK | _usage.NO_FOLLOW | _plat.O_BINARY)
     except FileNotFoundError:
         return None, 'missing'
     except OSError:
@@ -129,7 +131,7 @@ def _open_regular(path: str) -> tuple[int | None, str | None]:
     info = os.fstat(descriptor)
     if not stat.S_ISREG(info.st_mode):
         reason = 'not a regular file'
-    elif info.st_uid != os.getuid():
+    elif os.name != 'nt' and info.st_uid != os.getuid():      # Windows has no uid; the profile folder is protected by its ACL
         reason = 'owned by another user'
     else:
         return descriptor, None
@@ -167,7 +169,8 @@ def read_routine(path: str) -> tuple[str | None, str | None]:
     if descriptor is None:
         return None, reason
     try:
-        if os.fstat(descriptor).st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        # Windows reports every writable file as writable for group and others: there the check would refuse them all
+        if os.name != 'nt' and os.fstat(descriptor).st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             return None, 'writable by group or others'
         raw = os.read(descriptor, ROUTINE_MAX_BYTES + 1)
     finally:

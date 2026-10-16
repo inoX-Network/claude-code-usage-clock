@@ -9,7 +9,7 @@ seeing "unknown". The merge rules below prevent that:
 - Later window: the new block wins, even with a lower value (after a reset).
 - `measured_at` is renewed only if this session contributed a valid five-hour block that did not lose.
   An idle session can therefore never make old data look fresh.
-- Writing happens under an exclusive flock, atomically via a temporary file, and only when something changed.
+- Writing happens under an exclusive lock (flock; msvcrt on Windows), atomically via a temporary file, and only when something changed.
   The lock lives in the tool's log folder, the temporary file next to the usage file. Both are opened without
   following links, so a planted link never redirects the write.
 - The caller may hand in a function that runs on the merged content under the same lock (the history, see
@@ -20,7 +20,7 @@ A file in any other format counts as empty.
 """
 from __future__ import annotations
 
-import fcntl
+import contextlib
 import json
 import math
 import os
@@ -29,9 +29,36 @@ from datetime import datetime, timezone
 
 import _config
 
+if os.name == 'nt':
+    import _plat      # the Windows side of the platform switch (windows/cli/_win.py)
+else:
+    import fcntl
+
 NO_FOLLOW = getattr(os, 'O_NOFOLLOW', 0)
 SAME_WINDOW_S = 60
 MIN_AGE_MIN = -1.0  # a timestamp from the future counts as stale, not as permanently fresh
+
+
+@contextlib.contextmanager
+def locked(file):
+    """An exclusive lock on the open file for the block: flock, on Windows msvcrt (which waits like flock does)."""
+    if os.name == 'nt':
+        with _plat.locked(file):
+            yield
+        return
+    fcntl.flock(file, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fcntl.flock(file, fcntl.LOCK_UN)
+
+
+def replace(source: str, destination: str) -> None:
+    """os.replace; on Windows it tries again for a moment while another process holds the target."""
+    if os.name == 'nt':
+        _plat.replace(source, destination)
+    else:
+        os.replace(source, destination)
 
 
 def usage_path() -> str:
@@ -101,8 +128,7 @@ def update_file(path: str, status_input: dict, now: float, lock_dir: str, after_
     os.makedirs(lock_dir, mode=0o700, exist_ok=True)
     lock_fd = os.open(os.path.join(lock_dir, os.path.basename(path) + '.lock'), os.O_RDWR | os.O_CREAT | NO_FOLLOW,
                       0o600)
-    with os.fdopen(lock_fd, 'r+b') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with os.fdopen(lock_fd, 'r+b') as lock, locked(lock):
         old = _read_dict(path)
         merged = merge(old, status_input, now)
         if merged != {key: old.get(key) for key in merged}:
@@ -115,7 +141,7 @@ def update_file(path: str, status_input: dict, now: float, lock_dir: str, after_
                 descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NO_FOLLOW, 0o600)
                 with os.fdopen(descriptor, 'w', encoding='utf-8') as f:
                     json.dump(merged, f, separators=(',', ':'))
-                os.replace(tmp, path)
+                replace(tmp, path)
             except OSError:
                 try:
                     os.unlink(tmp)

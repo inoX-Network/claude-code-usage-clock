@@ -5,6 +5,8 @@ import json
 import os
 import re
 
+import pytest
+
 from conftest import ROOT
 
 README = os.path.join(ROOT, 'README.md')
@@ -188,6 +190,7 @@ def append_examples(text):
             if c.startswith(('echo ', 'printf ')) and (c.endswith('>> file') or c.endswith('| tee -a file'))]
 
 
+@pytest.mark.posix_only
 def test_the_documented_append_examples_are_checkpoint_writes(tmp_path):
     import soft_stop
     target = str(tmp_path / 'agent-checkpoints' / 'notes.md')

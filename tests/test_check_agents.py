@@ -12,7 +12,7 @@ SCRIPT = os.path.join(ROOT, 'tools', 'check_agents.py')
 
 
 def run(*args, env=None):
-    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, timeout=30,
+    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=30,
                           env=env or dict(os.environ))
     return done.returncode, done.stdout + done.stderr
 

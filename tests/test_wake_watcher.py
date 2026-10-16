@@ -244,6 +244,7 @@ def test_a_fresh_file_with_implausible_numbers_is_alive_but_never_a_reason_to_fi
     assert 'session-end routine' not in message and 'start it again' in message
 
 
+@pytest.mark.posix_only
 def test_it_does_not_follow_a_link_in_place_of_the_state_file(tmp_path):
     other = tmp_path / 'elsewhere.json'
     other.write_text(json.dumps(dict(state(), context_window_size=1_000_000, used_tokens=900_000,
@@ -346,6 +347,7 @@ def test_firing_leaves_a_fired_marker_written_before_the_message(tmp_path):
     assert beat(tmp_path) == {'session_id': SID, 'state': 'fired', 'at': '2027-01-15T08:01:00Z'}
 
 
+@pytest.mark.posix_only
 def test_the_heartbeat_is_private_and_leaves_no_temporary_file(tmp_path):
     run(tmp_path, ['fresh', 'fire'])
     assert stat.S_IMODE(os.stat(directory(tmp_path) / f'{SID}.watch').st_mode) == 0o600
@@ -357,6 +359,7 @@ def test_the_poll_that_finds_the_session_gone_writes_no_heartbeat(tmp_path):
     assert beat(tmp_path)['at'] == '2027-01-15T08:01:00Z'      # the second poll, not the third that ended it
 
 
+@pytest.mark.posix_only
 def test_the_heartbeat_is_never_written_through_a_link(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -367,6 +370,7 @@ def test_the_heartbeat_is_never_written_through_a_link(tmp_path):
     assert not (directory(tmp_path) / f'{SID}.watch').is_symlink() and beat(tmp_path)['state'] == 'fired'
 
 
+@pytest.mark.posix_only
 def test_a_planted_temporary_link_is_removed_not_written_through(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -377,6 +381,7 @@ def test_a_planted_temporary_link_is_removed_not_written_through(tmp_path):
     assert sorted(os.listdir(directory(tmp_path))) == [f'{SID}.watch']
 
 
+@pytest.mark.posix_only
 def test_a_link_in_place_of_the_folder_is_never_written_through(tmp_path):
     real = tmp_path / 'real'
     real.mkdir()
@@ -456,6 +461,7 @@ def test_a_missing_heartbeat_or_folder_reads_as_none(tmp_path):
     assert read(tmp_path) is None
 
 
+@pytest.mark.posix_only
 def test_a_link_in_place_of_the_heartbeat_is_not_followed(tmp_path):
     other = tmp_path / 'elsewhere.watch'
     other.write_text(json.dumps({'session_id': SID, 'state': 'watching', 'at': '2027-01-15T08:00:00Z'}),
@@ -465,7 +471,7 @@ def test_a_link_in_place_of_the_heartbeat_is_not_followed(tmp_path):
     assert read(tmp_path) is None
 
 
-@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='needs named pipes')
+@pytest.mark.posix_only
 def test_a_named_pipe_in_place_of_the_heartbeat_reads_as_none_and_does_not_hang(tmp_path):
     directory(tmp_path).mkdir(parents=True)
     os.mkfifo(directory(tmp_path) / f'{SID}.watch')

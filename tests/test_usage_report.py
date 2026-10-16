@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import ROOT
+from conftest import ROOT, tzset
 
 SCRIPT = os.path.join(ROOT, 'tools', 'usage_report.py')
 ZONE = 'CET-1CEST,M3.5.0,M10.5.0/3'     # +1 h, +2 h in summer; the clocks go back on 2026-10-25
@@ -48,13 +48,13 @@ DAY = '2026-10-13'
 def local_zone():
     old = os.environ.get('TZ')
     os.environ['TZ'] = ZONE
-    time.tzset()
+    tzset()
     yield
     if old is None:
         os.environ.pop('TZ', None)
     else:
         os.environ['TZ'] = old
-    time.tzset()
+    tzset()
 
 
 def req(ts, message='m1', model='claude-opus-5-5', inp=0, cw=0, cw1=0, cr=0, out=0, request='r1', cwd='/home/u/proj-a',
@@ -564,6 +564,7 @@ def test_the_day_follows_local_midnight(world):
     assert world.report('--day', '2026-10-14')['total']['cost_usd'] == pytest.approx(8.0)
 
 
+@pytest.mark.posix_only
 def test_the_day_the_clocks_go_back_has_25_hours(world):
     spend(world, ('2026-10-24T21:59:59Z', 1.0), ('2026-10-24T22:00:00Z', 2.0), ('2026-10-25T22:59:59Z', 4.0),
           ('2026-10-25T23:00:00Z', 8.0))
@@ -580,6 +581,7 @@ def test_the_default_period_is_today(world):
     assert world.report('--day')['period']['label'] == '2026-10-14'
 
 
+@pytest.mark.posix_only
 def test_month_and_since_until(world):
     spend(world, ('2026-09-30T21:59:59Z', 1.0), ('2026-09-30T22:00:00Z', 2.0), ('2026-10-14T10:00:00Z', 4.0),
           ('2026-10-31T22:59:59Z', 8.0), ('2026-10-31T23:00:00Z', 16.0))
@@ -1230,6 +1232,7 @@ def test_a_cut_off_last_line_of_the_archive_does_not_swallow_the_next_one(world)
 
 
 @pytest.mark.parametrize('umask', [0o002, 0o022, 0o077])
+@pytest.mark.posix_only
 def test_the_archive_is_private_whatever_the_umask(world, umask):
     three_days(world)
     old = os.umask(umask)
@@ -1241,6 +1244,7 @@ def test_the_archive_is_private_whatever_the_umask(world, umask):
     assert stat.S_IMODE(world.log.stat().st_mode) == 0o700
 
 
+@pytest.mark.posix_only
 def test_an_archive_file_of_an_earlier_umask_becomes_private(world):
     three_days(world)
     world.log.mkdir(parents=True)
@@ -1250,6 +1254,7 @@ def test_an_archive_file_of_an_earlier_umask_becomes_private(world):
     assert stat.S_IMODE((world.log / ARCHIVE).stat().st_mode) == 0o600
 
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_archive_is_not_written_through(world, capsys):
     three_days(world)
     world.log.mkdir(parents=True)
@@ -1260,6 +1265,7 @@ def test_a_planted_link_as_the_archive_is_not_written_through(world, capsys):
     assert victim.read_text(encoding='utf-8') == 'untouched' and 'archive' in capsys.readouterr().err
 
 
+@pytest.mark.posix_only
 def test_a_link_as_the_log_folder_is_not_followed(world, capsys):
     three_days(world)
     elsewhere = world.root / 'elsewhere'
@@ -1444,6 +1450,7 @@ def test_broken_transcript_lines_are_skipped(world):
     assert list(data['total']['unpriced']) == ['?'] and data['total']['unpriced']['?']['tokens']['output'] == 4
 
 
+@pytest.mark.posix_only
 def test_a_linked_transcript_is_not_followed(world):
     outside = world.root / 'outside.jsonl'
     outside.write_text(json.dumps(paid('2026-10-13T10:00:00Z', 'a', 1.0)) + '\n', encoding='utf-8')
@@ -2042,7 +2049,7 @@ def test_help_names_every_option_and_the_exit_codes(capsys):
 
 
 def run_script(*args, env=None):
-    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, timeout=60,
+    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=60,
                           env=env)
     return done.returncode, done.stdout, done.stderr
 
