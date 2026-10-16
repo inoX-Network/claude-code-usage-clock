@@ -133,11 +133,21 @@ def quote(text: str) -> str:
     return shlex.quote(text) if re.search(r'["$`\\]', text) else f'"{text}"'
 
 
+def interpreter() -> str:
+    """The Python that runs now; from a venv the one it was made from, if that is still there. The hooks need only
+    the standard library, and a venv that is deleted or rebuilt must not silence them."""
+    if sys.prefix != sys.base_prefix:
+        base = os.path.join(sys.base_prefix, 'python.exe')
+        if os.path.isfile(base):
+            return base
+    return sys.executable
+
+
 def interpreter_command(script: str, *extra: str) -> str:
-    """`"<python>" -X utf8 "<script>" <extra>` for a hook command that Git Bash runs. The Python is the one that
-    runs now, with forward slashes. UTF-8 mode, because Claude Code talks UTF-8 on stdin and stdout and the
+    """`"<python>" -X utf8 "<script>" <extra>` for a hook command that Git Bash runs. The Python is `interpreter()`,
+    with forward slashes. UTF-8 mode, because Claude Code talks UTF-8 on stdin and stdout and the
     default encoding of Windows is not. `extra` are plain arguments (options, a session id), not quoted."""
-    return ' '.join([quote(normalize_path(sys.executable)), '-X', 'utf8', quote(normalize_path(script)), *extra])
+    return ' '.join([quote(normalize_path(interpreter())), '-X', 'utf8', quote(normalize_path(script)), *extra])
 
 
 def find_git_bash(env=None, settings_env=None) -> str | None:

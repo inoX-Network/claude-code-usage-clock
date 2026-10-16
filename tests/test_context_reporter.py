@@ -19,6 +19,7 @@ import _config
 import _context_state
 import _plat
 import _wake
+import _win
 import context_reporter
 import statusline
 from conftest import HOOKS
@@ -676,7 +677,7 @@ def test_the_command_in_the_offer_splits_into_interpreter_script_and_session_id(
     command = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 200}}))[1].split('): ', 1)[1]
     tokens = shlex.split(command)
     assert tokens[-1] == SID and os.path.samefile(tokens[-2], WATCHER)
-    assert tokens[:-2] == (['python3'] if os.name != 'nt' else [_plat.normalize_path(sys.executable), '-X', 'utf8'])
+    assert tokens[:-2] == (['python3'] if os.name != 'nt' else [_plat.normalize_path(_win.interpreter()), '-X', 'utf8'])
 
 
 # --- The session-end routine after a wake-up call ------------------------------------------------------------

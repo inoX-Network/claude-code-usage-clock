@@ -20,7 +20,8 @@ calls `windows/cli/_win.py` (through `hooks/_plat.py`); it does not spread Windo
   neither leads to it, set the variable.
 - Python 3.10 or newer, run as `python tools\install.py` (or `py -3 tools\install.py`). The installer writes the
   interpreter that runs it, with its full path, into the hook commands; the `python3` of Windows is a Microsoft Store
-  placeholder and is never used.
+  placeholder and is never used. Started from a venv, it writes the Python the venv was made from (the hooks need only
+  the standard library, and a deleted or rebuilt venv must not silence them).
 
 ```powershell
 git clone https://github.com/inoX-Network/claude-code-usage-clock

@@ -32,11 +32,35 @@ def test_quote(text, expected):
 
 # --- the interpreter command --------------------------------------------------------------------------------------
 
+def outside_a_venv(monkeypatch, executable):
+    monkeypatch.setattr(sys, 'executable', executable)
+    monkeypatch.setattr(sys, 'prefix', os.path.dirname(executable))
+    monkeypatch.setattr(sys, 'base_prefix', os.path.dirname(executable))
+
+
 def test_the_command_runs_the_current_interpreter_with_utf8_mode_and_forward_slashes(monkeypatch):
-    monkeypatch.setattr(sys, 'executable', 'C:\\Program Files\\Python313\\python.exe')
+    outside_a_venv(monkeypatch, 'C:\\Program Files\\Python313\\python.exe')
     command = _win.interpreter_command('C:\\Users\\Bjoer\\.claude\\hooks\\statusline.py', '--mode=enforce')
     assert command == ('"C:/Program Files/Python313/python.exe" -X utf8 '
                        '"C:/Users/Bjoer/.claude/hooks/statusline.py" --mode=enforce')
+
+
+def test_from_a_venv_the_command_runs_the_python_the_venv_was_made_from(tmp_path, monkeypatch):
+    """The hooks need nothing but the standard library; a venv that is deleted or rebuilt must not take them along."""
+    base = touch(tmp_path / 'Python313' / 'python.exe')
+    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'checkout' / '.venv' / 'Scripts' / 'python.exe'))
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'checkout' / '.venv'))
+    monkeypatch.setattr(sys, 'base_prefix', os.path.dirname(base))
+    assert _win.interpreter() == base
+    assert _win.interpreter_command('C:\\a.py').startswith(_win.quote(_win.normalize_path(base)) + ' -X utf8 ')
+
+
+def test_a_venv_whose_base_python_is_gone_keeps_its_own(tmp_path, monkeypatch):
+    venv_python = str(tmp_path / '.venv' / 'Scripts' / 'python.exe')
+    monkeypatch.setattr(sys, 'executable', venv_python)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / '.venv'))
+    monkeypatch.setattr(sys, 'base_prefix', str(tmp_path / 'gone'))
+    assert _win.interpreter() == venv_python
 
 
 def test_the_command_has_no_python3_and_no_backslash():
