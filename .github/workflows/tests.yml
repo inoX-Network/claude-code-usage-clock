@@ -54,6 +54,12 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
 
+      # The report tests set TZ to a CET rule string. The Windows C runtime takes the offset from TZ but applies
+      # daylight saving time only if the system time zone has it; the runner's is UTC, which has none. A system
+      # zone with summer time, as on a desktop in Central Europe, makes TZ behave as the tests expect.
+      - name: Give the runner a system time zone with daylight saving time
+        run: tzutil /s "W. Europe Standard Time"
+
       # tests/test_soft_stop.py is left out until the soft stop is ported to Windows (checkpoint paths with
       # backslashes); the main suite and the Windows track (windows/cli/tests) run in full.
       - name: Run the suite and the Windows track
