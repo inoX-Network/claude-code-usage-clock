@@ -7,6 +7,8 @@ What it does:
    there, but only if it does not exist (an existing config.json is never touched).
 3. Backs up settings.json, then adds the selected components:
      statusline   statusLine = python3 <target>/statusline.py (refreshInterval 60)
+   (On Windows the command is `"<this python>" -X utf8 "<target>/statusline.py"`, in forward slashes, for Git
+   Bash: Claude Code runs hook commands there. The installer needs Git Bash for its smoke test and stops without it.)
      usage-clock  UserPromptSubmit: usage and local time as context for the model      (... || true)
      context-reporter  UserPromptSubmit and PostToolUse *: the fill level of the context window
                   as context for the model, needs the status line (two entries, same command) (... || true)
@@ -28,8 +30,8 @@ An existing statusLine that runs something else is left alone unless --replace-s
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
 <target>/statusline.py. It deletes no files. --dry-run shows the changes and writes nothing.
 
-Exit codes: 0 ok, 1 smoke test or file operation failed (nothing written to settings.json), 2 bad arguments
-or unusable settings.json.
+Exit codes: 0 ok, 1 smoke test or file operation failed or, on Windows, no Git Bash (nothing written to
+settings.json), 2 bad arguments or unusable settings.json.
 """
 from __future__ import annotations
 
@@ -48,6 +50,9 @@ from datetime import date, datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
+WINDOWS_MODULE = os.path.join(ROOT, 'windows', 'cli', '_win.py')
+sys.path.append(SOURCE_HOOKS)
+import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
 EXAMPLE_CONFIG = os.path.join(ROOT, 'config.example.json')
 
 TIMEOUT_S = 5
@@ -55,8 +60,8 @@ SMOKE_TIMEOUT_S = 15  # generous: the smoke test may run on a loaded machine, th
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
-REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_spawn_check.py', '_usage.py',
-                  '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
+REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_plat.py', '_spawn_check.py',
+                  '_usage.py', '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
                   'soft_stop.py', 'wake_watcher.py')
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
@@ -145,7 +150,7 @@ def validate_args(args: argparse.Namespace) -> None:
 # --- Commands ---------------------------------------------------------------------------------------------------
 
 def core_command(target: str, script: str, *extra: str) -> str:
-    return ' '.join(['python3', shlex.quote(os.path.join(target, script)), *extra])
+    return _plat.script_command(os.path.join(target, script), *extra)
 
 
 def fallback(component: str, mode: str | None) -> str:
@@ -178,8 +183,8 @@ def runs_script(command, script: str) -> bool:
 
 def points_to(command, path: str) -> bool:
     """Does the command run exactly this file?"""
-    wanted = os.path.normpath(path)
-    return any(os.path.normpath(os.path.expanduser(token)) == wanted for token in _tokens(command))
+    wanted = os.path.normcase(os.path.normpath(path))      # normcase: C:\x and c:/x are the same file on Windows
+    return any(os.path.normcase(os.path.normpath(os.path.expanduser(token))) == wanted for token in _tokens(command))
 
 
 # --- settings.json ----------------------------------------------------------------------------------------------
@@ -243,7 +248,7 @@ def foreign_notes(groups: list, event: str, script: str, path: str) -> list[str]
             if not runs_script(command, script) or points_to(command, path):
                 continue
             folder = next(os.path.dirname(t) for t in _tokens(command) if os.path.basename(t) == script)
-            remove = (f'remove it with "install.py --uninstall --target {shlex.quote(folder)}"' if folder
+            remove = (f'remove it with "install.py --uninstall --target {_plat.quote_path(folder)}"' if folder
                       else 'remove the entry from settings.json by hand')
             notes.append(f'{event}: another hook runs a {script} from a different path -> {str(command)[:200]!r}. '
                          f'It was left untouched; if it is an old copy of this tool, check the path and {remove}; '
@@ -398,12 +403,22 @@ def plan_uninstall(data: dict, args: argparse.Namespace, target: str) -> list[st
 # --- Smoke test -------------------------------------------------------------------------------------------------
 
 def missing_sources() -> list[str]:
-    missing = [name for name in REQUIRED_FILES if not os.path.isfile(os.path.join(SOURCE_HOOKS, name))]
+    missing = [name for name in runtime_required() if not os.path.isfile(source_of(name))]
     return missing + ([] if os.path.isfile(EXAMPLE_CONFIG) else ['config.example.json'])
 
 
+def runtime_required() -> list[str]:
+    return list(REQUIRED_FILES) + (['_win.py'] if os.name == 'nt' else [])
+
+
 def runtime_files() -> list[str]:
-    return sorted(name for name in os.listdir(SOURCE_HOOKS) if name.endswith('.py'))
+    """The files that go to the target: hooks/*.py, and on Windows the Windows module from windows/cli/."""
+    return sorted([name for name in os.listdir(SOURCE_HOOKS) if name.endswith('.py')]
+                  + (['_win.py'] if os.name == 'nt' else []))
+
+
+def source_of(name: str) -> str:
+    return WINDOWS_MODULE if os.name == 'nt' and name == '_win.py' else os.path.join(SOURCE_HOOKS, name)
 
 
 def _log_records(log_dir: str, hook: str) -> list[dict]:
@@ -455,20 +470,24 @@ def write_smoke_context(log_dir: str) -> None:
         json.dump(state, f)
 
 
-def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]]) -> list[str]:
-    """Starts each selected hook once from a temporary copy of the files that would be installed."""
+def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]], shell: str | None = None) -> list[str]:
+    """Starts each selected hook once from a temporary copy of the files that would be installed, in the shell that
+    runs hook commands (`shell`: /bin/sh, on Windows Git Bash)."""
+    shell = shell or _plat.hook_shell()
     errors = []
     with tempfile.TemporaryDirectory(prefix='usage-clock-smoke-') as tmp:
         copy_dir = os.path.join(tmp, 'hooks')
         os.mkdir(copy_dir)
         for name in runtime_files():
-            shutil.copy2(os.path.join(SOURCE_HOOKS, name), os.path.join(copy_dir, name))
+            shutil.copy2(source_of(name), os.path.join(copy_dir, name))
         os.mkdir(os.path.join(tmp, 'agents'))
         with open(os.path.join(tmp, 'agents', 'smoke-agent.md'), 'w', encoding='utf-8') as f:
             f.write('---\nname: smoke-agent\nmodel: haiku\neffort: low\n---\nSmoke test agent.\n')
         if 'context-reporter' in args.components:
             write_smoke_context(os.path.join(tmp, 'log'))
-        env = dict(os.environ, HOME=os.path.join(tmp, 'home'), CCUC_USAGE_FILE=os.path.join(tmp, 'usage.json'),
+        # Python on Windows takes "~" from USERPROFILE, not from HOME
+        env = dict(os.environ, HOME=os.path.join(tmp, 'home'), USERPROFILE=os.path.join(tmp, 'home'),
+                   CCUC_USAGE_FILE=os.path.join(tmp, 'usage.json'),
                    CCUC_LOG_DIR=os.path.join(tmp, 'log'), CCUC_AGENT_DIRS=os.path.join(tmp, 'agents'),
                    CCUC_CONFIG=os.path.join(tmp, 'no-config.json'))
         for component in args.components:
@@ -476,8 +495,9 @@ def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]]) -> l
             command = hook_command(copy_dir, component, mode, args.week_ok_until, with_fallback=False)
             script = SCRIPTS[component]
             try:
-                done = subprocess.run(['/bin/sh', '-c', command], input=json.dumps(dict(SMOKE_INPUTS[component], cwd=tmp)),
-                                      capture_output=True, text=True, timeout=SMOKE_TIMEOUT_S, env=env, cwd=tmp)
+                done = subprocess.run([shell, '-c', command], input=json.dumps(dict(SMOKE_INPUTS[component], cwd=tmp)),
+                                      capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                      timeout=SMOKE_TIMEOUT_S, env=env, cwd=tmp)
             except subprocess.TimeoutExpired:
                 errors.append(f'{script}: no answer within {SMOKE_TIMEOUT_S} s')
                 continue
@@ -515,8 +535,8 @@ def copy_exclusively(source: str, destination: str) -> None:
     try:
         with os.fdopen(descriptor, 'wb') as copy_file, open(source, 'rb') as origin:
             shutil.copyfileobj(origin, copy_file)
-            os.fchmod(copy_file.fileno(), stat.S_IMODE(os.fstat(origin.fileno()).st_mode))
-        os.replace(temp, destination)
+            _plat.fchmod(copy_file.fileno(), stat.S_IMODE(os.fstat(origin.fileno()).st_mode))
+        _plat.replace(temp, destination)
     except BaseException:
         try:
             os.unlink(temp)
@@ -529,7 +549,7 @@ def copy_runtime_files(target: str) -> int:
     os.makedirs(target, exist_ok=True)
     names = runtime_files()
     for name in names:
-        copy_exclusively(os.path.join(SOURCE_HOOKS, name), os.path.join(target, name))
+        copy_exclusively(source_of(name), os.path.join(target, name))
     return len(names)
 
 
@@ -543,7 +563,7 @@ def create_config(target: str) -> bool:
     try:
         with os.fdopen(descriptor, 'wb') as config, open(EXAMPLE_CONFIG, 'rb') as origin:
             shutil.copyfileobj(origin, config)
-            os.fchmod(config.fileno(), stat.S_IMODE(os.fstat(origin.fileno()).st_mode))
+            _plat.fchmod(config.fileno(), stat.S_IMODE(os.fstat(origin.fileno()).st_mode))
     except BaseException:
         os.unlink(destination)  # our own half-written file: a config.json that is never overwritten must not be broken
         raise
@@ -578,14 +598,15 @@ def write_settings(path: str, data: dict, existed: bool) -> str | None:
         os.unlink(temp)  # a leftover of an aborted run, possibly a symlink: never write through it
     except FileNotFoundError:
         pass
-    with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as f:
+    with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8',
+                   newline='\n') as f:      # no CRLF on Windows
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write('\n')
     with open(temp, encoding='utf-8') as f:
         json.load(f)  # cross-check: valid JSON
     if existed:
         shutil.copymode(path, temp)
-    os.replace(temp, path)
+    _plat.replace(temp, path)
     return backup
 
 
@@ -605,13 +626,21 @@ def run(args: argparse.Namespace) -> int:
         if missing:
             print(f'Error: files missing in the source folder {SOURCE_HOOKS}: {", ".join(missing)}')
             return 1
+        shell = _plat.hook_shell(data.get('env'))
+        if shell is None:
+            print('Error: Git Bash was not found. Claude Code runs hook commands in Git Bash on Windows (in PowerShell only '
+                  'if Git for Windows is missing), and the commands written here are for bash. Install Git for Windows '
+                  '(https://git-scm.com/downloads/win) or, if it is installed where Claude Code cannot find it, set '
+                  'CLAUDE_CODE_GIT_BASH_PATH to its bash.exe (in the environment or in the "env" of settings.json). '
+                  'Nothing was changed.')
+            return 1
         modes = resolve_modes(data, args, target)
         if modes:
             print(f'Mode:     {describe_modes(modes)}')
         messages = plan_install(data, args, target, modes)
     print('\n'.join(messages))
     if not args.uninstall:
-        errors = smoke_test(args, modes)
+        errors = smoke_test(args, modes, shell)
         if errors:
             print('SMOKE TEST FAILED - nothing written:')
             for error in errors:
@@ -636,7 +665,7 @@ def run(args: argparse.Namespace) -> int:
     print(f'Written: {settings_path}')
     if backup:
         print(f'Backup:  {backup}')
-        print(f'Undo:    cp {shlex.quote(backup)} {shlex.quote(settings_path)}')
+        print(f'Undo:    cp {_plat.quote_path(backup)} {_plat.quote_path(settings_path)}')
     if not args.uninstall:
         print('Start a new Claude Code session for the changes to take effect.')
         if any(mode == 'shadow' for mode, _ in modes.values()):

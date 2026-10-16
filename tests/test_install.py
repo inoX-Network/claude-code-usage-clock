@@ -10,16 +10,19 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 
 import pytest
 
+import _plat
 from conftest import HOOKS, ROOT
 
 TOOLS = os.path.join(ROOT, 'tools')
 INSTALL = os.path.join(TOOLS, 'install.py')
 EXAMPLE = os.path.join(ROOT, 'config.example.json')
 RUNTIME_FILES = sorted(n for n in os.listdir(HOOKS) if n.endswith('.py'))
+INSTALLED_FILES = sorted(RUNTIME_FILES + (['_win.py'] if os.name == 'nt' else []))      # Windows adds its module
 SCRIPT_OF = {'usage_clock.py': 'UserPromptSubmit', 'spawn_gate.py': 'PreToolUse', 'soft_stop.py': 'PreToolUse'}
 
 
@@ -31,7 +34,7 @@ def load_module():
 
 
 def run(*args, script=INSTALL, cwd=None):
-    return subprocess.run([sys.executable, script, *map(str, args)], capture_output=True, text=True, timeout=120, cwd=cwd)
+    return subprocess.run([sys.executable, script, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=120, cwd=cwd)
 
 
 def write_settings(tmp_path, content='{}', name='settings.json'):
@@ -52,8 +55,16 @@ def backups(tmp_path):
     return sorted(tmp_path.glob('settings.json.bak-usage-clock-*'))
 
 
+SHELL = _plat.hook_shell()      # /bin/sh; on Windows Git Bash, the shell that runs hook commands
+
+
 def quoted(target, script):
-    return shlex.quote(os.path.join(str(target), script))
+    return _plat.quote_path(os.path.join(str(target), script))
+
+
+def pycmd(target, script, *extra):
+    """The command the installer writes for a script: python3 on POSIX, the current interpreter for Git Bash on Windows."""
+    return _plat.script_command(os.path.join(str(target), script), *extra)
 
 
 @pytest.fixture
@@ -82,7 +93,7 @@ sys.exit(module.main(sys.argv[1:]))
 def run_in(repo, *args, timeout=15):
     code = WRAPPER.format(script=INSTALL, hooks=str(repo / 'hooks'), example=str(repo / 'config.example.json'),
                           timeout=timeout)
-    return subprocess.run([sys.executable, '-c', code, *map(str, args)], capture_output=True, text=True, timeout=120)
+    return subprocess.run([sys.executable, '-c', code, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=120)
 
 
 # --- Basic installation ----------------------------------------------------------------------------------------
@@ -111,17 +122,17 @@ def test_hook_commands_have_the_exact_form(tmp_path):
     target = tmp_path / 'target'
     assert run('--settings', settings, '--target', target, '--mode', 'enforce', '--week-ok-until', '2026-01-19').returncode == 0
     new = read(settings)
-    assert commands(new, 'UserPromptSubmit') == [f'python3 {quoted(target, "usage_clock.py")} || true',
-                                                 f'python3 {quoted(target, "context_reporter.py")} || true']
+    assert commands(new, 'UserPromptSubmit') == [f'{pycmd(target, "usage_clock.py")} || true',
+                                                 f'{pycmd(target, "context_reporter.py")} || true']
     assert new['hooks']['PostToolUse'] == [{'matcher': '*', 'hooks': [
-        {'type': 'command', 'command': f'python3 {quoted(target, "context_reporter.py")} || true', 'timeout': 5}]}]
+        {'type': 'command', 'command': f'{pycmd(target, "context_reporter.py")} || true', 'timeout': 5}]}]
     groups = {g['matcher']: g['hooks'][0]['command'] for g in new['hooks']['PreToolUse']}
-    assert groups['*'] == f'python3 {quoted(target, "soft_stop.py")} --mode=enforce || true'
+    assert groups['*'] == f'{pycmd(target, "soft_stop.py")} --mode=enforce || true'
     assert groups['Agent|Workflow|Skill'] == (
-        f'python3 {quoted(target, "spawn_gate.py")} --mode=enforce --week-ok-until=2026-01-19'
+        f'{pycmd(target, "spawn_gate.py")} --mode=enforce --week-ok-until=2026-01-19'
         ' || { echo "spawn gate broken - start denied" >&2; exit 2; }')
     assert all('matcher' not in group for group in new['hooks']['UserPromptSubmit'])
-    assert new['statusLine'] == {'type': 'command', 'command': f'python3 {quoted(target, "statusline.py")}',
+    assert new['statusLine'] == {'type': 'command', 'command': f'{pycmd(target, "statusline.py")}',
                                  'padding': 0, 'refreshInterval': 60}
 
 
@@ -192,7 +203,7 @@ def test_old_matcher_is_updated_without_duplicating(tmp_path):
 
 def test_changing_the_matcher_leaves_foreign_hooks_in_the_same_group_alone(tmp_path):
     target = tmp_path / 'target'
-    old = f'python3 {quoted(target, "spawn_gate.py")} --mode=shadow'
+    old = f'{pycmd(target, "spawn_gate.py")} --mode=shadow'
     foreign = {'type': 'command', 'command': 'python3 /opt/other-hook.py'}
     settings = write_settings(tmp_path, {'hooks': {'PreToolUse': [
         {'matcher': 'Agent', 'hooks': [foreign, {'type': 'command', 'command': old, 'timeout': 5}]}]}})
@@ -217,7 +228,7 @@ def test_entry_with_the_same_script_in_another_folder_is_not_ours_and_is_reporte
     assert 'left untouched' in r.stdout and 'old place' in r.stdout
     # how to get rid of the old entries, but only if they are an old copy of this tool
     assert (f'It was left untouched; if it is an old copy of this tool, check the path and remove it with '
-            f'"install.py --uninstall --target {shlex.quote(str(tmp_path / "old place"))}"; otherwise ignore this.') in r.stdout
+            f'"install.py --uninstall --target {_plat.quote_path(str(tmp_path / "old place"))}"; otherwise ignore this.') in r.stdout
 
 
 def test_components_select_what_is_installed(tmp_path):
@@ -250,12 +261,12 @@ def test_copies_only_runtime_files_and_creates_config_from_the_example(tmp_path)
     r = run('--settings', settings, '--target', target)
     assert r.returncode == 0
     # a real run says what it did, only a dry run says "would be"
-    assert (f'Files: {len(RUNTIME_FILES)} runtime files copied to {target}; '
+    assert (f'Files: {len(INSTALLED_FILES)} runtime files copied to {target}; '
             'config.json created from config.example.json.') in r.stdout, r.stdout
     assert 'would be' not in r.stdout
     r = run('--settings', settings, '--target', target)
     assert f'runtime files copied to {target}; config.json kept as it is.' in r.stdout and 'would be' not in r.stdout
-    assert sorted(os.listdir(target)) == sorted(RUNTIME_FILES + ['config.json'])
+    assert sorted(os.listdir(target)) == sorted(INSTALLED_FILES + ['config.json'])
     assert (target / 'config.json').read_bytes() == open(EXAMPLE, 'rb').read()
     for name in RUNTIME_FILES:
         assert (target / name).read_bytes() == open(os.path.join(HOOKS, name), 'rb').read()
@@ -283,6 +294,7 @@ def test_a_second_run_refreshes_changed_hook_files(tmp_path):
     assert not list(target.glob('*.tmp-usage-clock'))
 
 
+@pytest.mark.posix_only
 def test_file_permissions_are_kept_when_copying(repo, tmp_path):
     os.chmod(repo / 'hooks' / 'statusline.py', 0o755)
     os.chmod(repo / 'hooks' / '_config.py', 0o640)
@@ -329,11 +341,11 @@ def test_a_target_with_spaces_and_shell_characters_is_quoted_and_harmless(tmp_pa
     assert (target / 'usage_clock.py').is_file()
     new = read(settings)
     for command in commands(new, 'UserPromptSubmit') + commands(new, 'PreToolUse'):
-        done = subprocess.run(['/bin/sh', '-c', command], input='{}', capture_output=True, text=True, timeout=30,
+        done = subprocess.run([SHELL, '-c', command], input='{}', capture_output=True, text=True, encoding='utf-8', timeout=30,
                               cwd=tmp_path)
         assert done.returncode in (0, 2), command  # 2 only for the spawn gate refusing the empty input
     assert not [n for n in os.listdir(tmp_path) if n.startswith('PWNED')]
-    assert not [n for n in os.listdir('/tmp') if n.startswith('PWNED')]
+    assert not [n for n in os.listdir(tempfile.gettempdir()) if n.startswith('PWNED')]
 
 
 @pytest.mark.parametrize('bad', ['dir\nname', 'dir\rname', 'dir\x01name', 'dir\x7fname'])
@@ -356,12 +368,12 @@ def test_the_installed_commands_work_as_written(tmp_path):
     settings = write_settings(tmp_path)
     assert run('--settings', settings, '--target', tmp_path / 'target', '--mode', 'enforce').returncode == 0
     new = read(settings)
-    prompt = subprocess.run(['/bin/sh', '-c', commands(new, 'UserPromptSubmit')[0]], input='{}', capture_output=True,
-                            text=True, timeout=30)
+    prompt = subprocess.run([SHELL, '-c', commands(new, 'UserPromptSubmit')[0]], input='{}', capture_output=True,
+                            text=True, encoding='utf-8', timeout=30)
     assert prompt.returncode == 0 and 'Now:' in json.loads(prompt.stdout)['hookSpecificOutput']['additionalContext']
     gate = next(c for c in commands(new, 'PreToolUse') if 'spawn_gate.py' in c)
     payload = {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'nobody-defined-this', 'prompt': 'x'}}
-    done = subprocess.run(['/bin/sh', '-c', gate], input=json.dumps(payload), capture_output=True, text=True, timeout=30)
+    done = subprocess.run([SHELL, '-c', gate], input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8', timeout=30)
     assert done.returncode == 0
     output = json.loads(done.stdout)['hookSpecificOutput']
     assert 'permissionDecision' not in output and 'nobody-defined-this' in output['additionalContext']
@@ -374,7 +386,7 @@ def test_vanished_hook_files_never_block_except_the_spawn_gate(tmp_path):
     new = read(settings)
     shutil.rmtree(target)  # folder moved or deleted
     for command in commands(new, 'UserPromptSubmit') + commands(new, 'PreToolUse'):
-        done = subprocess.run(['/bin/sh', '-c', command], input='{}', capture_output=True, text=True, timeout=20)
+        done = subprocess.run([SHELL, '-c', command], input='{}', capture_output=True, text=True, encoding='utf-8', timeout=20)
         if 'spawn_gate.py' in command:
             assert done.returncode == 2 and 'spawn gate broken - start denied' in done.stderr  # fail closed
         else:
@@ -397,7 +409,7 @@ def test_replace_statusline_overwrites_a_foreign_one_and_keeps_its_refresh_inter
     target = tmp_path / 'target'
     r = run('--settings', settings, '--target', target, '--replace-statusline')
     assert r.returncode == 0 and 'replaced' in r.stdout
-    assert read(settings)['statusLine'] == {'type': 'command', 'command': f'python3 {quoted(target, "statusline.py")}',
+    assert read(settings)['statusLine'] == {'type': 'command', 'command': f'{pycmd(target, "statusline.py")}',
                                             'padding': 0, 'refreshInterval': 7}
 
 
@@ -409,10 +421,10 @@ def test_replace_statusline_without_a_refresh_interval_sets_60(tmp_path):
 
 def test_own_status_line_gets_a_missing_refresh_interval_and_a_normalised_command(tmp_path):
     target = tmp_path / 'target'
-    settings = write_settings(tmp_path, {'statusLine': {'type': 'command', 'command': f'python3 {target}/statusline.py'}})
+    settings = write_settings(tmp_path, {'statusLine': {'type': 'command', 'command': f'python3 {target.as_posix()}/statusline.py'}})
     r = run('--settings', settings, '--target', target)
     assert r.returncode == 0
-    assert read(settings)['statusLine'] == {'type': 'command', 'command': f'python3 {quoted(target, "statusline.py")}',
+    assert read(settings)['statusLine'] == {'type': 'command', 'command': f'{pycmd(target, "statusline.py")}',
                                             'refreshInterval': 60}
 
 
@@ -542,11 +554,11 @@ def test_backup_holds_the_old_content_and_the_permissions_survive(tmp_path):
     settings = write_settings(tmp_path, '{"model": "opus"}')
     os.chmod(settings, 0o600)
     assert run('--settings', settings, '--target', tmp_path / 'target').returncode == 0
-    assert stat.S_IMODE(os.stat(settings).st_mode) == 0o600
+    assert os.name == 'nt' or stat.S_IMODE(os.stat(settings).st_mode) == 0o600      # Windows has no modes
     (backup,) = backups(tmp_path)
     assert re.fullmatch(r'settings\.json\.bak-usage-clock-\d{8}-\d{6}-\d{6}', backup.name)
     assert backup.read_text(encoding='utf-8') == '{"model": "opus"}'
-    assert stat.S_IMODE(os.stat(backup).st_mode) == 0o600
+    assert os.name == 'nt' or stat.S_IMODE(os.stat(backup).st_mode) == 0o600
     text = settings.read_text(encoding='utf-8')
     assert text.endswith('\n') and json.loads(text)['model'] == 'opus'
 
@@ -555,7 +567,7 @@ def test_output_names_the_backup_and_how_to_undo(tmp_path):
     settings = write_settings(tmp_path)
     r = run('--settings', settings, '--target', tmp_path / 'target')
     (backup,) = backups(tmp_path)
-    assert f'Backup:  {backup}' in r.stdout and f'Undo:    cp {shlex.quote(str(backup))} {shlex.quote(str(settings))}' in r.stdout
+    assert f'Backup:  {backup}' in r.stdout and f'Undo:    cp {_plat.quote_path(str(backup))} {_plat.quote_path(str(settings))}' in r.stdout
 
 
 def test_a_missing_settings_file_is_created_without_a_backup(tmp_path):
@@ -570,6 +582,7 @@ def test_a_missing_folder_for_settings_is_an_argument_error(tmp_path):
     assert r.returncode == 2 and not (tmp_path / 'target').exists()
 
 
+@pytest.mark.posix_only
 def test_symlink_and_non_file_settings_are_refused(tmp_path):
     settings = write_settings(tmp_path)
     link = tmp_path / 'link.json'
@@ -580,6 +593,7 @@ def test_symlink_and_non_file_settings_are_refused(tmp_path):
     assert r.returncode == 2 and 'regular file' in r.stdout
 
 
+@pytest.mark.posix_only
 def test_a_leftover_temp_file_symlink_is_never_written_through(tmp_path):
     settings = write_settings(tmp_path)
     victim = tmp_path / 'victim.txt'
@@ -681,7 +695,7 @@ def test_uninstall_removes_only_our_entries_and_keeps_the_files(tmp_path):
     assert r.returncode == 0, r.stdout
     new = read(settings)
     assert new == {'model': 'opus', 'autoContinueAtUsageLimit': True, 'hooks': {'PreToolUse': [guard]}}
-    assert sorted(os.listdir(target)) == sorted(RUNTIME_FILES + ['config.json'])  # no file is deleted
+    assert sorted(os.listdir(target)) == sorted(INSTALLED_FILES + ['config.json'])  # no file is deleted
     assert len(backups(tmp_path)) == 2 and 'Backup:' in r.stdout
 
 
@@ -731,7 +745,7 @@ def test_uninstall_with_components_removes_only_those(tmp_path):
 
 def test_uninstall_in_a_group_with_other_hooks_keeps_the_others(tmp_path):
     target = tmp_path / 'target'
-    ours = {'type': 'command', 'command': f'python3 {quoted(target, "soft_stop.py")} --mode=shadow || true'}
+    ours = {'type': 'command', 'command': f'{pycmd(target, "soft_stop.py")} --mode=shadow || true'}
     other = {'type': 'command', 'command': 'python3 /opt/other.py'}
     settings = write_settings(tmp_path, {'hooks': {'PreToolUse': [{'matcher': '*', 'hooks': [other, ours]}]}})
     assert run('--settings', settings, '--target', target, '--uninstall').returncode == 0
@@ -809,9 +823,9 @@ def test_every_gate_keeps_its_own_mode(tmp_path):
     target = tmp_path / 'target'
     settings.write_text(json.dumps({'hooks': {'PreToolUse': [
         {'matcher': 'Agent|Workflow|Skill', 'hooks': [{'type': 'command', 'timeout': 5, 'command':
-            f'python3 {quoted(target, "spawn_gate.py")} --mode=enforce'}]},
+            f'{pycmd(target, "spawn_gate.py")} --mode=enforce'}]},
         {'matcher': '*', 'hooks': [{'type': 'command', 'timeout': 5, 'command':
-            f'python3 {quoted(target, "soft_stop.py")} --mode=shadow || true'}]}]}}), encoding='utf-8')
+            f'{pycmd(target, "soft_stop.py")} --mode=shadow || true'}]}]}}), encoding='utf-8')
     r = run('--settings', settings, '--target', target)
     assert r.returncode == 0, r.stdout
     assert ('Mode:     spawn-gate enforce (kept from the existing installation); '
@@ -835,7 +849,7 @@ def test_the_kept_mode_is_the_one_the_installed_hook_runs_in(tmp_path, options, 
     target = tmp_path / 'target'
     settings.write_text(json.dumps({'hooks': {'PreToolUse': [
         {'matcher': 'Agent|Workflow|Skill', 'hooks': [{'type': 'command', 'command':
-            f'python3 {quoted(target, "spawn_gate.py")} {options} || true'}]}]}}), encoding='utf-8')
+            f'{pycmd(target, "spawn_gate.py")} {options} || true'}]}]}}), encoding='utf-8')
     r = run('--settings', settings, '--target', target, '--components', 'spawn-gate')
     assert r.returncode == 0 and f'Mode:     {mode} (kept from the existing installation' in r.stdout, r.stdout
     assert source in r.stdout, r.stdout
@@ -912,7 +926,7 @@ def test_the_shadow_command_of_the_spawn_gate_ends_with_or_true(tmp_path):
     settings = write_settings(tmp_path)
     target = tmp_path / 'target'
     assert run('--settings', settings, '--target', target).returncode == 0
-    assert gate_commands(settings)['spawn_gate.py'] == f'python3 {quoted(target, "spawn_gate.py")} --mode=shadow || true'
+    assert gate_commands(settings)['spawn_gate.py'] == f'{pycmd(target, "spawn_gate.py")} --mode=shadow || true'
     assert run('--settings', settings, '--target', target, '--mode', 'enforce').returncode == 0
     assert gate_commands(settings)['spawn_gate.py'].endswith(
         ' || { echo "spawn gate broken - start denied" >&2; exit 2; }')
@@ -927,7 +941,7 @@ def test_in_shadow_a_broken_installation_blocks_nothing(tmp_path):
     new = read(settings)
     shutil.rmtree(target)  # folder moved or deleted
     for command in commands(new, 'UserPromptSubmit') + commands(new, 'PreToolUse'):
-        done = subprocess.run(['sh', '-c', command], input='{}', capture_output=True, text=True, timeout=20)
+        done = subprocess.run([SHELL, '-c', command], input='{}', capture_output=True, text=True, encoding='utf-8', timeout=20)
         assert done.returncode == 0, (command, done.stderr)
 
 
@@ -937,13 +951,14 @@ def test_a_script_that_dies_with_exit_2_does_not_block_in_shadow(tmp_path):
     target = tmp_path / 'target'
     assert run('--settings', settings, '--target', target).returncode == 0
     (target / 'spawn_gate.py').write_text('import sys\nsys.exit(2)\n', encoding='utf-8')
-    done = subprocess.run(['sh', '-c', gate_commands(settings)['spawn_gate.py']], input='{}',
-                          capture_output=True, text=True, timeout=20)
+    done = subprocess.run([SHELL, '-c', gate_commands(settings)['spawn_gate.py']], input='{}',
+                          capture_output=True, text=True, encoding='utf-8', timeout=20)
     assert done.returncode == 0
 
 
 # --- Copying files never writes through a symlink -------------------------------------------------------------------
 
+@pytest.mark.posix_only
 def test_a_temp_file_symlink_at_the_target_is_never_written_through(tmp_path):
     settings = write_settings(tmp_path)
     target = tmp_path / 'target'
@@ -1005,6 +1020,7 @@ def test_a_failing_copy_leaves_no_temp_file_behind(tmp_path, monkeypatch):
     assert not list(target.glob('*.tmp-usage-clock'))
 
 
+@pytest.mark.posix_only
 def test_a_dangling_config_json_symlink_is_not_written_through(tmp_path):
     settings = write_settings(tmp_path)
     target = tmp_path / 'target'
@@ -1016,6 +1032,7 @@ def test_a_dangling_config_json_symlink_is_not_written_through(tmp_path):
     assert not victim.exists() and (target / 'config.json').is_symlink()
 
 
+@pytest.mark.posix_only
 def test_config_json_gets_the_permissions_of_the_example(repo, tmp_path):
     os.chmod(repo / 'config.example.json', 0o640)
     settings = write_settings(tmp_path)
@@ -1038,7 +1055,7 @@ def test_a_foreign_hook_with_the_same_script_name_stays_and_is_reported(tmp_path
     assert groups[0] == foreign and len(groups) == 2 and groups[1]['matcher'] == '*'
     assert quoted(target, 'soft_stop.py') in groups[1]['hooks'][0]['command']
     assert ('It was left untouched; if it is an old copy of this tool, check the path and remove it with '
-            '"install.py --uninstall --target /opt/company-guard"; otherwise ignore this.') in r.stdout, r.stdout
+            f'"install.py --uninstall --target {_plat.quote_path("/opt/company-guard")}"; otherwise ignore this.') in r.stdout, r.stdout
     assert "'python3 /opt/company-guard/soft_stop.py --block-rm'" in r.stdout
     assert 'soft_stop.py added' in r.stdout
     # a second run updates only ours, and the uninstall takes only ours away
@@ -1090,7 +1107,8 @@ def test_the_original_error_survives_when_the_temp_file_is_already_gone(tmp_path
     target = tmp_path / 'target'
 
     def replace_after_loss(source, destination):
-        os.unlink(source)
+        if os.path.exists(source):      # on Windows the replace is tried again: the second call finds nothing
+            os.unlink(source)
         raise PermissionError('replace refused')
 
     monkeypatch.setattr(module.os, 'replace', replace_after_loss)
@@ -1159,7 +1177,7 @@ def test_the_component_installs_both_events_with_the_same_command_and_the_standa
     target = tmp_path / 'target'
     r = run('--settings', settings, '--target', target, '--components', 'context-reporter')
     assert r.returncode == 0, r.stdout
-    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    command = f'{pycmd(target, "context_reporter.py")} || true'
     assert sorted(reporter_entries(settings), key=str) == sorted([('UserPromptSubmit', None, command, 5),
                                                                    ('PostToolUse', '*', command, 5)], key=str)
     assert list(read(settings)) == ['hooks'] and sorted(read(settings)['hooks']) == ['PostToolUse', 'UserPromptSubmit']
@@ -1192,12 +1210,12 @@ def test_an_old_command_or_matcher_of_one_event_is_updated_without_a_duplicate(t
     assert run(*args).returncode == 0
     data = read(settings)
     data['hooks']['PostToolUse'][0]['matcher'] = 'Bash'
-    data['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'] = f'python3 {quoted(target, "context_reporter.py")}'
+    data['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'] = f'{pycmd(target, "context_reporter.py")}'
     settings.write_text(json.dumps(data), encoding='utf-8')
     r = run(*args)
     assert r.returncode == 0 and 'PostToolUse: context_reporter.py updated (matcher Bash -> *)' in r.stdout, r.stdout
     assert 'UserPromptSubmit: context_reporter.py updated' in r.stdout
-    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    command = f'{pycmd(target, "context_reporter.py")} || true'
     assert sorted((e[:3] for e in reporter_entries(settings)), key=str) == sorted(
         [('UserPromptSubmit', None, command), ('PostToolUse', '*', command)], key=str)
 
@@ -1279,7 +1297,7 @@ def test_uninstall_reports_the_event_that_was_already_removed_by_hand(tmp_path):
 
 def test_uninstall_in_a_shared_group_keeps_the_foreign_hook(tmp_path):
     target = tmp_path / 'target'
-    ours = {'type': 'command', 'command': f'python3 {quoted(target, "context_reporter.py")} || true'}
+    ours = {'type': 'command', 'command': f'{pycmd(target, "context_reporter.py")} || true'}
     other = {'type': 'command', 'command': 'python3 /opt/other.py'}
     settings = write_settings(tmp_path, {'hooks': {'PostToolUse': [{'matcher': '*', 'hooks': [other, ours]}],
                                                    'UserPromptSubmit': [{'hooks': [ours, other]}]}})
@@ -1317,8 +1335,8 @@ def test_the_installed_reporter_commands_work_as_written(tmp_path):
     env = dict(os.environ, CCUC_LOG_DIR=str(tmp_path / 'log'))
     for event in ('UserPromptSubmit', 'PostToolUse'):
         command = next(c for c in commands(read(settings), event) if 'context_reporter.py' in c)
-        done = subprocess.run(['/bin/sh', '-c', command], input=json.dumps({'hook_event_name': event, 'session_id': 's1'}),
-                              capture_output=True, text=True, timeout=30, env=env)
+        done = subprocess.run([SHELL, '-c', command], input=json.dumps({'hook_event_name': event, 'session_id': 's1'}),
+                              capture_output=True, text=True, encoding='utf-8', timeout=30, env=env)
         output = json.loads(done.stdout)['hookSpecificOutput']
         assert done.returncode == 0 and output['hookEventName'] == event
         assert output['additionalContext'] == 'Context: 600k/1000k tokens (60%). Measured, not estimated.'
@@ -1332,7 +1350,7 @@ def test_a_vanished_reporter_never_blocks(tmp_path):
     shutil.rmtree(target)
     for event in ('UserPromptSubmit', 'PostToolUse'):
         for command in (c for c in commands(new, event) if 'context_reporter.py' in c):
-            done = subprocess.run(['/bin/sh', '-c', command], input='{}', capture_output=True, text=True, timeout=20)
+            done = subprocess.run([SHELL, '-c', command], input='{}', capture_output=True, text=True, encoding='utf-8', timeout=20)
             assert done.returncode == 0 and done.stdout == '', command
 
 
@@ -1369,7 +1387,7 @@ def test_a_broken_context_state_module_fails_the_reporter_smoke_test(repo, tmp_p
 def test_installed_command_finds_our_entry_in_any_event_of_the_component(tmp_path):
     module = load_module()
     target = str(tmp_path / 'target')
-    command = f'python3 {quoted(target, "context_reporter.py")} || true'
+    command = f'{pycmd(target, "context_reporter.py")} || true'
     only_post = {'hooks': {'PostToolUse': [{'matcher': '*', 'hooks': [{'type': 'command', 'command': command}]}]}}
     assert module.installed_command(only_post, 'context-reporter', target) == command
     assert module.installed_command(only_post, 'context-reporter', str(tmp_path / 'elsewhere')) is None
