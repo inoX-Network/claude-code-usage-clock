@@ -37,6 +37,25 @@ The numbers come from Claude Code itself (`$.session.usage()`), not from `rate-l
 
 In the terminal the plugin draws nothing: the status line shows the same there.
 
+## It writes the usage file, too
+
+The hooks and gates read their usage from the shared usage file (`~/.claude/rate-limit.json`), and only the status
+line writes it. The app never runs the status line, so without the plugin a desktop session leaves the file alone and
+the hooks see `STALE` or `unknown`.
+
+After each answer (Claude Code's `session.measure`) the plugin therefore hands the app's numbers to the installed
+`statusline.py`, in the shape of the status line's own input, and discards the line it prints. The same code merges
+them with what other sessions wrote, under the same lock, adds at most one line to the measurement history and saves
+the context state of the session for the context reporter. A terminal session and a desktop session can run side by
+side.
+
+- The command is the `statusLine` from `settings.json` that `tools/install.py` writes. It runs only if it starts an
+  interpreter with exactly one `statusline.py` and contains no shell syntax (`|`, `;`, `&&`, `$`, ...), so another
+  status line is never run. Without it the plugin still draws its line, and the hooks keep seeing `unknown`.
+- A session with a terminal attached runs nothing: the status line writes there, with the exact cache clock.
+- The app tells a plugin no cache expiry, so a desktop session saves no cache clock: the wake-up watcher has nothing to
+  wake there.
+
 ## Configuration
 
 The colours follow the `statusline` section of the usage-clock `config.json` (`yellow_from`, `red_from`,

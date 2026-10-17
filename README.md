@@ -239,6 +239,9 @@ claude plugin install usage-clock-display@usage-clock
 Two differences: the app tells a plugin no cache expiry, so the cache clock is an estimate from the last answer
 (`cache ~54m`), and the cost of the session follows at the end. In the terminal the plugin draws nothing.
 
+The plugin also writes the app's numbers into the usage file, through the installed status line, so the hooks and
+gates work in a desktop session as in the terminal ([details](desktop/README.md#it-writes-the-usage-file-too)).
+
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
 used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
 (mode 0600) and cleaned up after 7 days. The context reporter and the wake-up watcher read that file; without the

@@ -3,6 +3,7 @@ import type { Register } from 'claude-code'
 
 import { DEFAULTS, expandHome, parseConfig } from './config'
 import { parts } from './line'
+import { statusInput, statuslineArgv } from './record'
 
 const usage = atom({ plugin: 'usage-clock-display', key: 'usage' } as const, null)
 const config = atom({ plugin: 'usage-clock-display', key: 'config' } as const, DEFAULTS)
@@ -27,7 +28,19 @@ export const register: Register = (on, options) => {
   on('session.measure', async ($, e, next) => {
     const now = await $.session.usage()
     await update($, usage, () => now)
-    return next(e)
+    const result = await next(e)
+    // The terminal runs the status line itself, with the cache clock the app does not have
+    if (!(await $.session.surfaces()).includes('terminal')) {
+      const settings = await $.settings.read()
+      const line = settings.statusLine
+      const argv = statuslineArgv(typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined)
+      if (argv !== null) {
+        const stdin = JSON.stringify(statusInput(e, await $.session.id()))
+        // The line comes from the plugin; a status line that fails only means no new numbers for the hooks
+        await $.process.run(argv, { stdin, timeoutMs: 10_000 }).catch(() => undefined)
+      }
+    }
+    return result
   })
 
   // Only the main loop renews this session's cache; subagents have their own
