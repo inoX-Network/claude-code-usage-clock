@@ -80,7 +80,7 @@ def test_the_runtime_files_include_the_windows_module_and_the_switch(paths):
         assert (target / name).is_file(), name
     assert (target / '_win.py').read_bytes() == open(os.path.join(ROOT, 'windows', 'cli', '_win.py'), 'rb').read()
     assert sorted(n for n in os.listdir(HOOKS) if n.endswith('.py')) == sorted(
-        n for n in os.listdir(target) if n.endswith('.py') and n != '_win.py')
+        n for n in os.listdir(target) if n.endswith('.py') and n not in ('_win.py', 'usage_report.py', 'log_summary.py'))
 
 
 def test_the_installed_files_run_without_the_checkout(paths):

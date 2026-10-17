@@ -22,7 +22,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
-  log_summary.py          summarises the JSONL log
+  log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
   usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
   prices.json             API prices per million tokens for usage_report.py, with source and date
