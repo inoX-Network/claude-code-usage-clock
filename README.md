@@ -1,5 +1,7 @@
 # claude-code-usage-clock
 
+New to Claude Code? Start with [docs/getting-started.md](docs/getting-started.md).
+
 Claude Code shows you your usage. This makes the model see it too, and lets two gates decide from those numbers
 whether new agents may start and running ones keep working.
 
