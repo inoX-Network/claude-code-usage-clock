@@ -386,6 +386,17 @@ def test_only_the_value_true_omits_the_claude_md_files(world, tmp_path, flag, om
     assert entry['omit_claude_md'] is omitted and entry['claude_md_tokens'] == (0 if omitted else 360)
 
 
+@pytest.mark.parametrize('flag, counted', [('disable-model-invocation: true', False),
+                                           ('disable-model-invocation: True', False),
+                                           ('disable-model-invocation: false', True),
+                                           ('user-invocable: false', True)])
+def test_a_skill_the_model_may_not_invoke_has_no_description_in_the_context(world, tmp_path, flag, counted):
+    user, _work = estimate_world(world, tmp_path)
+    put(user / 'skills' / 'manual' / 'SKILL.md', f'---\nname: manual\ndescription: {"m" * 17}\n{flag}\n---\n')
+    skills = estimate(world, user)['parts'][3]
+    assert (skills['items'], skills['chars']) == ((3, 46 + 23) if counted else (2, 46))
+
+
 def test_the_estimate_follows_the_latest_start_of_the_period(world, tmp_path):
     user, _work = estimate_world(world, tmp_path)
     other = tmp_path / 'work' / 'proj-y'
