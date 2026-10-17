@@ -532,7 +532,8 @@ def test_the_text_says_one_file_one_agent_one_skill(world, tmp_path):
 def test_the_user_folder_defaults_to_dot_claude_in_the_home_folder(world, tmp_path, monkeypatch):
     user, _work = estimate_world(world, tmp_path)
     monkeypatch.setenv('HOME', str(tmp_path))
-    (tmp_path / '.claude').symlink_to(user)
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))                  # Python on Windows takes "~" from here
+    shutil.copytree(user, tmp_path / '.claude')
     assert world.report('--day', DAY)['startup']['estimate']['parts'][0]['items'] == 4
 
 
@@ -554,9 +555,12 @@ def test_no_content_and_no_path_reaches_the_output_through_the_estimate(world, t
         assert SECRET not in output and str(tmp_path) not in output and str(work) not in output
 
 
-def test_the_name_of_a_rule_file_is_made_harmless(world, tmp_path):
+@pytest.mark.parametrize('name', [
+    pytest.param('bad\nname\x1b.md', marks=pytest.mark.posix_only),    # Windows allows no control characters in names
+    'bad;name$.md'])
+def test_the_name_of_a_rule_file_is_made_harmless(world, tmp_path, name):
     user, _work = estimate_world(world, tmp_path)
-    put(user / 'rules' / 'bad\nname\x1b.md', 'r' * 23)
+    put(user / 'rules' / name, 'r' * 23)
     labels = [f['file'] for f in estimate(world, user)['parts'][0]['files']]
     assert '~/.claude/rules/bad?name?.md' in labels
 

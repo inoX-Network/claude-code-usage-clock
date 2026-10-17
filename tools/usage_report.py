@@ -1653,12 +1653,12 @@ def claude_md_files(user_dir: str, cwd: str) -> list[dict]:
     to `cwd`, CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md and .claude/rules of each. A file counts once. Names are
     relative to the user folder (`~/.claude/...`) or to `cwd`."""
     candidates = [('~/.claude/CLAUDE.md', os.path.join(user_dir, 'CLAUDE.md'))]
-    candidates += [('~/.claude/' + os.path.relpath(path, user_dir), path)
+    candidates += [('~/.claude/' + os.path.relpath(path, user_dir).replace(os.sep, '/'), path)
                    for path in _markdown_files(os.path.join(user_dir, 'rules'))]
     for folder in reversed(_ancestors(cwd)):
         paths = [os.path.join(folder, 'CLAUDE.md'), os.path.join(folder, 'CLAUDE.local.md'),
                  os.path.join(folder, '.claude', 'CLAUDE.md')] + _markdown_files(os.path.join(folder, '.claude', 'rules'))
-        candidates += [(os.path.relpath(path, cwd), path) for path in paths]
+        candidates += [(os.path.relpath(path, cwd).replace(os.sep, '/'), path) for path in paths]
     files, seen = [], set()
     for label, path in candidates:
         text = _read_chars(path, MAX_FILE_CHARS)
