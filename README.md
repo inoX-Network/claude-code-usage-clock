@@ -243,6 +243,10 @@ Two differences: the app tells a plugin no cache expiry, so the cache clock is a
 The plugin also writes the app's numbers into the usage file, through the installed status line, so the hooks and
 gates work in a desktop session as in the terminal ([details](desktop/README.md#it-writes-the-usage-file-too)).
 
+It adds `/report` as well, in the desktop app and in the terminal: a pane with the usage report, the period and the
+view as tabs with keys ([details](desktop/README.md#the-usage-report-report)). It needs the report script that
+`tools/install.py` installs.
+
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
 used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
 (mode 0600) and cleaned up after 7 days. The context reporter and the wake-up watcher read that file; without the

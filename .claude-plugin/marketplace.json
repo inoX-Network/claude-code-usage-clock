@@ -9,7 +9,7 @@
     {
       "name": "usage-clock-display",
       "source": "./desktop",
-      "description": "The usage-clock status line under the prompt of the Claude desktop app."
+      "description": "The usage-clock status line under the prompt of the Claude desktop app, and /report, a pane with the usage report."
     }
   ]
 }
