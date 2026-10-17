@@ -15,6 +15,9 @@ What the parts of the overview mean; the example is in the [README](../README.md
   JSON, `--full` and the `Details:` line always have the full name, and two projects that would look the same after
   shortening are both shown whole. `~week pts` is the estimated share of the weekly limit, in points (1 point
   = 1 percentage point of the week); `<1` is less than one point.
+- **Start:** the size of the first request of a session or subagent in tokens, measured: the median over the main
+  sessions, and the lowest and highest median among the subagent types (see **Startup context** below). The line is
+  left out if the period has no start.
 - **Notable:** a line appears only if one of these fixed rules hits, and then for everything it hits, however small
   the project: a gate denied or asked about something (with the reasons, see below), a 5h window reached
   `thresholds.start_block_5h` (default 75 %), a project's cache hit rate is below 90 %, one project made more than half
@@ -56,6 +59,24 @@ Total
     model Opus 5.5: 5.11 USD, 37 requests; thinking 46k (30 %), web searches 3, web fetches 0; cache hits 97 %
     model Sonnet 5.x: 0.28 USD, 6 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 98 %
     model Haiku 5.5: 0.01 USD, 6 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 97 %
+
+Startup context
+  Measured, the first request of a session or subagent (input + cache write + cache read):
+    main: 2 starts, median 63k tokens, min 60k, max 66k, 2 warm (100 %)
+    subagents by type:
+      reviewer: 6 starts, median 38k tokens, min 36k, max 41k, 5 warm (83 %)
+    per day:
+      Wed 14 Jan: main 63k tokens (2 starts), subagents 38k tokens (6 starts)
+  Estimate (~) from the files as they are now, for the folder of shop, at 2.3 characters per token:
+    CLAUDE.md files: ~12k tokens (3 files)
+      ~/.claude/CLAUDE.md: ~1500
+      ~/.claude/rules/style.md: ~2700
+      CLAUDE.md: ~7800
+    MEMORY.md: ~3300 tokens (1 file)
+    agent descriptions: ~7400 tokens (42 agents)
+    skill descriptions: ~5600 tokens (61 skills)
+    together ~28k tokens; not estimable: system prompt, built-in tools, MCP instructions, skills of plugins and other apps, output of hooks
+    subagents with their own definition: reviewer: CLAUDE.md files ~12k tokens
 
 By CLI (main session and its subagents, most expensive first; ~ = estimate)
   shop  5f3a9c21  started Wed 14 Jan 08:02  5.11 USD  37 requests  ~50.9 5h points  ~3.65 week points
@@ -111,6 +132,26 @@ Gates
   the plain `agentType` of its `agent-*.meta.json`; a name given to a subagent is never shown (where `agentType` is only that name,
   the type is unknown). Besides tokens and cost weight: the cache hit rate (cache reads in all input) and the
   cold starts (a request of the main session, after the first, that writes at least 50 000 cache tokens).
+- **Startup context:** what a session or subagent has read before it did anything of its own. **Measured:** the
+  first request of every transcript (input + cache write + cache read tokens; it also holds the first prompt, so
+  it is a little more than the fixed start); the median, smallest and largest start of the main sessions and of each
+  subagent type, one row per day, and how many starts were *warm* (they read the prompt cache) against cold ones.
+  A subagent's type is the one in the paragraph above; a session that is continued in a new transcript counts
+  its first request there as a start. The JSON also lists every start (time, session, type, model, tokens) and
+  never any content. **Estimated (`~`):** how the fixed part splits up, from the *size* of local files (their text
+  is never read into the report or printed): the CLAUDE.md files a start in the folder of the latest start loads
+  (`~/.claude/CLAUDE.md` and `rules/`, then from the outermost folder to the working folder `CLAUDE.md`,
+  `CLAUDE.local.md`, `.claude/CLAUDE.md` and `.claude/rules/`; a rule with `paths:` in its frontmatter is not loaded at the
+  start), `MEMORY.md` of the git repository (linked worktrees share it; else of the folder; main sessions only; the first 200 lines or 25 KB), and the `name` and `description`
+  of the agents and skills of the user folder (`--claude-dir`, default `~/.claude`) and the project folders (from the
+  working folder up to the root of its git working tree, as Claude Code looks for them), turned into
+  tokens at `start_estimate.chars_per_token` (default 2.3, measured on German Markdown; English text needs about 4).
+  Not estimable, and said so: the system prompt, the built-in tools, MCP instructions, skills of plugins and other apps,
+  and the output of hooks. A subagent with `omitClaudeMd: true` in its definition has no CLAUDE.md part. The
+  estimate is made only for `--full` and `--json`, for the files as they are now (an older start may have read
+  other files), and is missing if no start of the period has a working folder that still exists. The archive keeps the
+  starts of a finished day; a day archived by an earlier version has none and is read from the transcripts, as long as
+  they exist. `--project` and `--session` show the measured starts of their sessions.
 - **Allocation (marked with `~`, an estimate):** between two measurements the subscription percentages rose by
   some points; that rise is shared between the CLIs that made requests in between, by their cost weight. A rise
   with no request in between is **unexplained** (another app, a request without a transcript) and is not shared.

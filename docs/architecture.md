@@ -163,6 +163,9 @@ finite number above 0 (default 10); anything else falls back to the default with
 itself loads the config without logging).
 `wake_watcher.routine_file` must be text (default `""` = off); `~` is expanded when it is read.
 
+`start_estimate.chars_per_token` must be a finite number above 0 (default 2.3); anything else falls back to the default
+with the usual log line. Only `tools/usage_report.py` reads it.
+
 Two switches are deliberately NOT in the config file but in the hook command in `settings.json`:
 `--mode=shadow|enforce` (default `shadow`) and `--week-ok-until=YYYY-MM-DD`. Where `settings.json` is
 protected against the model, the model cannot switch itself free.
@@ -554,8 +557,30 @@ the candidates, empty text). The output is the head of `--full`, the `By CLI` bl
 function `_cli_block` as `--full`) and `Sum of N CLIs`: the raw figures of the selected CLIs merged with `_merge_cli` and
 printed as one block. `--json` takes none of `--full`, `--project`, `--session` (exit 2), and `--archive` none of them.
 
+**Startup context.** `Request.source` is the transcript a request stands in (never printed). `Data.set_requests` takes the first
+request of every source in time order as a start (`start_indices`, `start_times`), after the deduplication of
+requests, so a request that stands in two transcripts is a start of the file that owns it. `_starts_between` turns the
+starts inside an interval into `stats['starts']`: a list of `{t, session, type, model, input, cache_write, cache_read}`
+(`type` is `None` for a main session, else the agent type of the report; no path, no content), mergeable by
+concatenation (`_merge_starts` rejects a start of another shape, which makes the archive line unreadable) and archived with the day. An archived day of an
+earlier version has no `starts` key: `main` then computes its starts from the transcripts (`_starts_between` for the day), which
+gives none once Claude Code has deleted them. `_start_report` sorts the starts by time and builds the JSON section `startup`;
+`startup_groups` (also used by `select_clis` for the starts of the selected sessions) makes the groups: count, median
+(`statistics.median`, rounded), minimum, maximum, `warm_starts` (cache read above 0) for the main sessions, all subagents, each
+type (most starts first) and each local day. `_overview_startup` is `overview.startup`; `_split_lines` prints `Start:`
+from it. `estimate_start` (only for `--full` and `--json`) reads only sizes: `claude_md_files` (the user folder's
+CLAUDE.md and rules, then per folder from the outermost down to the working folder CLAUDE.md, CLAUDE.local.md,
+.claude/CLAUDE.md and .claude/rules; rules with `paths:` in the frontmatter are skipped; a file counts once by its real path), `memory_file`
+(`<projects dir>/<path with every character outside A-Za-z0-9 as "-">/memory/MEMORY.md` for the path of `repository_root` (the main working tree of the git repository: a linked worktree has a `.git` file naming `<main>/.git/worktrees/<name>`), else for the folder itself, cut at `MEMORY_LINES` (200) lines
+and `MEMORY_CHARS` (25 KB)), `agent_definitions` and `skill_definitions` (name plus folded `description` from
+`description_length`; the `project_folders` from the working folder up to the root of its git working tree before the
+user folder, the first definition of a name wins), at most `MAX_FILE_CHARS`
+characters read per file, `NOT_ESTIMABLE` named and not guessed, and `omitClaudeMd` (`true`, any case) of the agent definition
+for the subagent types of the period. `estimate_folder` picks the working folder: that of the latest start of the period
+that exists. File names are made harmless (`FILE_NAME_CHARS`).
+
 **Output.** Text (English) or `--json` with the sections `schema_version`, `period`, `coverage`, `overview`, `subscription`,
-`total`, `clis`, `allocation`, `calibration`, `guards`, `guard_reasons` in this order (`SCHEMA_VERSION` changes
+`total`, `startup`, `clis`, `allocation`, `calibration`, `guards`, `guard_reasons` in this order (`SCHEMA_VERSION` changes
 only when a field is renamed or removed). The text is, without a switch, the overview; `--full` is the former report with
 these differences: a 5h window names weekday and date of its peak; estimates below one point read `<1` (`~` only for
 a number from 1); the per-day calibration lists days with at least `MIN_DAY_SECTIONS` (20) stretches; the `Gates` heading has

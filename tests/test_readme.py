@@ -406,3 +406,20 @@ def test_the_architecture_names_the_overview_the_projects_the_reasons_and_the_de
     assert 'project_pattern' not in architecture_text()
     layout = section(architecture_text(), '## Layout')
     assert 'docs/report-format.md' in layout and '--project/--session' in layout
+
+
+def test_the_documents_explain_the_startup_context():
+    usage_report = usage_report_module()
+    body = flat(report_text())
+    for needle in ('**Startup context:**', '**Measured:**', '**Estimated (`~`):**', 'warm', 'start_estimate.chars_per_token',
+                   '--claude-dir', 'omitClaudeMd: true', 'first 200 lines or 25 KB', 'Not estimable',
+                   'only for `--full` and `--json`', 'Start: main 45k tokens (median), subagents 36k-61k (median per type)'):
+        assert needle in body, needle
+    architecture = flat(section(architecture_text(), '## Usage report'))
+    for needle in ('Request.source', 'start_indices', '_starts_between', '_merge_starts', 'startup_groups', '_start_report',
+                   '_overview_startup', 'estimate_start', 'claude_md_files', 'memory_file', 'repository_root',
+                   'agent_definitions',
+                   'skill_definitions', 'description_length', 'estimate_folder', 'NOT_ESTIMABLE', 'omitClaudeMd',
+                   f'`MEMORY_LINES` ({usage_report.MEMORY_LINES})', '`MAX_FILE_CHARS`', 'FILE_NAME_CHARS'):
+        assert needle in architecture, needle
+    assert 'start_estimate.chars_per_token' in flat(architecture_text())

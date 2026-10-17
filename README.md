@@ -369,6 +369,7 @@ Where it went            USD   share  ~week pts  sessions
 
 Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
+Start: main 45k tokens (median), subagents 36k-61k (median per type)
 
 Notable
   spawn gate denied 2 agent starts (5h window at N %: 2)
@@ -417,6 +418,7 @@ that key and writes one line to the log.
 | `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
 | `history.enabled` / `heartbeat_min` / `max_kb` | `true` / `15` / `1024` | Measurement history of the status line: on or off; minutes after which an unchanged measurement is written anyway; size in KB above which the file is rotated to `.1`. |
+| `start_estimate.chars_per_token` | `2.3` | Characters per token with which the usage report turns the size of CLAUDE.md, MEMORY.md and the agent and skill descriptions into an estimated number of start tokens. Measured on German Markdown with umlauts (2.3); English text needs about 4. |
 | `context_reporter.after_tool_from` | `50` | Percent of the window from which the reporter also speaks after a tool call (0-100); with a prompt it always speaks. |
 | `context_reporter.max_age_min` | `15` | A context measurement older than this many minutes (or from the future) is not reported. |
 | `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |

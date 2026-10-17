@@ -40,6 +40,9 @@
     "heartbeat_min": 15,
     "max_kb": 1024
   },
+  "start_estimate": {
+    "chars_per_token": 2.3
+  },
   "checkpoint_dir_suffix": "/agent-checkpoints",
   "spawn_rules": {
     "model_effort_action": "warn",

@@ -53,6 +53,9 @@ DEFAULTS: dict = {
         'heartbeat_min': 15,
         'max_kb': 1024,
     },
+    'start_estimate': {
+        'chars_per_token': 2.3,
+    },
     'checkpoint_dir_suffix': '/agent-checkpoints',
     'spawn_rules': {
         'model_effort_action': 'warn',
@@ -184,6 +187,11 @@ def load(log_problems: bool = True) -> dict:
         if not (math.isfinite(history[key]) and history[key] > 0):
             problems.append(f'history.{key}: must be a positive number, using default')
             history[key] = DEFAULTS['history'][key]
+    estimate = cfg['start_estimate']
+    # Zero, negative or infinite would make the estimate of the start infinite or meaningless.
+    if not (math.isfinite(estimate['chars_per_token']) and estimate['chars_per_token'] > 0):
+        problems.append('start_estimate.chars_per_token: must be a positive number, using default')
+        estimate['chars_per_token'] = DEFAULTS['start_estimate']['chars_per_token']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')

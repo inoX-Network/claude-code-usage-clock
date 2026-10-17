@@ -1576,8 +1576,8 @@ def test_the_shipped_price_file_has_the_agreed_prices():
 
 def test_the_json_has_a_fixed_set_of_sections(world):
     data = day_report(world, paid('2026-10-13T10:00:00Z', 'a', 1.0))
-    assert list(data) == ['schema_version', 'period', 'coverage', 'overview', 'subscription', 'total', 'clis', 'allocation',
-                          'calibration', 'guards', 'guard_reasons']
+    assert list(data) == ['schema_version', 'period', 'coverage', 'overview', 'subscription', 'total', 'startup', 'clis',
+                          'allocation', 'calibration', 'guards', 'guard_reasons']
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
     assert set(data['coverage']) == {'transcript_files', 'archive_days', 'unreadable_history_lines',
                                      'unreadable_archive_lines', 'unreadable_transcript_lines'}
@@ -1608,27 +1608,35 @@ def test_the_text_report(world):
         assert needle in text, needle
 
 
-def test_the_example_in_the_docs_has_the_shape_of_the_real_report(world):
+def test_the_example_in_the_docs_has_the_shape_of_the_real_report(world, tmp_path):
     with open(os.path.join(ROOT, 'docs', 'usage-report.md'), encoding='utf-8') as f:
         doc = f.read()
     example = doc.split('with invented numbers:\n\n```\n', 1)[1].split('\n```', 1)[0].splitlines()
     session = 'aaaaaaaa-1111'
     r1, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
+    folder, user = tmp_path / 'Projekte' / 'proj-a', tmp_path / 'user'     # files for the estimate of the start
+    for path, text in ((user / 'CLAUDE.md', 'a'), (user / 'rules' / 'style.md', 'b'), (folder / 'CLAUDE.md', 'c'),
+                       (user / 'agents' / 'reviewer.md', '---\nname: reviewer\ndescription: x\n---\n'),
+                       (user / 'skills' / 's' / 'SKILL.md', '---\ndescription: x\n---\n'),
+                       (world.projects / re.sub('[^A-Za-z0-9]', '-', str(folder)) / 'memory' / 'MEMORY.md', 'd')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
     world.history([row('2026-10-13T10:00:00Z', 10, 20, r1, week), row('2026-10-13T10:10:00Z', 14, 21, r1, week)])
-    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:05:00Z', 'a', 3.0, cwd='/home/u/Projekte/proj-a')])
+    world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:05:00Z', 'a', 3.0, cwd=str(folder))])
     world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:06:00Z', 'b', 1.0)], sub='x1',
                      meta={'agentType': 'reviewer'})
     world.guard_log([gate('2026-10-13T10:00:00Z', 'spawn_gate', 'shadow', 'allow'),
                      gate('2026-10-13T10:00:01Z', 'spawn_gate', 'shadow', 'warn', 'Call model: overrides'),
                      gate('2026-10-13T10:00:02Z', 'spawn_gate', 'shadow', 'deny', '5h window at 78 %: no new blocks'),
                      gate('2026-10-13T10:00:03Z', 'soft_stop', 'shadow', 'warn', 'Checkpoint due: save')])
-    real = world.text('--day', DAY).splitlines()
+    real = world.text('--day', DAY, '--claude-dir', str(user)).splitlines()
 
     def headings(lines):
         return {line for line in lines if line and not line.startswith((' ', 'Usage report', 'Sources:'))}
 
-    def labels(lines):
-        return {line.split()[0] for line in lines if line.startswith(' ') and ' started ' not in line}
+    def labels(lines):       # the first word of each detail line; the weekday of a day is not one
+        return {line.split()[0] for line in lines if line.startswith(' ') and ' started ' not in line
+                and line.split()[0] not in report_module.WEEKDAYS}
 
     assert headings(example) == headings(real)
     assert labels(example) <= labels(real)
@@ -2171,6 +2179,7 @@ Where it went            USD   share  ~week pts  sessions
 
 Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
+Start: main 0 tokens (median), subagents 0 (median per type)
 
 Notable
   spawn gate denied 2 agent starts (5h window at N %: 2)
@@ -2502,7 +2511,7 @@ def cli_blocks(text):
 
 
 def sum_block(text):
-    return text.split('\n\nSum of ', 1)[1].splitlines()
+    return text.split('\n\nSum of ', 1)[1].split('\n\n', 1)[0].splitlines()
 
 
 def test_a_project_shows_the_blocks_of_the_full_report_for_its_sessions_and_their_sum(world):
@@ -2651,6 +2660,15 @@ Total
   Models:
     model Opus 5.5: 4.00 USD, 2 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits n/a
 
+Startup context
+  Measured, the first request of a session or subagent (input + cache write + cache read):
+    main: 1 start, median 0 tokens, min 0, max 0, 0 warm (0 %)
+    subagents by type:
+      arbeiter-bauen: 1 start, median 0 tokens, min 0, max 0, 0 warm (0 %)
+    per day:
+      Tue 13 Oct: main 0 tokens (1 start), subagents 0 tokens (1 start)
+  Estimate (~): not available, no folder of a start in this period exists any more
+
 By CLI (main session and its subagents, most expensive first; ~ = estimate)
   proj-a  aaaaaaaa  started Tue 13 Oct 12:05  4.00 USD  2 requests  ~4.0 5h points  ~1.00 week points
     tokens input 0, cache write 5m 0, cache write 1h 0, cache read 0, output 200k
@@ -2702,7 +2720,7 @@ def test_a_single_day_with_enough_stretches_is_not_listed_per_day(world):
     rows = steady_sections(world, 19, cost=2.0) + steady_sections(world, 40, cost=3.0, start='2026-10-14T08:00:00Z',
                                                                    session='bbbbbbbb-2', project='-home-u-proj-b')
     world.history(rows)
-    assert 'per day' not in world.text('--since', DAY, '--until', '2026-10-14')
+    assert 'per day' not in world.text('--since', DAY, '--until', '2026-10-14').split('Calibration')[1]
 
 
 def test_the_gates_have_no_shadow_sentence_in_the_heading_and_name_the_mode_of_each(world):
@@ -2953,7 +2971,7 @@ def test_the_details_line_suggests_the_largest_session_of_the_largest_project(wo
 # --- The format document -------------------------------------------------------------------------------------------------
 
 REPORT_FORMAT = os.path.join(ROOT, 'docs', 'report-format.md')
-DATA_KEYED = {'.total.models', '.total.unpriced', '.total.subagents.by_type', '.clis[].models', '.clis[].subagents',
+DATA_KEYED = {'.total.models', '.total.unpriced', '.total.subagents.by_type', '.startup.subagents.by_type', '.clis[].models', '.clis[].subagents',
               '.calibration.five.per_day', '.calibration.week.per_day', '.calibration.five.per_model',
               '.calibration.week.per_model', '.guards', '.guard_reasons', '.overview.notable[].reasons'}
 
