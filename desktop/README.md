@@ -7,6 +7,13 @@ a hooks module) that draws the usage-clock line under the prompt instead:
 5h 17% ↻12:50 | week 76% ↻Mon 15:00 <- weekly limit reached | ctx 340k/1000k 34% | cache ~54m | $3.50
 ```
 
+![The line under the prompt of the desktop app, cut off after the week](../docs/images/desktop-footer.png)
+
+The footer is shared with the permission mode and the model, so a narrow window cuts the line. Pointing at it shows
+all of it:
+
+![The whole line as a tooltip: 5h 24 %, week 77 % with the stop marker, ctx 760k/1000k 76 %, cache ~59m, $43.15](../docs/images/desktop-footer-hover.png)
+
 ## Install
 
 ```

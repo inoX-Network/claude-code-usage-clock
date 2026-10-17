@@ -7,7 +7,13 @@ calls `windows/cli/_win.py` (through `hooks/_plat.py`); it does not spread Windo
 |---|---|---|
 | [`cli/`](cli/) | Claude Code in the Windows terminal, hooks in Git Bash | Built and tested: Windows 11 (Python 3.14) and `windows-latest` (Python 3.13) in CI. |
 | [`wsl/`](wsl/) | Claude Code inside WSL | Nothing to port: it is Linux. The folder holds a script that runs the main suite in WSL as the proof. |
-| [`cowork/`](cowork/) | Cowork (Claude desktop app) | Findings only, no code, nothing promised. |
+| [`../desktop/`](../desktop/README.md) | Claude Code in the Claude desktop app | A plugin draws the status line under the prompt, which the app does not show. |
+| [`cowork/`](cowork/) | Cowork (cloud, or a Linux VM on the machine) | Findings only, no code, nothing promised. |
+
+![The status line in the Windows terminal: 5h 24 %, week 77 % in red with the weekly stop marker, ctx 460k in yellow, cache 60m](../docs/images/statusline-windows.png)
+
+The status line in the Windows terminal, the same as on Linux: the week has passed the start threshold of the spawn
+gate (`<- weekly limit reached`), the context is past 300k.
 
 ## What you need
 
