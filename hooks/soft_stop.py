@@ -85,8 +85,9 @@ def _is_windows_checkpoint_path(path, suffix: str) -> bool:
         return False
     if not os.path.dirname(real).endswith(suffix):
         return False
-    return not any(_git_bash_link('/'.join(parts[:i])) for parts in (text.split('/'), real.split('/'))
-                   for i in range(2, len(parts) + 1))
+    # Every part as written; through a junction, lstat sees the same files as Git Bash
+    parts = text.split('/')
+    return not any(_git_bash_link('/'.join(parts[:i])) for i in range(2, len(parts) + 1))
 
 
 # The reparse points realpath resolves; Git Bash follows others that Windows does not (a WSL symlink)

@@ -187,6 +187,20 @@ def test_a_part_of_the_path_that_realpath_cannot_judge_makes_no_checkpoint(tmp_p
     assert results(str(folder / 'x.md'), '/agent-checkpoints') == [False, False, False]
 
 
+def test_the_first_part_after_the_drive_is_checked_too(monkeypatch):
+    faked_lstat(monkeypatch, 'C:/srv', error=PermissionError('access denied'))
+    assert results('C:/srv/proj/agent-checkpoints/x.md', '/agent-checkpoints') == [False, False, False]
+
+
+def test_a_folder_with_the_system_attribute_stays_allowed(tmp_path, monkeypatch):
+    """Windows sets it on customised folders (desktop.ini); only a file with it is a Git Bash link."""
+    folder = tmp_path / 'proj' / 'agent-checkpoints'
+    folder.mkdir(parents=True)
+    faked_lstat(monkeypatch, tmp_path / 'proj',
+                st_file_attributes=stat.FILE_ATTRIBUTE_DIRECTORY | stat.FILE_ATTRIBUTE_SYSTEM)
+    assert results(str(folder / 'x.md'), '/agent-checkpoints') == [True, True, True]
+
+
 def test_a_junction_earlier_in_the_path_is_resolved_and_stays_allowed(tmp_path):
     real = tmp_path / 'real'
     (real / 'agent-checkpoints').mkdir(parents=True)
