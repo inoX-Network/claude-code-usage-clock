@@ -297,6 +297,10 @@ it back: [Uninstall completely](../README.md#uninstall-completely).
   nothing to show.
 - **Another status line is running** (see above). Only this tool's status line writes the numbers that the rest of
   the tool reads.
+- **You work in the Claude desktop app.** The app never runs the status line. Install the
+  [desktop plugin](../desktop/README.md): after each answer it hands the app's numbers to the status line, which then
+  writes them as in the terminal. It needs the status line from `tools/install.py` in `settings.json`, and a new
+  session (or `/reload-plugins`) after installing or updating the plugin.
 
 If it says `STALE` instead, the last measurement is old, for example because no session has answered for a while.
 Send a message, and after the answer the numbers are fresh again.

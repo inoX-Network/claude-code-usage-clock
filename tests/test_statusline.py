@@ -607,3 +607,22 @@ def test_a_failing_history_does_not_touch_the_line_or_the_exit_code(monkeypatch,
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'rate_limits': {'five_hour': b(40, now + 600)}})))
     assert statusline.main() == 0
     assert '5h 40%' in plain(capsys.readouterr().out)
+
+
+# --- The desktop plugin: feeds the numbers of the app in (desktop/hooks/record.ts) ------------------
+
+def test_the_input_of_the_desktop_plugin_writes_usage_history_and_context_once(tmp_path):
+    # What the plugin builds from $.session.usage(): no model, no prompt_cache, whole-second reset times
+    now = int(time.time())
+    desktop = {'session_id': 'desk-1',
+               'rate_limits': {'five_hour': b(17.5, now + 3600), 'seven_day': b(76, now + 86400)},
+               'context_window': {'context_window_size': 1_000_000, 'total_input_tokens': 340_000,
+                                  'used_percentage': 34}}
+    assert run(desktop, tmp_path).returncode == 0
+    assert run(desktop, tmp_path).returncode == 0       # a second measurement with the same numbers
+    saved = json.loads((tmp_path / 'usage.json').read_text(encoding='utf-8'))
+    assert saved['five_hour'] == b(17.5, now + 3600) and saved['seven_day'] == b(76, now + 86400)
+    assert len(history_lines(tmp_path)) == 1
+    state = json.loads((tmp_path / 'log' / 'context' / 'desk-1.json').read_text(encoding='utf-8'))
+    assert (state['context_window_size'], state['used_tokens']) == (1_000_000, 340_000)
+    assert 'cache_expires_at' not in state           # the app tells no cache expiry: no guessed clock
