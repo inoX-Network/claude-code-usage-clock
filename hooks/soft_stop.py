@@ -90,10 +90,6 @@ def _is_windows_checkpoint_path(path, suffix: str) -> bool:
     return not any(_git_bash_link('/'.join(parts[:i])) for i in range(2, len(parts) + 1))
 
 
-# The reparse points realpath resolves; Git Bash follows others that Windows does not (a WSL symlink)
-_RESOLVED_TAGS = (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)
-
-
 def _git_bash_link(path: str) -> bool:
     """Does Git Bash read this part of a path as a link that realpath does not see? Then an append in Bash would
     land wherever the link points. Git Bash links need no privilege: a file with '!<symlink>' and the system
@@ -104,7 +100,10 @@ def _git_bash_link(path: str) -> bool:
         return os.path.lexists(path + '.lnk')
     except OSError:
         return True
-    if st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and st.st_reparse_tag not in _RESOLVED_TAGS:
+    # realpath resolves symlinks and junctions; Git Bash follows other reparse points too (a WSL symlink).
+    # The tags exist on Windows only, hence here and not at module level.
+    resolved = (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)
+    if st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and st.st_reparse_tag not in resolved:
         return True
     return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM) and not stat.S_ISDIR(st.st_mode)
 
