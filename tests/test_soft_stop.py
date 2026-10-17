@@ -114,6 +114,7 @@ def test_counter_forces_a_checkpoint_only_after_opt_in():
     assert decide(10, since=15, has=False).action == 'allow'
     assert decide(10, since=14, has=True).action == 'allow'
     assert decide(10, save(), since=99, has=True).action == 'allow'
+    assert decide(10, since=16, has=True).action == 'deny'   # above the limit, e.g. after it was lowered
 
 
 def test_counter_denial_beats_the_warning_level():
@@ -170,6 +171,7 @@ def test_checkpoint_writes_are_recognised(suffix):
     assert soft_stop.is_checkpoint_write('Bash', bash(f"printf \"%s\" '-v' | tee -a {z}"), suffix)  # not the format
     assert soft_stop.is_checkpoint_write('Bash', bash(f"echo '- item 3 done' >> {z}"), suffix)   # echo runs no code
     assert soft_stop.is_checkpoint_write('Bash', bash(f"echo '-n' 'x' >> {z}"), suffix)
+    assert soft_stop.is_checkpoint_write('Bash', bash(f"echo 'x' >> '{PROJ}{suffix}/a'"), suffix)  # both quotes go
 
 
 def test_other_calls_are_not_checkpoint_writes():
@@ -179,6 +181,9 @@ def test_other_calls_are_not_checkpoint_writes():
     assert not soft_stop.is_checkpoint_write('Glob', {'file_path': f'{PROJ}/agent-checkpoints/notes.md'})
     assert not soft_stop.is_checkpoint_write('Write', {})
     assert not soft_stop.is_checkpoint_write('Bash', {})
+    # only Bash commands are read as appends, whatever another tool carries
+    for tool in ('Agent', 'Monitor', 'PowerShell'):
+        assert not soft_stop.is_checkpoint_write(tool, bash(f"echo 'x' >> {PROJ}/agent-checkpoints/a.md")), tool
 
 
 def forgeries(suffix):
@@ -305,6 +310,8 @@ def test_denials_name_the_configured_save_form(suffix):
         assert 'cat >>' in d.reason and "<<'EOF'" in d.reason and 'tee -a' in d.reason and 'Write/Edit' in d.reason
     other = '/agent-checkpoints' if suffix != '/agent-checkpoints' else CUSTOM
     assert other not in decide(96, cfg=cfg).reason
+    # the hint on the Windows spelling stands on Windows only
+    assert (f'C:/Users/<name>/project{suffix}/<file>' in decide(96, cfg=cfg).reason) == (os.name == 'nt')
 
 
 def test_the_messages_are_english_and_free_of_internal_wording():
@@ -366,7 +373,7 @@ def test_the_counter_is_never_written_through_a_link(tmp_path):
 DEEP = pytest.param('[' * 100000, id='deep-nesting')
 
 
-@pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"x"', 'null', '{"since": "x"}', '{"since": null}', '', DEEP])
+@pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"x"', 'null', '{"since": "x"}', '{"since": null}', '{}', '', DEEP])
 def test_counter_survives_broken_files(tmp_path, content):
     (tmp_path / 'x.json').write_text(content, encoding='utf-8')
     c = soft_stop.Counter(str(tmp_path))
@@ -385,6 +392,7 @@ def test_counter_file_can_never_leave_its_directory(tmp_path, agent_id):
     path = c._path(agent_id)
     assert os.path.dirname(path) == str(directory)
     assert len(os.path.basename(path)) <= 125
+    assert len(os.path.basename(c._path('x' * 500))) == 125   # 120 characters of the id and '.json'
     assert not (tmp_path / 'etc').exists()
     assert sorted(p.name for p in tmp_path.iterdir()) == ['counters']
     assert all(name.endswith('.json') for name in os.listdir(directory))
@@ -614,6 +622,13 @@ def test_shadow_still_counts_so_that_switching_to_enforce_continues_the_count(tm
     for _ in range(15):
         run(call())
     assert is_deny(run(call(), ENFORCE))
+
+
+def test_shadow_counts_the_calls_that_enforce_would_have_denied(tmp_path):
+    write_usage(tmp_path, 96)
+    for _ in range(2):
+        assert run(call()) is not None   # the shadow note, nothing blocked
+    assert counter_file(tmp_path) == {'since': 2, 'has_checkpoint': False}
 
 
 def test_log_line_has_the_decision_the_keys_and_the_counter_but_no_values(tmp_path):

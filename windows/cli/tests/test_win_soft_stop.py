@@ -64,6 +64,7 @@ def refused(suffix):
         inside + '\\..\\..\\src\\app.py',                   # '..' with backslashes
         inside + '\\..' + back(suffix) + '\\x.md',          # a detour through '..' that ends inside again
         inside + '\\.\\x.md',                               # '.' is a part that ends with a dot as well
+        'C:\\.' + back(suffix) + '\\x.md',                  # ... also as the first part after the drive
         inside + '\\x.md:hidden',                           # an alternate data stream of a file inside
         inside + ':x',                                      # ... of the directory itself
         back(f'C:/srv/proj/src/app.py:x{suffix}/x.md'),     # a stream name that looks like the directory
