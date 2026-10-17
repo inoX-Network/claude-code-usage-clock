@@ -41,7 +41,7 @@ Scripts import their siblings by inserting their own directory into `sys.path`. 
 runtime dependencies. Python 3.10 or newer, Linux, macOS and Windows (Git Bash). What differs on Windows is in
 `hooks/_plat.py` (the switch) and `windows/cli/_win.py`; the rest of the core does not ask which system it runs on.
 `_usage.py` and `_hookio.py` do their POSIX side themselves and import `_plat` on Windows only, because the soft stop
-copies them with `_config.py`.
+copies them with `_config.py`. `soft_stop.py` does the same: it imports `_plat` on Windows only, inside its path check.
 
 ## Shared usage file
 
@@ -404,6 +404,13 @@ after resolving symlinks) ends with `checkpoint_dir_suffix`, or a Bash command t
 `%%` in the format (flags, width and precision allowed, `*` not), for example `printf '%s\n' "line" >> file` (an option like `-v` or a numeric conversion like
 `%d` can run code in bash and zsh); either of them `| tee -a file`; `cat >> file <<'EOF'`. Double-quoted
 arguments must not contain `$`, backticks or `\`.
+
+On Windows (`_is_windows_checkpoint_path`) the path is first brought into the spelling of `_plat.normalize_path`
+(forward slashes, capital drive letter, `/c/` and `\\?\` resolved, `..` kept). Only a drive path `X:/...` counts:
+no UNC path, nothing root- or drive-relative, no `:` after the drive, no part that ends with `.` or a space (`.` and
+`..` included, because Win32 drops such endings when it opens a file). Then the parent directory must end with the
+suffix as written and after `realpath` (symlinks and junctions), compared case-sensitively. `_plat` is imported
+inside the check, so a failed import fails open like the imports in `main()`.
 
 ## Log
 

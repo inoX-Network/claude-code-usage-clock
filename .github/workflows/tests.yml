@@ -60,10 +60,8 @@ jobs:
       - name: Give the runner a system time zone with daylight saving time
         run: tzutil /s "W. Europe Standard Time"
 
-      # tests/test_soft_stop.py is left out until the soft stop is ported to Windows (checkpoint paths with
-      # backslashes); the main suite and the Windows track (windows/cli/tests) run in full.
       - name: Run the suite and the Windows track
-        run: python -m pytest tests/ windows/cli/tests/ --ignore=tests/test_soft_stop.py -q -rs | tee pytest.txt; exit ${PIPESTATUS[0]}
+        run: python -m pytest tests/ windows/cli/tests/ -q -rs | tee pytest.txt; exit ${PIPESTATUS[0]}
         shell: bash
 
       # No empty run, and no skips except the POSIX-only ones (tests marked posix_only, one fixed reason).
