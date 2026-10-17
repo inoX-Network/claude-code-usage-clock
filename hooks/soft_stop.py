@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 
@@ -75,8 +76,36 @@ def _is_windows_checkpoint_path(path, suffix: str) -> bool:
     # included). Win32 drops such endings when it opens the file, realpath keeps them: the two would differ.
     if ':' in text[2:] or any(part.endswith(('.', ' ')) for part in text[3:].split('/')):
         return False
-    # realpath resolves symlinks and junctions
-    return all(os.path.dirname(p).endswith(suffix) for p in (text, _plat.normalize_path(os.path.realpath(text))))
+    # Lexically first: realpath on a hanging network drive must not delay calls that are no checkpoint anyway
+    if not os.path.dirname(text).endswith(suffix):
+        return False
+    try:
+        real = _plat.normalize_path(os.path.realpath(text))   # resolves symlinks and junctions
+    except (OSError, ValueError):
+        return False
+    if not os.path.dirname(real).endswith(suffix):
+        return False
+    return not any(_git_bash_link('/'.join(parts[:i])) for parts in (text.split('/'), real.split('/'))
+                   for i in range(2, len(parts) + 1))
+
+
+# The reparse points realpath resolves; Git Bash follows others that Windows does not (a WSL symlink)
+_RESOLVED_TAGS = (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)
+
+
+def _git_bash_link(path: str) -> bool:
+    """Does Git Bash read this part of a path as a link that realpath does not see? Then an append in Bash would
+    land wherever the link points. Git Bash links need no privilege: a file with '!<symlink>' and the system
+    attribute, a shortcut 'name.lnk' that stands for 'name', a WSL symlink."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return os.path.lexists(path + '.lnk')
+    except OSError:
+        return True
+    if st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and st.st_reparse_tag not in _RESOLVED_TAGS:
+        return True
+    return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM) and not stat.S_ISDIR(st.st_mode)
 
 
 def _is_checkpoint_path(path, suffix: str) -> bool:
