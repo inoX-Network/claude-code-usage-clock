@@ -52,12 +52,37 @@ def normalize_suffix(value) -> str:
 def save_form(suffix: str) -> str:
     """The forms that count as a checkpoint write, spelled out for the model."""
     target = f'<absolute path>{suffix}/<file>'
-    return (f'Write/Edit/MultiEdit to {target}, or a Bash command that is nothing but an append: '
+    form = (f'Write/Edit/MultiEdit to {target}, or a Bash command that is nothing but an append: '
             f"cat >> {target} <<'EOF' ... EOF, echo '<text>' >> {target}, or echo '<text>' | tee -a {target}")
+    if os.name == 'nt':
+        form += (f'; on Windows give the absolute path with the drive and forward slashes, '
+                 f'for example C:/Users/<name>/project{suffix}/<file>')
+    return form
+
+
+def _is_windows_checkpoint_path(path, suffix: str) -> bool:
+    """A drive path in any spelling of hook input, the rest as on POSIX. The suffix is compared case-sensitively,
+    which is stricter than the file system: a folder that differs in case is no checkpoint folder."""
+    if not isinstance(path, str) or not path or '\0' in path:
+        return False
+    import _plat  # here, like the imports in main(): a failed import must let the call through
+    text = _plat.normalize_path(path)
+    # Only a drive path is absolute enough: no UNC share (resolving a network path can outlast the hook timeout),
+    # nothing root-relative ('/x', on the current drive) or drive-relative ('C:x', below that drive's current folder)
+    if not re.match('[A-Z]:/', text):
+        return False
+    # After the drive: no ':' (alternate data streams, devices) and no part that ends with '.' or ' ' ('.' and '..'
+    # included). Win32 drops such endings when it opens the file, realpath keeps them: the two would differ.
+    if ':' in text[2:] or any(part.endswith(('.', ' ')) for part in text[3:].split('/')):
+        return False
+    # realpath resolves symlinks and junctions
+    return all(os.path.dirname(p).endswith(suffix) for p in (text, _plat.normalize_path(os.path.realpath(text))))
 
 
 def _is_checkpoint_path(path, suffix: str) -> bool:
     """Absolute, no '..', parent directory ends with the suffix. Also after resolving symlinks."""
+    if os.name == 'nt':
+        return _is_windows_checkpoint_path(path, suffix)
     if not isinstance(path, str) or not path or '\0' in path or '..' in path.split('/'):
         return False
     norm = os.path.normpath(path)

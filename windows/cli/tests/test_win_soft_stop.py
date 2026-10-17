@@ -182,4 +182,4 @@ def test_a_failed_import_in_the_path_check_lets_the_call_through_and_is_logged(t
     monkeypatch.setitem(sys.modules, '_plat', None)   # _hookio and _usage hold theirs already; the path check fails
     assert soft_stop.main() == 0
     assert capsys.readouterr().out == ''
-    assert log_lines(tmp_path)[-1]['decision'] == 'error' and log_lines(tmp_path)[-1]['reason'] == 'ImportError'
+    assert log_lines(tmp_path)[-1]['decision'] == 'error' and log_lines(tmp_path)[-1]['reason'] == 'ModuleNotFoundError'
