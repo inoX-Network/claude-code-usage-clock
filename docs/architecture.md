@@ -492,7 +492,7 @@ fall from one to the other; this is also how the windows of two archived days jo
 `start`, `end` (`at`, `value`) and `reset_at`. In the figures (`abo.weeks`) segments of several days join if they have
 the same reset time, or no reset time and no fall of the value between them.
 
-**Periods.** `--day`, `--month`, `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
+**Periods.** `--day`, `--month`, `--year` (`YYYY-01-01` up to `YYYY-12-31`, the current year up to today), `--since/--until` are local days (`datetime(...).timestamp()` in the local zone, so a
 day of daylight saving change has 23 or 25 hours); `--week` is `[R - 7 days, R)` with `R` the latest `week_resets` of the
 history, else `seven_day.resets_at` of the usage file (found like the log folder: `--config`, `CCUC_USAGE_FILE`, `usage_file`
 of the configuration), moved on by whole weeks until it lies after now; with neither, exit 1. Everything is computed on half open intervals of Unix seconds.
@@ -504,7 +504,11 @@ with a reset (or a fall) or longer than 3600 s adds to `skipped_sections` (a lon
 A counted section adds its rise to `counted`. The requests after the first measurement up to the second are summed by
 CLI (cost weight, 8 character session prefix); with a total above zero the rise is shared by cost share
 (`attributed`, per CLI `five_pts`, `week_pts`), otherwise it goes to `rest` (`unexplained_points`). So `attributed + rest
-= counted` always.
+= counted` always. The same shares are also summed by agent in `_section_costs` (`None` for the main sessions, else the
+type of the subagent, the keys of `Request.agent_type`) into `stats['points']`: `main` and `types`, each with `five` and
+`week`; they add up to `attributed`. An archived day of an earlier version has no `points` key: `main` then computes
+the points of that day from the transcripts (`_split_from_transcripts`) and names the day in
+`coverage.archive_days_without_agent_split` if they hold less than the archive's `alloc` says was attributed.
 
 **Calibration.** A counted section with exactly one CLI, no unpriced request and a total above zero adds to the sums
 `n`, `c2 = sum(cost^2)`, `cd = sum(cost x rise)` of the whole period, of its day and, if all its requests have the same

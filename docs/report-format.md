@@ -67,12 +67,14 @@ Where it went            USD   share  ~week pts  sessions
 - **sessions:** how many sessions (CLIs) the project had in the period.
 
 ```
-Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
+Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD, ~6.6 week pts)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
 ```
 
 - **Main … subagents …:** the cost weight of the main sessions and of all subagents, in USD at API prices.
-  `top:` is the agent type of the subagents with the highest cost.
+  `top:` is the agent type of the subagents with the highest cost, with its estimated points of the weekly limit
+  (`~6.6 week pts`; `<1` is more than 0 and less than one point, `0` is none). The points of all types are in `--full`
+  and in `total`.
 - **Opus … Sonnet … Haiku …:** the cost weight per model family in USD at API prices, highest first. A request of a
   model without a price is not in these numbers; `N request(s) without a price` says how many there were.
 - **thinking … % of output:** the share of the output tokens that was thinking, among the requests that report it.
@@ -115,7 +117,9 @@ Details: --project webshop · --session aaaaaaaa · --full
 
 ## `--full`
 
-`--full` prints the full report: the sections `Subscription`, `Total`, `Startup context`, `By CLI`, `Allocation`,
+`--full` prints the full report. In `Total`, `Main session: ~x pts ~y pts 5h` and `Subagents by type: reviewer 0.01 USD (6)
+~x pts ~y pts 5h, …` give the estimated points of the weekly limit (`pts`) and of the 5h limit (`pts 5h`) of the main
+sessions and of each agent type, shared by cost (an estimate below one point is written `<1`). The sections are `Subscription`, `Total`, `Startup context`, `By CLI`, `Allocation`,
 `Calibration` and `Gates`, in the same order as the JSON sections below, with every figure. In it, an estimate of a session below one
 point is written `<1`; a 5h window names the weekday and date of its peak; the calibration lists a day only with at
 least 20 stretches; each gate is listed with its mode and, per warning, question and denial, with its reasons.
@@ -169,8 +173,8 @@ The top-level fields are, in this order:
 | Field | Meaning |
 |---|---|
 | `schema_version` | The number of the format (now `1`). It changes only when a field is renamed or removed; a new field does not change it. |
-| `period` | `kind` (`day`, `week`, `month` or `range`), `label` (as in the title), `start` and `end` (the period is from `start` up to, not including, `end`). |
-| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read). |
+| `period` | `kind` (`day`, `week`, `month`, `year` or `range`), `label` (as in the title), `start` and `end` (the period is from `start` up to, not including, `end`). |
+| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `archive_days_without_agent_split` (the days among them whose points could not be split by agent type, see `total`), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read). |
 | `overview` | The numbers of the text overview, see below. |
 | `subscription` | The measured percentages of the subscription, see below. |
 | `total` | The figures of the whole period. |
@@ -194,7 +198,7 @@ Measured unless it says estimate. The text overview is made of this object alone
 | `projects` | Every project, highest cost first (ties by name): `name` (the whole folder name); `cost_usd`; `share` (part of the whole cost, 0 to 1, `null` if the whole cost is 0); `week_points` and `five_points` (estimates: the points of the weekly and of the 5h limit that fall to the project); `sessions` (count); `session_ids` (the 8-character ids, highest cost first); `cache_hit_rate` (0 to 1, `null` without input tokens). |
 | `max_projects` | How many projects the text shows as rows (5). |
 | `more` | `null`, or the sum of the projects beyond `max_projects`: `projects` (count), `cost_usd`, `share`, `week_points`, `five_points`, `sessions`. |
-| `split` | `main_usd` and `subagents_usd` (cost weight of the main sessions and of the subagents) and `top_subagent` (`type` and `cost_usd` of the subagent type with the highest cost, or `null`). |
+| `split` | `main_usd` and `subagents_usd` (cost weight of the main sessions and of the subagents) and `top_subagent` (`type`, `cost_usd` and `week_points` (estimate, see `total`) of the subagent type with the highest cost, or `null`). |
 | `models` | `families`: a list of `name` (the first word of the model name in `tools/prices.json`, for example `Opus`) and `cost_usd`, highest first; `unpriced_requests`: how many requests had a model without a price (they are not in any USD figure). |
 | `thinking_share` | Part of the output that was thinking (0 to 1), among the requests that report it; `null` if none does. |
 | `cache_hit_rate` | The cache hit rate of the period (0 to 1, `null` without input tokens). |
@@ -228,7 +232,7 @@ Measured, from the measurement history (for the time before the history began, f
 | `requests` | Number of requests (of one request only the last line of the transcript counts: it holds the full output tokens). |
 | `tokens` | Token counts by kind: `input`, `cache_write_5m`, `cache_write_1h` (tokens written to the cache for 5 minutes and 1 hour), `cache_read`, `output`. |
 | `cost_usd` | The cost weight, USD at API prices. |
-| `main`, `subagents` | `requests` and `cost_usd` of the main sessions and of the subagents. `subagents` also has `by_type`, which maps each agent type to `requests` and `cost_usd`. |
+| `main`, `subagents` | `requests` and `cost_usd` of the main sessions and of the subagents. `subagents` also has `by_type`, which maps each agent type to `requests` and `cost_usd`. `main` and every type in `by_type` also have `week_points` and `five_points`: the **estimated** points of the weekly and of the 5h limit that fall to them, shared by cost like the points of the sessions (see `allocation`). A type whose requests lie in a stretch that began before the period can have points and `requests` 0. The points of `main` and of all types add up to `attributed_points` of `allocation` for each limit (to two decimals), except for the days named in `coverage.archive_days_without_agent_split`. A type that the transcript does not name is `unknown`, an odd name `other`; a name is never shown. |
 | `models` | Per priced model name: `requests`, `cost_usd`, `tokens`, `cache_hit_rate`, `thinking_tokens`, `thinking_share`, `web_searches`, `web_fetches`. |
 | `unpriced` | The same for models without a price, without `cost_usd`: their tokens are shown, never estimated. |
 | `cache_hit_rate` | Cache reads divided by all input, 0 to 1 (`null` without input). |
@@ -274,7 +278,7 @@ For `five` and `week`, each with: `counted_points` (the rise between measurement
 `attributed_points` (the part of it that was shared between sessions: an estimate), `unexplained_points` (the part
 with no request with a price in between, shared with nobody), `skipped_sections` and `skipped_points` (stretches that
 contain a reset or are longer than 60 minutes do not count; how many, and the rise in them). `attributed_points` plus
-`unexplained_points` is always `counted_points`.
+`unexplained_points` is always `counted_points`. The same shares by agent type are in `total` (`main` and `subagents.by_type`: `week_points`, `five_points`).
 
 ### `calibration`
 
@@ -297,6 +301,10 @@ Decisions of days archived before reasons were kept are in `guards` but not in `
   one project.
 - **A start is the first request of a transcript.** A session that is continued in a new transcript has a start there
   with the old context in it. The first prompt is part of a start, and the output of the hooks that ran at the start.
+- A day archived by an earlier version, before the points by agent type were kept, has none in the archive; they are
+  computed from the transcripts, which Claude Code deletes after about 30 days. A day for which the transcripts do not hold
+  all that the archive says was attributed is named in `coverage.archive_days_without_agent_split` (and in the `Sources:`
+  line of `--full`): its points are missing from `main` and the types, not from `attributed_points`.
 - A day archived before the starts were kept (version 1.1.1 and earlier) has none in the archive; they are read from
   the transcripts, which Claude Code deletes after about 30 days.
 - The estimate does not see `@` imports inside CLAUDE.md files, plugin agents, or what an older start read before a file changed.

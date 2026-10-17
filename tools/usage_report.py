@@ -5,13 +5,14 @@ Reads only numbers: per request the token counts, the model, the time, the worki
 requests apart, the agent type of a subagent, the usage line of this tool, and the measurement history and the log
 of the hooks. It never reads or prints message text.
 
-Usage: python3 usage_report.py [--day [YYYY-MM-DD] | --week | --month [YYYY-MM] | --since YYYY-MM-DD [--until YYYY-MM-DD]]
+Usage: python3 usage_report.py [--day [YYYY-MM-DD] | --week | --month [YYYY-MM] | --year [YYYY]
+                               | --since YYYY-MM-DD [--until YYYY-MM-DD]]
                                [--full | --project NAME | --session ID | --json] [--projects-dir DIR] [--config PATH]
        python3 usage_report.py --archive [--projects-dir DIR] [--config PATH]
 
 The default is today. Days are local days; --week is the subscription week that ends at the weekly reset time
 (from the measurement history, else from the usage file; not a calendar week); --since and --until are whole days,
-both included. Without a switch the report is an overview of about 20 lines: the projects by cost, what is notable.
+both included; --year is the days of a calendar year (this year up to today). Without a switch the report is an overview of about 20 lines: the projects by cost, what is notable.
 --full prints every figure, --project and --session (a prefix of the session id) print the blocks of --full for those
 sessions and their sum. --json prints the same figures as a stable JSON object, including the overview (see
 docs/report-format.md). --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
@@ -103,6 +104,7 @@ QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # name
 REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
+YEAR_TEXT = re.compile(r'[0-9]{4}')
 
 
 # --- Times ----------------------------------------------------------------------------------------------------------
@@ -567,6 +569,7 @@ def new_stats() -> dict:
     return {'requests': 0, 'cost': 0.0, 'cold_starts': 0, 'extra': {}, 'tokens': dict.fromkeys(KINDS, 0),
             'main': {'requests': 0, 'cost': 0.0},
             'sub': {'requests': 0, 'cost': 0.0}, 'agent_types': {}, 'models': {}, 'unpriced': {}, 'clis': {},
+            'points': {'main': dict.fromkeys(METRICS, 0.0), 'types': {}},
             'abo': {'weeks': [], 'five_windows': []},
             'alloc': {m: {'counted': 0.0, 'attributed': 0.0, 'rest': 0.0, 'skipped_sections': 0, 'skipped_points': 0.0}
                       for m in METRICS},
@@ -688,8 +691,8 @@ def merge_stats(target: dict, extra) -> None:
     target['cost'] += extra.get('cost', 0)
     target['cold_starts'] += extra.get('cold_starts', 0)
     for key in ('extra', 'tokens', 'main', 'sub', 'agent_types', 'models', 'unpriced', 'alloc', 'cal', 'guards',
-                'guard_reasons'):
-        _add_counts(target[key], extra.get(key, {}))      # an archived day of an older version lacks the reasons
+                'guard_reasons', 'points'):
+        _add_counts(target[key], extra.get(key, {}))      # an archived day of an older version lacks reasons and points
     _merge_starts(target['starts'], extra.get('starts', []))     # an archived day of an earlier version has none
     for ident, cli in extra.get('clis', {}).items():
         _merge_cli(target['clis'], ident, cli)
@@ -800,21 +803,25 @@ def _delta(first: Measurement, second: Measurement, metric: str) -> tuple[str | 
     return 'ok', after - before
 
 
-def _section_costs(data: Data, prices: list[dict], first: float, second: float) -> tuple[dict, set, bool]:
-    """(cost by CLI, model names, whether a request has no price) of the requests after `first` up to `second`."""
+def _section_costs(data: Data, prices: list[dict], first: float, second: float) -> tuple[dict, dict, set, bool]:
+    """(cost by CLI, cost by agent (None = the main sessions, else the type of the subagents), model names, whether a
+    request has no price) of the requests after `first` up to `second`."""
     costs: dict[str, float] = {}
+    agents: dict[str | None, float] = {}
     models: set = set()
     unpriced = False
     lo, hi = bisect.bisect_right(data.times, first), bisect.bisect_right(data.times, second)
     for request in data.requests[lo:hi]:
         entry = _price_of(data, prices, request.model)
         ident = request.session[:8]
-        costs[ident] = costs.get(ident, 0.0) + (request_cost(entry, request.tokens) if entry else 0.0)
+        cost = request_cost(entry, request.tokens) if entry else 0.0
+        costs[ident] = costs.get(ident, 0.0) + cost
+        agents[request.agent_type] = agents.get(request.agent_type, 0.0) + cost
         if entry:
             models.add(entry['name'])
         else:
             unpriced = True
-    return costs, models, unpriced
+    return costs, agents, models, unpriced
 
 
 def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, end: float) -> None:
@@ -833,7 +840,7 @@ def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, e
                 continue
             alloc['counted'] += rise
             section = section or _section_costs(data, prices, first.t, second.t)
-            costs, models, unpriced = section
+            costs, agents, models, unpriced = section
             total = sum(costs.values())
             if total <= 0:
                 alloc['rest'] += rise       # no request in between, or none with a price: nobody to share it with
@@ -841,6 +848,10 @@ def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, e
             alloc['attributed'] += rise
             for ident, cost in costs.items():
                 _cli(stats, data, data.session_of[ident])[metric + '_pts'] += rise * cost / total
+            for kind, cost in agents.items():      # the same shares, by agent: the main sessions or a subagent type
+                points = stats['points']['main'] if kind is None else stats['points']['types'].setdefault(
+                    kind, dict.fromkeys(METRICS, 0.0))
+                points[metric] += rise * cost / total
             if len(costs) == 1 and not unpriced:
                 cal = stats['cal'][metric]
                 sums = [cal['all'], cal['days'].setdefault(local_day(second.t).isoformat(), new_sums())]
@@ -982,6 +993,14 @@ def _requests_and_cost(table: dict) -> dict:
     return {name: {'requests': v['requests'], 'cost_usd': v['cost']} for name, v in _by_cost(table)}
 
 
+def _types_report(types: dict, points: dict) -> dict:
+    """The subagent types with requests, cost weight and the estimated points (week and 5h) that fall to them. A type may
+    have points without a request in the period: its request lay in a stretch that began before the period."""
+    table = {name: {'requests': 0, 'cost': 0.0, **types.get(name, {})} for name in types.keys() | points.keys()}
+    return {name: {'requests': v['requests'], 'cost_usd': v['cost'], 'week_points': points.get(name, {}).get('week', 0.0),
+                   'five_points': points.get(name, {}).get('five', 0.0)} for name, v in _by_cost(table)}
+
+
 def _point(entry: dict) -> dict:
     return {'at': iso(entry['t']), 'value': entry['value']}
 
@@ -1081,8 +1100,8 @@ def _unexplained_note(allocation: dict) -> list[dict]:
 
 def _title(period: dict) -> str:
     label = period['label']
-    return {'day': f'Day {label}', 'month': f'Month {label}', 'range': f'Days {label}'}.get(period['kind'],
-                                                                                           label[:1].upper() + label[1:])
+    return {'day': f'Day {label}', 'month': f'Month {label}', 'year': f'Year {label}',
+            'range': f'Days {label}'}.get(period['kind'], label[:1].upper() + label[1:])
 
 
 def _project_row(name: str, clis: list[dict], total: float) -> dict:
@@ -1129,7 +1148,8 @@ def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
                           'highest_at': top['peak_at'] if top else None},
             'projects': projects, 'max_projects': MAX_PROJECTS, 'more': more,
             'split': {'main_usd': total['main']['cost_usd'], 'subagents_usd': total['subagents']['cost_usd'],
-                      'top_subagent': {'type': top_type[0], 'cost_usd': top_type[1]['cost_usd']} if top_type else None},
+                      'top_subagent': {'type': top_type[0], 'cost_usd': top_type[1]['cost_usd'],
+                                       'week_points': top_type[1]['week_points']} if top_type else None},
             'models': {'families': [{'name': name, 'cost_usd': cost} for name, cost in
                                     sorted(families.items(), key=lambda item: (-item[1], item[0]))],
                        'unpriced_requests': sum(model['requests'] for model in total['unpriced'].values())},
@@ -1191,7 +1211,7 @@ def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: floa
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
                for w in abo['five_windows']]
     subagents = {'requests': stats['sub']['requests'], 'cost_usd': stats['sub']['cost'],
-                 'by_type': _requests_and_cost(stats['agent_types'])}
+                 'by_type': _types_report(stats['agent_types'], stats['points']['types'])}
     report = {
         'schema_version': SCHEMA_VERSION,
         'period': period,
@@ -1201,7 +1221,8 @@ def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: floa
                                            for w in abo['weeks']],
                          'five_windows': windows},
         'total': {'requests': stats['requests'], 'tokens': stats['tokens'], 'cost_usd': stats['cost'],
-                  'main': {'requests': stats['main']['requests'], 'cost_usd': stats['main']['cost']},
+                  'main': {'requests': stats['main']['requests'], 'cost_usd': stats['main']['cost'],
+                           'week_points': stats['points']['main']['week'], 'five_points': stats['points']['main']['five']},
                   'subagents': subagents, 'models': _models_report(stats['models'], True),
                   'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
                   'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
@@ -1242,8 +1263,14 @@ def _kinds_text(tokens: dict) -> str:
     return ', '.join(f'{kind.replace("_", " ")} {tokens_text(tokens[kind])}' for kind in KINDS)
 
 
-def _costs_text(table: dict) -> str:
-    return ', '.join(f'{name} {v["cost_usd"]:.2f} USD ({v["requests"]})' for name, v in table.items())
+def _costs_text(table: dict, with_points: bool = False) -> str:
+    return ', '.join(f'{name} {v["cost_usd"]:.2f} USD ({v["requests"]})'
+                     + (f' {_points_pair(v)}' if with_points else '') for name, v in table.items())
+
+
+def _points_pair(entry: dict) -> str:
+    """`~x pts ~y pts 5h`: the estimated points of the weekly and of the 5h limit."""
+    return f'{_estimate_text(entry["week_points"], 2)} pts {_estimate_text(entry["five_points"], 1)} pts 5h'
 
 
 def _week_text(segments: list[dict]) -> str:
@@ -1297,8 +1324,9 @@ def _total_lines(total: dict) -> list[str]:
              f'subagents {total["subagents"]["cost_usd"]:.2f})']
     lines += [f'  Output: {_details_text(total)}',
               f'  Cache: hit rate {_percent(total["cache_hit_rate"])}, cold starts {total["cold_starts"]}']
+    lines.append(f'  Main session: {_points_pair(total["main"])}')
     if total['subagents']['by_type']:
-        lines.append(f'  Subagents by type: {_costs_text(total["subagents"]["by_type"])}')
+        lines.append(f'  Subagents by type: {_costs_text(total["subagents"]["by_type"], True)}')
     if total['models'] or total['unpriced']:
         lines.append('  Models:')
     for name, model in total['models'].items():
@@ -1469,7 +1497,8 @@ def _split_lines(view: dict) -> list[str]:
     split = view['split']
     main = f'Main {usd_text(split["main_usd"])} USD · subagents {usd_text(split["subagents_usd"])} USD'
     if split['top_subagent']:
-        main += f' (top: {split["top_subagent"]["type"]} {usd_text(split["top_subagent"]["cost_usd"])} USD)'
+        top = split['top_subagent']
+        main += f' (top: {top["type"]} {usd_text(top["cost_usd"])} USD, {_estimate_text(top["week_points"], 1)} week pts)'
     models = [f'{m["name"]} {usd_text(m["cost_usd"])} USD' for m in view['models']['families']]
     if view['models']['unpriced_requests']:
         models.append(f'{view["models"]["unpriced_requests"]} request(s) without a price')
@@ -1563,6 +1592,9 @@ def render(report: dict, selection: dict | None = None) -> str:
     sources = [f'{coverage["transcript_files"]} transcript file(s) read']
     if coverage['archive_days']:
         sources.append(f'{len(coverage["archive_days"])} day(s) from the archive: {", ".join(coverage["archive_days"])}')
+    if coverage['archive_days_without_agent_split']:
+        days = coverage['archive_days_without_agent_split']
+        sources.append(f'{len(days)} archived day(s) without the split of points by agent type: {", ".join(days)}')
     for key, name in (('unreadable_history_lines', 'history'), ('unreadable_archive_lines', 'archive'),
                       ('unreadable_transcript_lines', 'transcript')):
         if coverage[key]:
@@ -1823,6 +1855,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--day', nargs='?', const='', metavar='YYYY-MM-DD', help='one local day (default: today)')
     parser.add_argument('--week', action='store_true', help='the subscription week that ends at the weekly reset time')
     parser.add_argument('--month', nargs='?', const='', metavar='YYYY-MM', help='one calendar month (default: this one)')
+    parser.add_argument('--year', nargs='?', const='', metavar='YYYY',
+                        help='one calendar year, this one up to today (default: this one)')
     parser.add_argument('--since', metavar='YYYY-MM-DD', help='first day of a range of days')
     parser.add_argument('--until', metavar='YYYY-MM-DD', help='last day of the range (default: today), needs --since')
     parser.add_argument('--full', action='store_true', help='print every figure instead of the overview')
@@ -1896,6 +1930,12 @@ def _period(parser, args, today: date, anchor: float | None, now: float) -> dict
         first = date(year, month, 1)
         following = date(year + month // 12, month % 12 + 1, 1)
         return {'kind': 'month', 'label': f'{year:04d}-{month:02d}', 'start': day_start(first), 'end': day_start(following)}
+    if args.year is not None:
+        if args.year and not (YEAR_TEXT.fullmatch(args.year) and MIN_YEAR <= int(args.year) <= MAX_YEAR):
+            parser.error(f'--year must be a year like 2026, from {MIN_YEAR} to {MAX_YEAR}')
+        year = int(args.year) if args.year else today.year
+        last = today if year == today.year else date(year, 12, 31)      # this year only up to today
+        return {'kind': 'year', 'label': f'{year:04d}', 'start': day_start(date(year, 1, 1)), 'end': day_bounds(last)[1]}
     if args.since is not None:
         first = _day_arg(parser, args.since, '--since')
         last = _day_arg(parser, args.until, '--until') if args.until is not None else today
@@ -1951,7 +1991,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     args = parser.parse_args(argv)
     now = time.time() if now is None else now
     given = (('--day', args.day is not None), ('--week', args.week), ('--month', args.month is not None),
-             ('--since', args.since is not None))
+             ('--year', args.year is not None), ('--since', args.since is not None))
     chosen = [name for name, present in given if present]
     if len(chosen) > 1:
         parser.error(f'choose one of {", ".join(chosen)}')
@@ -1995,7 +2035,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         return 1
     while True:
         stats = compute_stats(data, prices, _cut(start, end, archived))
-        used, unfit = [], None
+        used, unsplit, unfit = [], [], None
         for day in archived:
             try:
                 merge_stats(stats, archive[day.isoformat()])
@@ -2004,12 +2044,15 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
                 break
             if 'starts' not in archive[day.isoformat()]:      # archived by an earlier version: from the transcripts
                 stats['starts'] += _starts_between(data, prices, *day_bounds(day))
+            if 'points' not in archive[day.isoformat()] and not _split_from_transcripts(stats, data, prices, day, archive):
+                unsplit.append(day.isoformat())
             used.append(day.isoformat())
         if unfit is None:
             break
         archived.remove(unfit)
         broken_archive += 1
-    coverage = {'transcript_files': data.files, 'archive_days': used, 'unreadable_history_lines': broken_history,
+    coverage = {'transcript_files': data.files, 'archive_days': used, 'archive_days_without_agent_split': unsplit,
+                'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
     settings = load_config(config)
@@ -2030,6 +2073,16 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     else:
         print(render(report) if args.full else render_overview(report))
     return 0
+
+
+def _split_from_transcripts(stats: dict, data: Data, prices: list[dict], day: date, archive: dict) -> bool:
+    """Adds the points by agent of an archived day that has none (archived by an earlier version), computed from the
+    transcripts as long as they exist. False if they do not hold all that the archive says was attributed."""
+    points = compute_stats(data, prices, [day_bounds(day)])['points']
+    _add_counts(stats['points'], points)
+    attributed = archive[day.isoformat()].get('alloc', {})
+    return all(points['main'][metric] + sum(kind[metric] for kind in points['types'].values())
+               >= attributed.get(metric, {}).get('attributed', 0) - 0.005 for metric in METRICS)
 
 
 def archive_finished_days(data: Data, prices: list[dict], archive: dict, log_dir: str, projects_dir: str,

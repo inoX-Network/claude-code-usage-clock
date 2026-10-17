@@ -455,10 +455,11 @@ def test_subagents_belong_to_their_main_session_and_are_split_by_type(world):
                      sub='x1', meta={'agentType': 'arbeiter-bauen', 'description': SECRET})
     world.transcript('-home-u-proj-a', session, [paid('2026-10-13T10:03:00Z', 'm4', 0.25)], sub='x2')
     data = world.report('--day', DAY)
-    assert data['total']['main'] == {'requests': 1, 'cost_usd': pytest.approx(1.0)}
+    assert data['total']['main'] == {'requests': 1, 'cost_usd': pytest.approx(1.0), 'week_points': 0, 'five_points': 0}
     assert data['total']['subagents']['requests'] == 3 and data['total']['subagents']['cost_usd'] == pytest.approx(2.75)
-    assert data['total']['subagents']['by_type'] == {'arbeiter-bauen': {'requests': 2, 'cost_usd': pytest.approx(2.5)},
-                                                     'unknown': {'requests': 1, 'cost_usd': pytest.approx(0.25)}}
+    assert data['total']['subagents']['by_type'] == {
+        'arbeiter-bauen': {'requests': 2, 'cost_usd': pytest.approx(2.5), 'week_points': 0, 'five_points': 0},
+        'unknown': {'requests': 1, 'cost_usd': pytest.approx(0.25), 'week_points': 0, 'five_points': 0}}
     assert len(data['clis']) == 1
     cli = data['clis'][0]
     assert cli['id'] == 'aaaaaaaa' and cli['cost_usd'] == pytest.approx(3.75) and cli['requests'] == 4
@@ -1579,8 +1580,9 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert list(data) == ['schema_version', 'period', 'coverage', 'overview', 'subscription', 'total', 'startup', 'clis',
                           'allocation', 'calibration', 'guards', 'guard_reasons']
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
-    assert set(data['coverage']) == {'transcript_files', 'archive_days', 'unreadable_history_lines',
-                                     'unreadable_archive_lines', 'unreadable_transcript_lines'}
+    assert set(data['coverage']) == {'transcript_files', 'archive_days', 'archive_days_without_agent_split',
+                                     'unreadable_history_lines', 'unreadable_archive_lines',
+                                     'unreadable_transcript_lines'}
     assert set(data['total']) == {'requests', 'tokens', 'cost_usd', 'main', 'subagents', 'models', 'unpriced',
                                   'cache_hit_rate', 'cold_starts', 'thinking_tokens', 'thinking_share', 'web_searches',
                                   'web_fetches'}
@@ -1974,7 +1976,8 @@ def test_a_fall_to_exactly_half_is_a_new_window_and_a_five_hour_span_is_two_wind
 
 
 def test_the_days_at_the_edge_of_the_allowed_years_work(world):
-    for args in (['--day', '2000-01-01'], ['--day', '2999-12-31'], ['--month', '2000-01'], ['--month', '2999-12']):
+    for args in (['--day', '2000-01-01'], ['--day', '2999-12-31'], ['--month', '2000-01'], ['--month', '2999-12'],
+                 ['--year', '2000'], ['--year', '2999']):
         assert world.report(*args)['total']['requests'] == 0
 
 
@@ -2177,7 +2180,7 @@ Where it went            USD   share  ~week pts  sessions
   0051                   1.5     1 %         <1         1
   2 more                0.75    <1 %         <1         2
 
-Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD)
+Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD, ~6.6 week pts)
 Opus 92 USD · Sonnet 8.0 USD · Haiku 0.75 USD · thinking 25 % of output · cache hits 89 %
 Start: main 0 tokens (median), subagents 0 (median per type)
 
@@ -2238,7 +2241,8 @@ def test_the_overview_json_carries_the_same_numbers(world):
                             'five_points': pytest.approx(0.0667 * 2, abs=1e-2),
                             'sessions': 2}
     assert view['split']['main_usd'] == pytest.approx(75.486) and view['split']['subagents_usd'] == pytest.approx(25)
-    assert view['split']['top_subagent'] == {'type': 'stripe-meister', 'cost_usd': pytest.approx(20)}
+    assert view['split']['top_subagent'] == {'type': 'stripe-meister', 'cost_usd': pytest.approx(20),
+                                             'week_points': pytest.approx(6.636, abs=1e-3)}
     assert [(m['name'], round(m['cost_usd'], 2)) for m in view['models']['families']] == [
         ('Opus', 91.74), ('Sonnet', 8.0), ('Haiku', 0.75)]
     assert view['models']['unpriced_requests'] == 0 and view['thinking_share'] == pytest.approx(0.25)
@@ -2656,7 +2660,8 @@ Total
   Cost weight: 4.00 USD at API prices (main 3.00, subagents 1.00)
   Output: thinking n/a, web searches n/a, web fetches n/a
   Cache: hit rate n/a, cold starts 0
-  Subagents by type: arbeiter-bauen 1.00 USD (1)
+  Main session: <1 pts ~3.0 pts 5h
+  Subagents by type: arbeiter-bauen 1.00 USD (1) <1 pts ~1.0 pts 5h
   Models:
     model Opus 5.5: 4.00 USD, 2 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits n/a
 
@@ -2832,7 +2837,7 @@ def test_the_subagent_line_names_the_most_expensive_type_only_when_there_is_one(
                      sub='s1', meta={'agentType': 'big'})
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:03:00Z', 'z', 1.0)], sub='s2',
                      meta={'agentType': 'small'})
-    assert 'Main 2.0 USD · subagents 5.0 USD (top: big 4.0 USD)\n' in world.overview('--day', DAY)
+    assert 'Main 2.0 USD · subagents 5.0 USD (top: big 4.0 USD, 0 week pts)\n' in world.overview('--day', DAY)
 
 
 def test_a_thinking_share_of_the_whole_output_is_a_hundred_percent(world):
@@ -3048,3 +3053,344 @@ def test_a_day_with_enough_stretches_but_no_rise_has_no_calibration_value(world)
     assert data['calibration']['five']['per_day']['2026-10-13']['sections'] >= 20
     assert 'per day' not in world.text('--day', DAY).split('Calibration', 1)[1].split('\n\n')[0]
 
+
+
+# --- Points by agent type and the year --------------------------------------------------------------------------------
+
+def agents_world(world):
+    """One stretch (10:00 to 10:10, 5h 10 -> 18, week 20 -> 24) with two sessions: main 2 USD, subagents of type
+    arbeiter-bauen 3 + 1 USD, architekt 1 USD and one of unknown type 1 USD; a stretch after it without any request."""
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 18, 24),
+                   row('2026-10-13T10:20:00Z', 20, 25)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:02:00Z', 'a1', 2.0)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:03:00Z', 'a2', 3.0)], sub='x1',
+                     meta={'agentType': 'arbeiter-bauen'})
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:04:00Z', 'a3', 1.0)], sub='x2',
+                     meta={'agentType': 'architekt'})
+    world.transcript('-p-b', 'bbbbbbbb-2', [paid('2026-10-13T10:05:00Z', 'b1', 1.0, cwd='/home/u/proj-b')], sub='y1',
+                     meta={'agentType': 'arbeiter-bauen'})
+    world.transcript('-p-b', 'bbbbbbbb-2', [paid('2026-10-13T10:06:00Z', 'b2', 1.0, cwd='/home/u/proj-b')], sub='y2')
+
+
+def split_points(data, metric):
+    """(main, {type: points}) of the report for 'five' or 'week'."""
+    key = metric + '_points'
+    return (data['total']['main'][key],
+            {kind: entry[key] for kind, entry in data['total']['subagents']['by_type'].items()})
+
+
+def test_the_points_of_a_stretch_are_shared_between_main_and_the_agent_types_by_cost(world):
+    agents_world(world)
+    data = world.report('--day', DAY)
+    main, types = split_points(data, 'five')
+    assert main == pytest.approx(2.0)      # rise 8 points, total cost 8 USD: one point per USD
+    assert types == {'arbeiter-bauen': pytest.approx(4.0), 'architekt': pytest.approx(1.0),
+                     'unknown': pytest.approx(1.0)}
+    main, types = split_points(data, 'week')
+    assert main == pytest.approx(1.0)      # rise 4 points: half a point per USD
+    assert types == {'arbeiter-bauen': pytest.approx(2.0), 'architekt': pytest.approx(0.5),
+                     'unknown': pytest.approx(0.5)}
+    # the types stay in the order of the cost, ties by name
+    assert list(data['total']['subagents']['by_type']) == ['arbeiter-bauen', 'architekt', 'unknown']
+
+
+def test_main_and_all_types_add_up_to_the_attributed_points(world):
+    agents_world(world)
+    data = world.report('--day', DAY)
+    for metric in ('five', 'week'):
+        main, types = split_points(data, metric)
+        attributed = data['allocation'][metric]['attributed_points']
+        assert round(main + sum(types.values()), 2) == round(attributed, 2)
+        assert data['allocation'][metric]['unexplained_points'] > 0       # the last stretch had no request
+        assert sum(c['estimated_share'][metric] for c in data['clis']) == pytest.approx(main + sum(types.values()))
+
+
+def test_two_types_in_one_stretch_get_the_points_in_the_ratio_of_their_cost(world):
+    world.history([row('2026-10-13T10:00:00Z', 0, 0), row('2026-10-13T10:10:00Z', 30, 9)])
+    session = 'aaaaaaaa-1'
+    world.transcript('-p-a', session, [paid('2026-10-13T10:02:00Z', 'm1', 1.0)], sub='x1', meta={'agentType': 'big'})
+    world.transcript('-p-a', session, [paid('2026-10-13T10:03:00Z', 'm2', 2.0), paid('2026-10-13T10:04:00Z', 'm3', 1.0)],
+                     sub='x2', meta={'agentType': 'small'})
+    data = world.report('--day', DAY)
+    _, week = split_points(data, 'week')
+    _, five = split_points(data, 'five')
+    assert week == {'small': pytest.approx(9 * 3 / 4), 'big': pytest.approx(9 / 4)}
+    assert five == {'small': pytest.approx(30 * 3 / 4), 'big': pytest.approx(30 / 4)}
+    assert split_points(data, 'week')[0] == 0 and split_points(data, 'five')[0] == 0       # no main request
+
+
+def test_a_type_can_have_points_without_requests_in_the_period(world):
+    # the stretch begins before midnight: its subagent request lies on the day before, its points fall to this day
+    world.history([row('2026-10-12T21:50:00Z', 10, 20), row('2026-10-12T22:10:00Z', 14, 22)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-12T22:05:00Z', 'a1', 1.0)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-12T21:55:00Z', 'a2', 1.0)], sub='x1',
+                     meta={'agentType': 'architekt'})
+    data = world.report('--day', DAY)
+    assert data['total']['subagents']['by_type'] == {
+        'architekt': {'requests': 0, 'cost_usd': 0.0, 'week_points': pytest.approx(1.0),
+                      'five_points': pytest.approx(2.0)}}
+    assert split_points(data, 'week')[0] == pytest.approx(1.0)
+    assert 'architekt 0.00 USD (0) ~1.00 pts ~2.0 pts 5h' in world.text('--day', DAY)
+
+
+def test_a_stretch_without_a_price_or_without_a_request_gives_no_agent_a_point(world):
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 14, 22),
+                   row('2026-10-13T10:20:00Z', 16, 23)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [req('2026-10-13T10:12:00Z', 'u1', model='claude-mystery-9', out=1000)],
+                     sub='x1', meta={'agentType': 'architekt'})
+    data = world.report('--day', DAY)
+    assert data['total']['main']['week_points'] == 0 and data['total']['main']['five_points'] == 0
+    assert data['total']['subagents']['by_type'] == {
+        'architekt': {'requests': 1, 'cost_usd': 0.0, 'week_points': 0, 'five_points': 0}}
+    assert data['allocation']['week']['attributed_points'] == 0 and data['allocation']['week']['unexplained_points'] == 3
+
+
+def test_the_full_text_gives_the_points_of_main_and_of_each_type(world):
+    agents_world(world)
+    text = world.text('--day', DAY)
+    assert '  Main session: ~1.00 pts ~2.0 pts 5h\n' in text
+    assert ('  Subagents by type: arbeiter-bauen 4.00 USD (2) ~2.00 pts ~4.0 pts 5h, '
+            'architekt 1.00 USD (1) <1 pts ~1.0 pts 5h, unknown 1.00 USD (1) <1 pts ~1.0 pts 5h\n') in text
+    assert text.index('Main session:') < text.index('Subagents by type:')
+    # the line of the sessions further down has no points for the types
+    assert '    subagents arbeiter-bauen 3.00 USD (1), architekt 1.00 USD (1)' in text
+
+
+def test_small_points_of_an_agent_type_are_written_below_one(world):
+    world.history([row('2026-10-13T10:00:00Z', 0, 0), row('2026-10-13T10:10:00Z', 10, 1)])
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:02:00Z', 'a1', 1.0)], sub='x1',
+                     meta={'agentType': 'tiny'})
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:03:00Z', 'a2', 9.0)])
+    text = world.text('--day', DAY)
+    assert 'Subagents by type: tiny 1.00 USD (1) <1 pts ~1.0 pts 5h' in text
+    assert 'Main session: <1 pts ~9.0 pts 5h' in text
+
+
+def test_a_day_without_subagents_has_the_main_line_and_no_type_line(world):
+    world.history([row('2026-10-13T10:00:00Z', 0, 0), row('2026-10-13T10:10:00Z', 4, 2)])
+    spend(world, ('2026-10-13T10:05:00Z', 1.0))
+    text = world.text('--day', DAY)
+    assert 'Main session: ~2.00 pts ~4.0 pts 5h' in text and 'Subagents by type' not in text
+
+
+def test_no_agent_name_reaches_the_points(world):
+    agents_world(world)
+    world.transcript('-p-a', 'aaaaaaaa-1', [paid('2026-10-13T10:07:00Z', 'a9', 1.0)], sub='x9',
+                     meta={'agentType': f'my type {SECRET}', 'name': SECRET})
+    data = world.report('--day', DAY)
+    assert 'other' in data['total']['subagents']['by_type'] and SECRET not in json.dumps(data)
+    assert SECRET not in world.text('--day', DAY)
+
+
+def test_the_points_of_the_types_survive_the_archive(world):
+    agents_world(world)
+    live = world.report('--day', DAY)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    archived = world.report('--day', DAY)
+    assert archived['coverage']['archive_days'] == [DAY]
+    assert archived['coverage']['archive_days_without_agent_split'] == []
+    assert archived['total'] == live['total']
+
+
+def test_two_archived_days_add_up_their_points(world):
+    agents_world(world)
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 18, 24),
+                   row('2026-10-14T10:00:00Z', 20, 25), row('2026-10-14T10:10:00Z', 22, 26)])
+    world.transcript('-p-a', 'aaaaaaaa-3', [paid('2026-10-14T10:05:00Z', 'c1', 1.0)], sub='z1',
+                     meta={'agentType': 'architekt'})
+    one = world.report('--since', '2026-10-13', '--until', '2026-10-14', now=T('2026-10-15T12:00:00Z'))
+    assert report_module.main(world.args('--archive'), now=T('2026-10-15T12:00:00Z')) == 0
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    two = world.report('--since', '2026-10-13', '--until', '2026-10-14', now=T('2026-10-15T12:00:00Z'))
+    assert two['total'] == one['total']
+    assert one['total']['subagents']['by_type']['architekt']['week_points'] == pytest.approx(0.5 + 1.0)
+
+
+def strip_points(world):
+    path = world.log / ARCHIVE
+    lines = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    for line in lines:
+        del line['stats']['points']
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n', encoding='utf-8')
+
+
+def test_a_day_archived_without_points_is_split_from_the_transcripts_while_they_exist(world):
+    agents_world(world)
+    live = world.report('--day', DAY)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    strip_points(world)
+    data = world.report('--day', DAY)
+    assert data['coverage']['archive_days'] == [DAY] and data['coverage']['archive_days_without_agent_split'] == []
+    assert data['total'] == live['total']
+
+
+def test_a_day_archived_without_points_and_without_transcripts_is_named(world):
+    agents_world(world)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    strip_points(world)
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    data = world.report('--day', DAY)
+    assert data['coverage']['archive_days_without_agent_split'] == [DAY]
+    assert data['total']['main']['week_points'] == 0 and data['total']['main']['five_points'] == 0
+    assert {kind: (v['week_points'], v['five_points']) for kind, v in data['total']['subagents']['by_type'].items()} == {
+        'arbeiter-bauen': (0, 0), 'architekt': (0, 0), 'unknown': (0, 0)}      # the requests are in the archive
+    assert data['allocation']['week']['attributed_points'] > 0       # the rise is there, only its split is not
+    text = world.text('--day', DAY)
+    assert f'1 archived day(s) without the split of points by agent type: {DAY}' in text
+    assert 'without the split' not in world.text('--day', '2026-10-01')
+
+
+def test_a_day_archived_without_points_is_named_when_a_stretch_of_it_has_lost_its_transcripts(world):
+    agents_world(world)
+    world.transcript('-p-c', 'cccccccc-3', [paid('2026-10-13T10:15:00Z', 'c1', 2.0, cwd='/home/u/proj-c')])
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    strip_points(world)
+    (world.projects / '-p-c' / 'cccccccc-3.jsonl').unlink()
+    data = world.report('--day', DAY)
+    assert data['coverage']['archive_days_without_agent_split'] == [DAY]      # less than was attributed: not whole
+    main, types = split_points(data, 'week')
+    assert main + sum(types.values()) == pytest.approx(4.0) and data['allocation']['week']['attributed_points'] == 5
+
+
+@pytest.mark.parametrize('points', [{'main': 5}, {'types': {'x': {'five': 'a'}}}, [1], {'types': 3}])
+def test_an_archive_line_with_malformed_points_is_not_an_archive_line(world, points):
+    agents_world(world)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    path = world.log / ARCHIVE
+    lines = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    for line in lines:
+        line['stats']['points'] = points
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n', encoding='utf-8')
+    data = world.report('--day', DAY)
+    assert data['coverage']['archive_days'] == [] and data['coverage']['unreadable_archive_lines'] == 1
+    assert data['total']['subagents']['by_type']['arbeiter-bauen']['week_points'] == pytest.approx(2.0)
+
+
+def test_the_overview_names_the_week_points_of_the_top_type_and_stays_short(world):
+    overview_world(world)
+    text = world.overview('--week')
+    assert 'Main 75 USD · subagents 25 USD (top: stripe-meister 20 USD, ~6.6 week pts)' in text
+    assert len(text.splitlines()) <= 25
+    data = world.report('--week')
+    top = data['overview']['split']['top_subagent']
+    assert top == {'type': 'stripe-meister', 'cost_usd': pytest.approx(20), 'week_points': pytest.approx(20 * 20 / 60.276)}
+    assert top['week_points'] == data['total']['subagents']['by_type']['stripe-meister']['week_points']
+    assert report_module.render_overview(json.loads(json.dumps(data))) + '\n' == text
+
+
+@pytest.mark.parametrize('points, expected', [(0.0, '0 week pts'), (0.4, '<1 week pts'), (12.34, '~12.3 week pts')])
+def test_the_top_type_of_the_overview_says_its_small_points_like_the_table(world, points, expected):
+    overview_world(world)
+    view = world.report('--week')
+    view['overview']['split']['top_subagent']['week_points'] = points
+    assert f'(top: stripe-meister 20 USD, {expected})' in report_module.render_overview(view)
+
+
+def test_the_overview_without_subagents_has_no_top_type(world):
+    spend(world, ('2026-10-13T10:00:00Z', 1.0))
+    assert 'top:' not in world.overview('--day', DAY)
+
+
+def test_the_overview_of_a_week_with_many_types_is_one_line_longer_for_nobody(world):
+    overview_world(world)
+    for number in range(12):
+        world.transcript('-p16', 'aaaaaaaa-1', [paid(f'2026-10-13T10:2{number % 10}:30Z', f'z{number}', 0.1,
+                                                      cwd=home('0016'))], sub=f't{number}',
+                         meta={'agentType': f'type-{number}'})
+    text = world.overview('--week')
+    assert len(text.splitlines()) <= 25 and text.count('top:') == 1
+
+
+# --year
+
+def year_world(world):
+    """March and October of 2026: the day in March only in the archive, 12 and 13 October in the archive and in the
+    transcripts, today (14 October) and the days of the year before and after only in the transcripts."""
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [
+        paid('2025-12-31T22:59:59Z', 'y0', 100.0), paid('2025-12-31T23:00:00Z', 'y1', 1.0),
+        paid('2026-03-05T10:00:00Z', 'y2', 2.0), paid('2026-10-12T10:00:00Z', 'y3', 4.0),
+        paid('2026-10-13T10:00:00Z', 'y4', 8.0)])
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [
+        paid('2026-10-13T10:00:00Z', 'y4', 8.0), paid('2026-10-14T21:59:59Z', 'y5', 16.0),
+        paid('2026-10-14T22:00:00Z', 'y6', 200.0)])
+
+
+def test_the_year_is_the_days_of_that_year_up_to_today_from_the_archive_and_the_transcripts(world):
+    year_world(world)
+    data = world.report('--year', '2026')
+    assert data['period'] == {'kind': 'year', 'label': '2026', 'start': iso(T('2025-12-31T23:00:00Z')),
+                              'end': iso(T('2026-10-14T22:00:00Z'))}
+    assert data['total']['cost_usd'] == pytest.approx(1 + 2 + 4 + 8 + 16)
+    assert data['coverage']['archive_days'] == ['2026-01-01', '2026-03-05', '2026-10-12', '2026-10-13']
+    assert data['overview']['title'] == 'Year 2026'
+    assert data['total']['requests'] == 5
+
+
+def test_the_year_without_a_value_is_this_year(world):
+    year_world(world)
+    assert world.report('--year') == world.report('--year', '2026')
+    assert world.overview('--year').startswith('Year 2026 · ')
+
+
+def test_a_year_that_has_passed_is_whole_and_one_to_come_is_empty(world):
+    year_world(world)
+    before = world.report('--year', '2025')
+    assert before['total']['cost_usd'] == pytest.approx(100.0) and before['period']['end'] == iso(
+        T('2025-12-31T23:00:00Z'))
+    later = world.report('--year', '2027')
+    assert later['total']['requests'] == 0 and later['period']['label'] == '2027'
+    assert later['period']['end'] == iso(T('2027-12-31T23:00:00Z'))
+
+
+def test_the_year_is_the_same_as_since_and_until(world):
+    year_world(world)
+    year = world.report('--year', '2026')
+    span = world.report('--since', '2026-01-01', '--until', '2026-10-14')
+    assert year['total'] == span['total'] and year['coverage'] == span['coverage']
+    assert year['period']['start'] == span['period']['start'] and year['period']['end'] == span['period']['end']
+    old = world.report('--year', '2025')
+    assert old['total'] == world.report('--since', '2025-01-01', '--until', '2025-12-31')['total']
+
+
+def test_the_year_alone_in_the_archive_needs_no_transcripts(world):
+    year_world(world)
+    for path in world.projects.rglob('*.jsonl'):
+        path.unlink()
+    data = world.report('--year', '2026')
+    assert data['total']['cost_usd'] == pytest.approx(1 + 2 + 4 + 8) and data['coverage']['archive_days'] == [
+        '2026-01-01', '2026-03-05', '2026-10-12', '2026-10-13']
+
+
+@pytest.mark.parametrize('text', ['26', '20266', 'abcd', '1999', '3000', '2026-01', '-2026', '٢٠٢٦'])
+def test_a_bad_year_is_an_error_with_exit_code_2(world, capsys, text):
+    world.projects.mkdir()
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args('--year', text), now=NOW)
+    assert stop.value.code == 2 and '--year must be a year like 2026, from 2000 to 2999' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('other, message', [
+    (('--day',), 'choose one of --day, --year'), (('--week',), 'choose one of --week, --year'),
+    (('--month',), 'choose one of --month, --year'), (('--since', '2026-01-01'), 'choose one of --year, --since'),
+    (('--archive',), '--archive takes no period')])
+def test_the_year_does_not_combine_with_another_period(world, capsys, other, message):
+    world.projects.mkdir()
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args('--year', '2026', *other), now=NOW)
+    assert stop.value.code == 2 and message in capsys.readouterr().err
+
+
+def test_until_still_needs_since_with_a_year(world, capsys):
+    world.projects.mkdir()
+    with pytest.raises(SystemExit) as stop:
+        report_module.main(world.args('--year', '2026', '--until', '2026-02-01'), now=NOW)
+    assert stop.value.code == 2 and '--until needs --since' in capsys.readouterr().err
+
+
+def test_the_help_names_the_year(capsys):
+    assert '--year' in report_module.build_parser().format_help()
