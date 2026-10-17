@@ -1608,10 +1608,10 @@ def test_the_text_report(world):
         assert needle in text, needle
 
 
-def test_the_example_in_the_readme_has_the_shape_of_the_real_report(world):
-    with open(os.path.join(ROOT, 'README.md'), encoding='utf-8') as f:
-        readme = f.read()
-    example = readme.split('with invented numbers:\n\n```\n', 1)[1].split('\n```', 1)[0].splitlines()
+def test_the_example_in_the_docs_has_the_shape_of_the_real_report(world):
+    with open(os.path.join(ROOT, 'docs', 'usage-report.md'), encoding='utf-8') as f:
+        doc = f.read()
+    example = doc.split('with invented numbers:\n\n```\n', 1)[1].split('\n```', 1)[0].splitlines()
     session = 'aaaaaaaa-1111'
     r1, week = T('2026-10-13T13:00:00Z'), T('2026-10-19T07:00:00Z')
     world.history([row('2026-10-13T10:00:00Z', 10, 20, r1, week), row('2026-10-13T10:10:00Z', 14, 21, r1, week)])
