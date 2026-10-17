@@ -6,13 +6,17 @@ import copy
 import io
 import json
 import os
+import stat
+import subprocess
 import sys
 import _winapi
+from types import SimpleNamespace
 
 import pytest
 
 import _config
 import _usage
+import _win
 import soft_stop
 from conftest import ROOT
 
@@ -110,6 +114,97 @@ def test_a_checkpoint_directory_that_is_a_junction_to_elsewhere_is_no_checkpoint
     assert not os.path.islink(junction)                     # islink does not see it, realpath resolves it
     assert results(str(junction / 'app.py'), suffix) == [False, False, False]
     assert results(str(tmp_path / 'other' / suffix.lstrip('/') / 'a.md'), suffix) == [True, True, True]
+
+
+def forward(path):
+    return str(path).replace('\\', '/')
+
+
+def git_bash(command, *args, kind='sys'):
+    """Runs command in Git Bash; with MSYS=winsymlinks:<kind>, ln -s makes a link that only Git Bash follows:
+    'sys' a file with '!<symlink>' and the system attribute, 'lnk' a shortcut. Neither needs a privilege."""
+    env = {**os.environ, 'MSYS': f'winsymlinks:{kind}'}
+    done = subprocess.run([_win.find_git_bash(), '-c', command, '_', *map(forward, args)], env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.parametrize('kind', ['sys', 'lnk'])
+@pytest.mark.parametrize('suffix', SUFFIXES)
+def test_a_checkpoint_directory_that_only_git_bash_reads_as_a_link_is_no_checkpoint(tmp_path, suffix, kind):
+    target = tmp_path / 'src'
+    target.mkdir()
+    link = tmp_path / suffix.lstrip('/')
+    link.parent.mkdir(parents=True, exist_ok=True)
+    git_bash('ln -s "$1" "$2"', target, link, kind=kind)
+    git_bash('echo x >> "$1"', link / 'app.py')
+    assert (target / 'app.py').is_file()                    # the threat: an append through it lands outside
+    assert results(str(link / 'app.py'), suffix) == [False, False, False]
+    assert not soft_stop.is_checkpoint_write('Bash', {'command': f"echo 'x' >> {forward(link / 'b.md')}"}, suffix)
+    assert results(str(tmp_path / 'other' / suffix.lstrip('/') / 'a.md'), suffix) == [True, True, True]
+
+
+@pytest.mark.parametrize('kind', ['sys', 'lnk'])
+def test_a_checkpoint_file_that_only_git_bash_reads_as_a_link_is_no_checkpoint(tmp_path, kind):
+    folder = tmp_path / 'agent-checkpoints'
+    folder.mkdir()
+    victim = tmp_path / 'app.py'
+    victim.write_text('', encoding='utf-8')
+    git_bash('ln -s "$1" "$2"', victim, folder / 'x.md', kind=kind)
+    git_bash('echo x >> "$1"', folder / 'x.md')
+    assert victim.read_text(encoding='utf-8') == 'x\n'
+    assert results(str(folder / 'x.md'), '/agent-checkpoints') == [False, False, False]
+    (folder / 'plain.md').write_text('', encoding='utf-8')
+    for neighbour in ('plain.md', 'new.md'):                 # the rest of the folder stays a checkpoint folder
+        assert results(str(folder / neighbour), '/agent-checkpoints') == [True, True, True], neighbour
+
+
+def faked_lstat(monkeypatch, at, **fields):
+    """os.lstat as before, except for the path at: there the fields given replace the real ones, or raise."""
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.path.normcase(os.fspath(path)) != os.path.normcase(str(at)):
+            return real(path, *args, **kwargs)
+        if 'error' in fields:
+            raise fields['error']
+        st = real(path, *args, **kwargs)
+        return SimpleNamespace(**{'st_mode': st.st_mode, 'st_file_attributes': st.st_file_attributes,
+                                  'st_reparse_tag': st.st_reparse_tag, **fields})
+    monkeypatch.setattr(os, 'lstat', lstat)
+
+
+@pytest.mark.parametrize('fields', [
+    {'st_file_attributes': stat.FILE_ATTRIBUTE_DIRECTORY | stat.FILE_ATTRIBUTE_REPARSE_POINT,
+     'st_reparse_tag': 0xA000001D},                         # a WSL symlink, which realpath leaves as it is
+    {'st_file_attributes': stat.FILE_ATTRIBUTE_DIRECTORY | stat.FILE_ATTRIBUTE_REPARSE_POINT,
+     'st_reparse_tag': 0x8000001B},                         # an app execution alias
+    {'error': PermissionError('access denied')}])           # unclear
+def test_a_part_of_the_path_that_realpath_cannot_judge_makes_no_checkpoint(tmp_path, monkeypatch, fields):
+    folder = tmp_path / 'proj' / 'agent-checkpoints'
+    folder.mkdir(parents=True)
+    faked_lstat(monkeypatch, tmp_path / 'proj', **fields)
+    assert results(str(folder / 'x.md'), '/agent-checkpoints') == [False, False, False]
+
+
+def test_a_junction_earlier_in_the_path_is_resolved_and_stays_allowed(tmp_path):
+    real = tmp_path / 'real'
+    (real / 'agent-checkpoints').mkdir(parents=True)
+    _winapi.CreateJunction(str(real), str(tmp_path / 'proj'))
+    assert results(str(tmp_path / 'proj' / 'agent-checkpoints' / 'x.md'), '/agent-checkpoints') == [True, True, True]
+
+
+def test_an_error_in_realpath_makes_no_checkpoint_and_other_paths_never_reach_it(monkeypatch):
+    asked = []
+
+    def hung(path, *args, **kwargs):
+        asked.append(path)
+        raise OSError('the network drive does not answer')
+    monkeypatch.setattr(os.path, 'realpath', hung)
+    assert at_deny_level('Write', {'file_path': 'Z:/share/src/app.py'}, '/agent-checkpoints') == 'deny'
+    assert asked == []                                      # a hanging drive cannot delay an ordinary call
+    assert results('C:/srv/proj/agent-checkpoints/x.md', '/agent-checkpoints') == [False, False, False]
+    assert asked
 
 
 @pytest.mark.parametrize('suffix', SUFFIXES)
