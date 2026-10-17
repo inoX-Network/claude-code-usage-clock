@@ -1683,6 +1683,17 @@ def repository_root(cwd: str) -> str:
     return cwd
 
 
+def project_folders(cwd: str) -> list[str]:
+    """The folders whose `.claude/agents` and `.claude/skills` a start in `cwd` loads, `cwd` first: up to the root of
+    its git working tree (the folder with `.git`, in a linked worktree a file), only `cwd` outside a repository."""
+    found = []
+    for folder in _ancestors(cwd):
+        found.append(folder)
+        if os.path.exists(os.path.join(folder, '.git')):
+            return found
+    return [cwd]
+
+
 def memory_file(projects_dir: str, cwd: str) -> list[dict]:
     """MEMORY.md of the repository of `cwd`, else of `cwd` itself (as the folder name is made from the path), as far as
     Claude Code loads it (the first lines and bytes): a list of zero or one file."""
@@ -1745,7 +1756,7 @@ def estimate_start(project: str, cwd: str, user_dir: str, projects_dir: str, fac
                 'chars': chars, 'tokens': tokens(chars)}
 
     chain, memory = claude_md_files(user_dir, cwd), memory_file(projects_dir, cwd)
-    folders = [os.path.join(folder, '.claude') for folder in _ancestors(cwd)] + [user_dir]
+    folders = [os.path.join(folder, '.claude') for folder in project_folders(cwd)] + [user_dir]
     agents = agent_definitions([os.path.join(folder, 'agents') for folder in folders])
     skills = skill_definitions([os.path.join(folder, 'skills') for folder in folders])
     parts = [part('claude_md', len(chain), sum(f['chars'] for f in chain), chain),

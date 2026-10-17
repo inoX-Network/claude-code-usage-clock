@@ -573,7 +573,8 @@ CLAUDE.md and rules, then per folder from the outermost down to the working fold
 .claude/CLAUDE.md and .claude/rules; rules with `paths:` in the frontmatter are skipped; a file counts once by its real path), `memory_file`
 (`<projects dir>/<path with every character outside A-Za-z0-9 as "-">/memory/MEMORY.md` for the path of `repository_root` (the main working tree of the git repository: a linked worktree has a `.git` file naming `<main>/.git/worktrees/<name>`), else for the folder itself, cut at `MEMORY_LINES` (200) lines
 and `MEMORY_CHARS` (25 KB)), `agent_definitions` and `skill_definitions` (name plus folded `description` from
-`description_length`; project folders before the user folder, the first definition of a name wins), at most `MAX_FILE_CHARS`
+`description_length`; the `project_folders` from the working folder up to the root of its git working tree before the
+user folder, the first definition of a name wins), at most `MAX_FILE_CHARS`
 characters read per file, `NOT_ESTIMABLE` named and not guessed, and `omitClaudeMd` (`true`, any case) of the agent definition
 for the subagent types of the period. `estimate_folder` picks the working folder: that of the latest start of the period
 that exists. File names are made harmless (`FILE_NAME_CHARS`).

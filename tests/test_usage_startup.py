@@ -458,6 +458,36 @@ def test_a_definition_in_the_project_wins_over_the_user_folder_and_adds_its_own(
     assert (data['parts'][3]['items'], data['parts'][3]['chars']) == (2, 108 + 23)
 
 
+def test_a_project_below_home_counts_the_user_folder_once_and_nothing_above_the_repository(world, tmp_path):
+    home = tmp_path / 'home'
+    user = home / '.claude'                                     # the user folder is also on the way up from the project
+    repo = home / 'Projekte' / 'shop'
+    put(user / 'CLAUDE.md', 'u' * 23)
+    put(user / 'rules' / 'r.md', 'r' * 23)
+    put(user / 'agents' / 'a.md', f'---\nname: agent-u\ndescription: {"U" * 16}\n---\n')
+    put(user / 'skills' / 's' / 'SKILL.md', f'---\nname: skill-u\ndescription: {"S" * 16}\n---\n')
+    put(home / 'Projekte' / '.claude' / 'agents' / 'x.md', f'---\nname: agent-x\ndescription: {"X" * 16}\n---\n')
+    put(home / 'Projekte' / '.claude' / 'skills' / 'x' / 'SKILL.md', f'---\nname: skill-x\ndescription: {"X" * 16}\n---\n')
+    (repo / '.git').mkdir(parents=True)
+    put(repo / '.claude' / 'agents' / 'p.md', f'---\nname: agent-p\ndescription: {"P" * 16}\n---\n')
+    world.transcript('-p-x', 'xxxxxxxx-1', [req('2026-10-13T08:00:00Z', 'x1', cr=100, request='r1', cwd=str(repo / 'src'))])
+    (repo / 'src').mkdir()
+    data = estimate(world, user)
+    assert [f['file'] for f in data['parts'][0]['files']] == ['~/.claude/CLAUDE.md', '~/.claude/rules/r.md']
+    assert (data['parts'][2]['items'], data['parts'][2]['chars']) == (2, 23 + 23)        # agent-p and agent-u
+    assert (data['parts'][3]['items'], data['parts'][3]['chars']) == (1, 23)             # skill-u
+
+
+def test_the_project_folders_end_at_the_root_of_a_linked_worktree(tmp_path):
+    tree = tmp_path / 'wt'
+    put(tree / '.git', f'gitdir: {tmp_path.as_posix()}/main/.git/worktrees/wt\n')
+    (tree / 'a' / 'b').mkdir(parents=True)
+    assert report_module.project_folders(str(tree / 'a' / 'b')) == [str(tree / 'a' / 'b'), str(tree / 'a'), str(tree)]
+    assert report_module.project_folders(str(tmp_path / 'wt')) == [str(tree)]
+    (tmp_path / 'loose').mkdir()
+    assert report_module.project_folders(str(tmp_path / 'loose')) == [str(tmp_path / 'loose')]
+
+
 @pytest.mark.parametrize('front, chars', [
     ('description: plain text', 10 + 10),
     ('description: "quoted text"', 10 + 11),

@@ -165,12 +165,7 @@ class World:
 
 
 @pytest.fixture
-def world(tmp_path, capsys, monkeypatch):
-    # The estimate of the start walks up from the working folder to the root. On Windows tmp_path lies in the user
-    # profile, with the real ~/.claude above it: so the chain ends in tmp_path.
-    ancestors = report_module._ancestors
-    monkeypatch.setattr(report_module, '_ancestors',
-                        lambda folder: [f for f in ancestors(folder) if f.startswith(str(tmp_path))])
+def world(tmp_path, capsys):
     made = World(tmp_path)
     made.capsys = capsys
     return made

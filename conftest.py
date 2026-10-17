@@ -3,6 +3,9 @@
 One conftest at the repository root serves `tests/` (the main suite, all platforms) and `windows/cli/tests/` (the
 Windows track, collected on Windows only).
 """
+import builtins
+import errno
+import io
 import os
 import sys
 import time
@@ -10,6 +13,12 @@ import time
 import pytest
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+# What Claude Code reads from the real home folder, taken before any test points HOME elsewhere. The estimate of the
+# usage report walks up from a working folder to the root; on Windows the temp folder lies in the user profile, so a
+# walk from tmp_path passes the real home. No test may see these, on any system (see isolated_env).
+REAL_HOME = os.path.expanduser('~')
+REAL_HOME_ENTRIES = [os.path.normcase(os.path.join(REAL_HOME, name))
+                     for name in ('.claude', 'CLAUDE.md', 'CLAUDE.local.md', '.git')]
 HOOKS = os.path.join(ROOT, 'hooks')
 WINDOWS_CLI = os.path.join(ROOT, 'windows', 'cli')
 sys.path.insert(0, WINDOWS_CLI)
@@ -68,9 +77,40 @@ def lock_is_held(path):
         os.close(probe)
 
 
+def in_real_home(path):
+    """True if `path` is one of REAL_HOME_ENTRIES or below one."""
+    try:
+        name = os.fsdecode(os.path.normcase(os.path.abspath(os.fspath(path))))
+    except TypeError:                                       # a file descriptor
+        return False
+    return any(name == entry or name.startswith(entry + os.sep) for entry in REAL_HOME_ENTRIES)
+
+
+def _refusing(real):
+    def call(*args, **kwargs):
+        path = args[0] if args else next(iter(kwargs.values()), '.')
+        if in_real_home(path):
+            raise PermissionError(errno.EACCES, 'a test may not read the real home folder', os.fsdecode(os.fspath(path)))
+        return real(*args, **kwargs)
+    return call
+
+
+def _absent(real):
+    def call(path, *args, **kwargs):
+        return False if in_real_home(path) else real(path, *args, **kwargs)
+    return call
+
+
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path, monkeypatch):
-    """No test may read or write the real ~/.claude, the real log or a config.json next to the scripts."""
+    """No test may read or write the real ~/.claude, the real log or a config.json next to the scripts. The Claude
+    files of the real home folder are walled off: opening or listing them fails as if access were denied, and they
+    do not exist for os.path (on Windows os.path.isfile and friends do not go through os.stat)."""
+    for module, name in ((builtins, 'open'), (io, 'open'), (os, 'open'), (os, 'stat'), (os, 'lstat'), (os, 'listdir'),
+                         (os, 'scandir')):
+        monkeypatch.setattr(module, name, _refusing(getattr(module, name)))
+    for name in ('exists', 'lexists', 'isfile', 'isdir', 'islink'):
+        monkeypatch.setattr(os.path, name, _absent(getattr(os.path, name)))
     for name in list(os.environ):
         if name.startswith('CCUC_') or name == 'CLAUDE_PROJECT_DIR':
             monkeypatch.delenv(name)
