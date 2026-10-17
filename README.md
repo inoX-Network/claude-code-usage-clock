@@ -84,6 +84,7 @@ Options:
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
+| `--check` | Check an existing installation and change nothing: the entries in `settings.json`, the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder. Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
 
 Restart Claude Code (or open `/hooks`) after installing.
 

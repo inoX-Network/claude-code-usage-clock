@@ -21,7 +21,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _plat.py                the platform switch: replace, pread, fchmod, path and command spelling, open flags (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
-  install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
+  install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
   log_summary.py          summarises the JSONL log
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
   usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
