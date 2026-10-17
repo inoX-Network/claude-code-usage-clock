@@ -14,6 +14,7 @@ import pytest
 
 import _config
 import _context_state
+import _usage
 import _wake
 import wake_watcher
 from conftest import HOOKS
@@ -99,8 +100,8 @@ def state(**fields):
 # --- The constants -------------------------------------------------------------------------------------------
 
 def test_the_constants_are_the_documented_ones():
-    assert (wake_watcher.POLL_S, wake_watcher.STALE_MIN, wake_watcher.STALE_POLLS, wake_watcher.MAX_RUN_MIN) == (
-        60, 2, 3, 115)
+    assert (wake_watcher.POLL_S, wake_watcher.STALE_MIN, wake_watcher.STALE_POLLS, wake_watcher.MAX_RUN_MIN,
+            wake_watcher.IDLE_FIRE_AT_MAX_RUN_MIN) == (60, 2, 3, 115, 20)
     assert (_wake.ALIVE_MIN, _wake.REST_AFTER_FIRE_MIN) == (3, 60)
 
 
@@ -294,6 +295,249 @@ def test_an_ended_heartbeat_that_cannot_be_written_still_gives_the_end_message(t
 def test_just_before_the_limit_it_still_polls(tmp_path):
     message, clock = run(tmp_path, ['fresh'] * 114 + ['fire'])
     assert 'Run your session-end routine now' in message and len(clock.sleeps) == 114
+
+
+# --- Maximum run time: a long idle time with a warm cache wakes instead of restarting ------------------------
+#
+# Measured 14.10.2026: the restart message is a model turn that renews the cache, the idle time starts again, and
+# the user is long gone. So at the limit a warm cache that has been idle for IDLE_FIRE_AT_MAX_RUN_MIN wakes now.
+
+def idle_for(idle_s, ttl='1h', ttl_s=3600, used=210_000):
+    """A plan step: the state of a session that has been idle for `idle_s` seconds, at every poll (the expiry
+    moves with the clock, so the watcher's own lead-time check never fires)."""
+    return lambda c: write_state(c.tmp_path, c.t, used=used, ttl=ttl, expires=int(c.t) + ttl_s - idle_s, measured=c.t)
+
+
+def raw_state(fields):
+    """A plan step that writes the state file by hand, also with values the state writer would drop. `fields`
+    is a dict or a function of the clock that returns one; it overrides the defaults."""
+    def step(c):
+        body = {'session_id': SID, 'context_window_size': 1_000_000, 'used_tokens': 210_000,
+                'measured_at': _usage._measured_at(c.t)}
+        body.update(fields(c) if callable(fields) else fields)
+        _context_state.write_private(str(directory(c.tmp_path)), f'{SID}.json', json.dumps(body))
+    return step
+
+
+def ended_at_the_limit(message, clock):
+    return len(clock.sleeps) == 115 and message.startswith('Wake-up watcher stopped:') and 'start it again' in message
+
+
+@pytest.mark.parametrize('idle_min', [20, 21, 30, 45, 49])
+def test_at_the_limit_a_long_idle_time_with_a_warm_cache_wakes_instead_of_restarting(tmp_path, idle_min):
+    message, clock = run(tmp_path, [idle_for(idle_min * MIN)])
+    assert len(clock.sleeps) == 115 and clock.t == T0 + 115 * MIN
+    rest_min = 60 - idle_min
+    assert message == (
+        f'Wake-up call for session {SID}: the user has been away for about {idle_min} min, the prompt cache has '
+        f'about {rest_min} min left, the context is 210k tokens (wake-up threshold 200k). The user is away. Run your '
+        'session-end routine now, without asking (save progress, commit, push, summary), then end the turn. Do not '
+        'start a new watcher.')
+
+
+def test_at_the_limit_the_wake_up_call_leaves_a_fired_marker_at_the_time_of_the_limit(tmp_path):
+    run(tmp_path, [idle_for(45 * MIN)])
+    assert beat(tmp_path) == {'session_id': SID, 'state': 'fired', 'at': '2027-01-15T09:55:00Z'}
+
+
+def test_at_the_limit_the_fired_marker_holds_the_next_offer_back_for_an_hour(tmp_path):
+    run(tmp_path, [idle_for(45 * MIN)])
+    end = T0 + 115 * MIN
+    assert _wake.blocks_hint(_wake.read_heartbeat(str(directory(tmp_path)), SID), end) is True
+
+
+@pytest.mark.parametrize('idle_min', [0, 1, 5, 10, 19])
+def test_at_the_limit_a_short_idle_time_restarts_with_an_ended_marker(tmp_path, idle_min):
+    message, clock = run(tmp_path, [idle_for(idle_min * MIN)])
+    assert ended_at_the_limit(message, clock) and 'session-end routine' not in message
+    assert beat(tmp_path) == {'session_id': SID, 'state': 'ended', 'at': '2027-01-15T09:55:00Z'}
+
+
+def test_at_the_limit_exactly_twenty_minutes_of_idle_time_wakes(tmp_path):
+    message, _ = run(tmp_path, [idle_for(20 * MIN)])
+    assert message.startswith(f'Wake-up call for session {SID}: the user has been away for about 20 min')
+    assert beat(tmp_path)['state'] == 'fired'
+
+
+def test_at_the_limit_one_second_short_of_twenty_minutes_restarts(tmp_path):
+    message, clock = run(tmp_path, [idle_for(20 * MIN - 1)])      # 19:59
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_one_second_over_twenty_minutes_wakes(tmp_path):
+    message, _ = run(tmp_path, [idle_for(20 * MIN + 1)])          # 20:01
+    assert message.startswith('Wake-up call') and beat(tmp_path)['state'] == 'fired'
+
+
+@pytest.mark.parametrize('rest_s', [0, -1, -600, -3000])
+def test_at_the_limit_a_cold_cache_restarts_however_long_the_idle_time(tmp_path, rest_s):
+    message, clock = run(tmp_path, [lambda c: write_state(c.tmp_path, c.t, ttl='1h', expires=int(c.t) + rest_s,
+                                                          measured=c.t)])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+@pytest.mark.parametrize('cache', [
+    {'cache_ttl': '2h', 'cache_expires_at': 1_800_000_000 + 40 * 60 + 115 * 60},      # unknown lifetime
+    {'cache_ttl': None, 'cache_expires_at': 1_800_000_000 + 40 * 60 + 115 * 60},
+    {'cache_ttl': '1H', 'cache_expires_at': 1_800_000_000 + 40 * 60 + 115 * 60},
+    {'cache_expires_at': 1_800_000_000 + 40 * 60 + 115 * 60},                          # no lifetime
+    {'cache_ttl': '1h'},                                                               # no expiry
+    {'cache_ttl': '1h', 'cache_expires_at': None},
+    {'cache_ttl': '1h', 'cache_expires_at': 'soon'},
+    {'cache_ttl': '1h', 'cache_expires_at': True},
+    {'cache_ttl': '1h', 'cache_expires_at': 0},
+    {'cache_ttl': '1h', 'cache_expires_at': -5},
+    {}])                                                                               # no cache clock at all
+def test_at_the_limit_an_unknown_or_unusable_cache_clock_restarts(tmp_path, cache):
+    message, clock = run(tmp_path, [raw_state(cache)])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_an_expiry_that_is_not_finite_restarts(tmp_path):
+    # json.dumps writes the non-finite number as Infinity, which Python reads back
+    message, clock = run(tmp_path, [raw_state({'cache_ttl': '1h', 'cache_expires_at': float('inf')})])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_the_five_minute_cache_never_has_twenty_minutes_of_idle_time(tmp_path):
+    message, clock = run(tmp_path, [idle_for(2 * MIN, ttl='5m', ttl_s=5 * MIN)])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_an_expiry_further_away_than_the_lifetime_has_no_idle_time_and_restarts(tmp_path):
+    message, clock = run(tmp_path, [idle_for(-10 * MIN)])      # expiry 70 minutes away: clock skew
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+@pytest.mark.parametrize('used,wakes', [(199_999, False), (200_000, True), (200_001, True), (1_000, False)])
+def test_at_the_limit_the_context_must_have_reached_from_k(tmp_path, used, wakes):
+    message, _ = run(tmp_path, [idle_for(45 * MIN, used=used)])
+    assert message.startswith('Wake-up call') is wakes
+    assert beat(tmp_path)['state'] == ('fired' if wakes else 'ended')
+
+
+def test_at_the_limit_the_threshold_of_the_config_counts_not_a_fixed_one(tmp_path):
+    message, _ = run(tmp_path, [idle_for(45 * MIN, used=250_000)], cfg_with(from_k=300))
+    assert message.startswith('Wake-up watcher stopped:') and beat(tmp_path)['state'] == 'ended'
+    message, _ = run(tmp_path, [idle_for(45 * MIN, used=250_000)], cfg_with(from_k=250))
+    assert message.startswith('Wake-up call')
+
+
+def test_at_the_limit_an_implausible_context_restarts(tmp_path):
+    message, _ = run(tmp_path, [raw_state(lambda c: {'used_tokens': 900_000, 'context_window_size': 1_000,
+                                                     'cache_ttl': '1h', 'cache_expires_at': int(c.t) + 15 * MIN})])
+    assert message.startswith('Wake-up watcher stopped:') and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_a_stale_state_file_restarts_even_with_a_long_idle_time(tmp_path):
+    """The state file is read again at the limit with the same freshness rule as in the loop: a file that was
+    written three minutes ago says nothing about now."""
+    def step(c):
+        if c.step < 115:
+            idle_for(45 * MIN)(c)
+        else:
+            write_state(c.tmp_path, c.t, ttl='1h', expires=int(c.t) + 15 * MIN, measured=c.t - 3 * MIN)
+    message, clock = run(tmp_path, [step])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_a_missing_state_file_restarts(tmp_path):
+    def step(c):
+        if c.step < 115:
+            idle_for(45 * MIN)(c)
+        else:
+            (directory(c.tmp_path) / f'{SID}.json').unlink()
+    message, clock = run(tmp_path, [step])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_the_state_of_the_moment_counts_not_an_earlier_one(tmp_path):
+    """Idle for 45 minutes until the last poll, then the user writes: the expiry is an hour away, so the idle time
+    is zero and the watcher must not wake the session under the user's hands."""
+    def step(c):
+        idle_for(45 * MIN)(c) if c.step < 115 else idle_for(0)(c)
+    message, clock = run(tmp_path, [step])
+    assert ended_at_the_limit(message, clock) and beat(tmp_path)['state'] == 'ended'
+
+
+def test_at_the_limit_a_fired_marker_that_cannot_be_written_still_wakes(tmp_path, monkeypatch):
+    real = _wake.write_heartbeat
+
+    def only_watching(directory_, session_id, state_, now):
+        if state_ == 'fired':
+            raise OSError('disk full')
+        real(directory_, session_id, state_, now)
+    monkeypatch.setattr(_wake, 'write_heartbeat', only_watching)
+    message, clock = run(tmp_path, [idle_for(45 * MIN)])
+    assert len(clock.sleeps) == 115 and message.startswith(f'Wake-up call for session {SID}:')
+    assert 'cannot be written' not in message
+    path = directory(tmp_path) / f'{SID}.watch'      # the clean-up of the state writer may have removed the old beat
+    assert not path.exists() or beat(tmp_path)['state'] == 'watching'
+
+
+def test_at_the_limit_an_ended_marker_that_cannot_be_written_still_restarts(tmp_path, monkeypatch):
+    real = _wake.write_heartbeat
+
+    def only_watching(directory_, session_id, state_, now):
+        if state_ == 'ended':
+            raise OSError('disk full')
+        real(directory_, session_id, state_, now)
+    monkeypatch.setattr(_wake, 'write_heartbeat', only_watching)
+    message, clock = run(tmp_path, [idle_for(5 * MIN)])
+    assert ended_at_the_limit(message, clock)
+
+
+def test_the_wake_up_call_at_the_limit_starts_as_the_context_reporter_expects_and_brings_the_routine(tmp_path):
+    import context_reporter
+    routine = tmp_path / 'routine.md'
+    routine.write_bytes(b'1. Save progress.\n2. Commit and push.\n')
+    os.chmod(routine, 0o600)
+    cfg = cfg_with()
+    cfg['wake_watcher']['routine_file'] = str(routine)
+    message, _ = run(tmp_path, [idle_for(45 * MIN)], cfg)
+    assert message.startswith(f'Wake-up call for session {SID}:')
+    assert 'wake_watcher.routine_file' in message
+    output = tmp_path / 'task.output'
+    output.write_text(message + '\n', encoding='utf-8')
+    prompt = f'<task-notification>\n<output-file>{output}</output-file>\n<status>completed</status>\n</task-notification>'
+    assert context_reporter.is_wake_up_call(prompt, SID) is True
+    assert context_reporter.wake_routine({'prompt': prompt, 'session_id': SID}, cfg) == (
+        context_reporter.ROUTINE_HEADER + '1. Save progress.\n2. Commit and push.')
+
+
+def test_the_restart_message_at_the_limit_is_not_taken_for_a_wake_up_call(tmp_path):
+    import context_reporter
+    message, _ = run(tmp_path, [idle_for(5 * MIN)])
+    output = tmp_path / 'task.output'
+    output.write_text(message + '\n', encoding='utf-8')
+    prompt = f'<task-notification>\n<output-file>{output}</output-file>\n<status>completed</status>\n</task-notification>'
+    assert context_reporter.is_wake_up_call(prompt, SID) is False
+
+
+def test_the_limit_check_returns_the_facts_in_the_format_of_due_without_the_lead_time():
+    given = state(cache_expires_at=int(T0) + 15 * MIN)        # idle 45 min, 15 min left: not yet in the lead time
+    assert wake_watcher.due(given, 210_000, 200, 10, T0) is None
+    assert wake_watcher.idle_at_limit(given, 210_000, 200, T0) == {'ttl_min': 60, 'rest_s': 900, 'used': 210_000}
+    short = state(cache_ttl='5m', cache_expires_at=int(T0) + 30)
+    assert wake_watcher.idle_at_limit(short, 210_000, 200, T0) is None        # 4:30 idle of a 5 min cache
+
+
+@pytest.mark.parametrize('given', [
+    state(cache_ttl=...), state(cache_expires_at=...), state(cache_ttl='2h'), state(cache_ttl=None),
+    state(cache_expires_at=None), state(cache_expires_at='soon'), state(cache_expires_at=True),
+    state(cache_expires_at=float('nan')), state(cache_expires_at=float('inf')), state(cache_expires_at=0),
+    state(cache_expires_at=-5)])
+def test_the_limit_check_and_due_reject_the_same_unusable_cache_clocks(given):
+    assert wake_watcher.due(given, 900_000, 200, 10, T0) is None
+    assert wake_watcher.idle_at_limit(given, 900_000, 200, T0) is None
+
+
+def test_the_limit_check_needs_the_context_and_a_warm_cache():
+    warm = state(cache_expires_at=int(T0) + 15 * MIN)
+    assert wake_watcher.idle_at_limit(warm, 199_999, 200, T0) is None
+    assert wake_watcher.idle_at_limit(warm, 200_000, 200, T0) is not None
+    assert wake_watcher.idle_at_limit(state(cache_expires_at=int(T0)), 210_000, 200, T0) is None      # rest 0
+    assert wake_watcher.idle_at_limit(state(cache_expires_at=int(T0) + 1), 210_000, 200, T0) is not None
 
 
 # --- Only one watcher per session ----------------------------------------------------------------------------

@@ -173,6 +173,11 @@ background task:
   three checks in a row; a sleeping computer does not count), after 115 minutes (Claude Code ends background tasks
   after two hours; the turn that delivers its message already offers the next one), when another watcher for the
   session lives, or when `from_k` is 0.
+- After 115 minutes it does not simply restart if you have been away for a long time: that restart message is itself
+  a model turn, which would renew the cache and start the idle time again while you are gone. So when the watcher
+  reaches its time limit with a warm cache, a context of at least `from_k`, and at least 20 minutes of idle time
+  (the cache lifetime minus what is left), it sends the wake-up call instead. With the 5-minute cache the idle time
+  never gets that long, so it restarts as before.
 - After a wake-up the offer rests for an hour, so the routine does not start the next watcher.
 
 What you need for this:

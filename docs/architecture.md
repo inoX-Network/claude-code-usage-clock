@@ -284,14 +284,15 @@ with the other runtime files; there is no settings entry and no component. `watc
 sleep)` is the whole logic with injectable clock and sleep; `main` prints its result and exits 0 (invalid or
 missing session id: a message and exit 2).
 
-Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `wake_watcher.py`), `ALIVE_MIN` 3 and
+Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE_FIRE_AT_MAX_RUN_MIN` 20 (all
+`wake_watcher.py`), `ALIVE_MIN` 3 and
 `REST_AFTER_FIRE_MIN` 60 (`_wake.py`, shared with the reporter).
 
 - **At the start**, in this order: `from_k` is 0: message `disabled`, nothing written. A heartbeat of state
   `watching` at most `ALIVE_MIN` minutes old (a living watcher): message `already running`, nothing written. A
   `fired` or `ended` heartbeat or a broken file does not stop a start.
-- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: write the
-  heartbeat `ended` (a failure to write it is ignored, the message goes out anyway) and end. (2) read
+- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: see **Maximum
+  run time** below, then end. (2) read
   the state file through `context_reporter.read_state` (no link, no named pipe, size limit) and take it as alive if
   `measured_at` is at most `STALE_MIN` minutes old and not more than a minute in the future. A missing, stale or
   unreadable file counts one missed poll; the third in a row ends with `session ... is no longer active`; a fresh
@@ -303,6 +304,18 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
   `0 < expires_at - now <= min(lead_min, ttl_minutes / 5) * 60`. So the lead is 10 minutes for `1h` and 1 minute
   for `5m` with the default `lead_min`; a bigger `lead_min` does not widen it. Before the message the heartbeat
   `fired` is written; if that fails, the watcher ends without waking anyone.
+- **Maximum run time:** a restart message is a model turn; it renews the prompt cache and the idle time starts
+  again while the user is gone (seen 14 Oct 2026). So at `MAX_RUN_MIN` the state file is read again with the same
+  freshness rule as in the loop (`_fresh_state`), and the watcher wakes instead of restarting if the shared check
+  `_warm_cache` passes (plausible numbers, `used_tokens` at least `from_k * 1000`, known `cache_ttl`, positive
+  `cache_expires_at`), the cache is still warm (`rest = expires_at - now > 0`) and the idle time
+  `ttl_minutes * 60 - rest` is at least `IDLE_FIRE_AT_MAX_RUN_MIN * 60` seconds (`idle_at_limit`; no lead time,
+  the watcher cannot wait any longer). Then: heartbeat `fired`, and the wake-up call (facts as in `due()`). If
+  that heartbeat cannot be written the call goes out anyway: the last `watching` beat blocks a second offer for
+  `ALIVE_MIN`, and a fire must not be lost. In every other case (cold or unknown cache, context below `from_k`,
+  idle time shorter, state stale or missing, 5-minute cache, whose idle time is under 5 minutes): heartbeat
+  `ended` (a failure to write it is ignored) and the restart message. `due()` and `idle_at_limit()` share the
+  check of context and cache clock, not the time window.
 - **Message** (English, one paragraph, with the session id): how long the user was away (about TTL minus the
   rest), the rest of the cache in minutes (rounded up), the context in k and the threshold; then `The user is away.
   Run your session-end routine now, without asking (save progress, commit, push, summary), then end the turn. Do
