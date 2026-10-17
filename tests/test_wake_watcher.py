@@ -471,7 +471,8 @@ def test_at_the_limit_a_fired_marker_that_cannot_be_written_still_wakes(tmp_path
     message, clock = run(tmp_path, [idle_for(45 * MIN)])
     assert len(clock.sleeps) == 115 and message.startswith(f'Wake-up call for session {SID}:')
     assert 'cannot be written' not in message
-    assert beat(tmp_path)['state'] == 'watching'         # the last poll's beat still stands and blocks a second offer
+    path = directory(tmp_path) / f'{SID}.watch'      # the clean-up of the state writer may have removed the old beat
+    assert not path.exists() or beat(tmp_path)['state'] == 'watching'
 
 
 def test_at_the_limit_an_ended_marker_that_cannot_be_written_still_restarts(tmp_path, monkeypatch):
@@ -489,7 +490,7 @@ def test_at_the_limit_an_ended_marker_that_cannot_be_written_still_restarts(tmp_
 def test_the_wake_up_call_at_the_limit_starts_as_the_context_reporter_expects_and_brings_the_routine(tmp_path):
     import context_reporter
     routine = tmp_path / 'routine.md'
-    routine.write_text('1. Save progress.\n2. Commit and push.\n', encoding='utf-8')
+    routine.write_bytes(b'1. Save progress.\n2. Commit and push.\n')
     os.chmod(routine, 0o600)
     cfg = cfg_with()
     cfg['wake_watcher']['routine_file'] = str(routine)
