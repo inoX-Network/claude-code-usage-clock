@@ -22,7 +22,8 @@ TOOLS = os.path.join(ROOT, 'tools')
 INSTALL = os.path.join(TOOLS, 'install.py')
 EXAMPLE = os.path.join(ROOT, 'config.example.json')
 RUNTIME_FILES = sorted(n for n in os.listdir(HOOKS) if n.endswith('.py'))
-INSTALLED_FILES = sorted(RUNTIME_FILES + (['_win.py'] if os.name == 'nt' else []))      # Windows adds its module
+REPORT_FILES = ['usage_report.py', 'log_summary.py', 'prices.json']      # from tools/, the usage report and what it needs
+INSTALLED_FILES = sorted(RUNTIME_FILES + REPORT_FILES + (['_win.py'] if os.name == 'nt' else []))      # Windows adds its module
 SCRIPT_OF = {'usage_clock.py': 'UserPromptSubmit', 'spawn_gate.py': 'PreToolUse', 'soft_stop.py': 'PreToolUse'}
 
 
@@ -74,6 +75,9 @@ def repo(tmp_path):
     root.mkdir()
     shutil.copytree(HOOKS, root / 'hooks', ignore=shutil.ignore_patterns('__pycache__', 'config.json'))
     shutil.copy2(EXAMPLE, root / 'config.example.json')
+    (root / 'tools').mkdir()
+    for name in REPORT_FILES:
+        shutil.copy2(os.path.join(TOOLS, name), root / 'tools' / name)
     return root
 
 
@@ -84,6 +88,7 @@ spec = importlib.util.spec_from_file_location('install_real', {script!r})
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.SOURCE_HOOKS = {hooks!r}
+module.SOURCE_TOOLS = {tools!r}
 module.EXAMPLE_CONFIG = {example!r}
 module.SMOKE_TIMEOUT_S = {timeout}
 sys.exit(module.main(sys.argv[1:]))
@@ -91,7 +96,7 @@ sys.exit(module.main(sys.argv[1:]))
 
 
 def run_in(repo, *args, timeout=15):
-    code = WRAPPER.format(script=INSTALL, hooks=str(repo / 'hooks'), example=str(repo / 'config.example.json'),
+    code = WRAPPER.format(script=INSTALL, hooks=str(repo / 'hooks'), tools=str(repo / 'tools'), example=str(repo / 'config.example.json'),
                           timeout=timeout)
     return subprocess.run([sys.executable, '-c', code, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=120)
 
@@ -320,6 +325,107 @@ def test_missing_source_files_stop_before_anything_is_written(repo, tmp_path):
 
 def test_required_files_list_matches_the_hooks_folder():
     assert sorted(load_module().REQUIRED_FILES) == RUNTIME_FILES
+
+
+# --- The usage report ---------------------------------------------------------------------------------------------
+
+def report_run(tmp_path, script, *args):
+    """Starts an installed tool from a folder that has nothing to do with the checkout, without PYTHONPATH, with an
+    empty projects folder and a log folder of its own."""
+    projects, elsewhere = tmp_path / 'projects', tmp_path / 'elsewhere'
+    projects.mkdir(exist_ok=True)
+    elsewhere.mkdir(exist_ok=True)
+    env = {name: value for name, value in os.environ.items() if name != 'PYTHONPATH'}
+    env['CCUC_LOG_DIR'] = str(tmp_path / 'log')
+    return subprocess.run([sys.executable, str(tmp_path / 'target' / script), *map(str, args)], capture_output=True,
+                          text=True, encoding='utf-8', timeout=120, cwd=str(elsewhere), env=env)
+
+
+def test_the_report_files_are_installed_next_to_the_hooks(tmp_path):
+    installed(tmp_path)
+    for name in REPORT_FILES:
+        assert (tmp_path / 'target' / name).read_bytes() == open(os.path.join(TOOLS, name), 'rb').read(), name
+
+
+def test_the_installed_report_runs_from_the_target_without_the_checkout(tmp_path):
+    installed(tmp_path)
+    r = report_run(tmp_path, 'usage_report.py', '--day', '--json', '--projects-dir', tmp_path / 'projects')
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert isinstance(json.loads(r.stdout), dict) and 'Traceback' not in r.stderr
+
+
+def test_the_installed_log_summary_runs_on_its_own_from_the_target(tmp_path):
+    installed(tmp_path)
+    r = report_run(tmp_path, 'log_summary.py')
+    assert r.returncode == 1 and 'Traceback' not in r.stderr and r.stdout.strip(), r.stdout + r.stderr    # 1: no log yet
+
+
+def test_the_installed_report_reads_the_prices_next_to_it(tmp_path):
+    installed(tmp_path)
+    (tmp_path / 'target' / 'prices.json').write_text('{}', encoding='utf-8')
+    r = report_run(tmp_path, 'usage_report.py', '--day', '--projects-dir', tmp_path / 'projects')
+    assert r.returncode == 1 and 'Cannot read the prices' in r.stderr and 'prices.json' in r.stderr, r.stdout + r.stderr
+
+
+def test_every_module_the_report_imports_is_installed():
+    import ast
+    copied = load_module().runtime_files()
+    for script in ('usage_report.py', 'log_summary.py'):
+        with open(os.path.join(TOOLS, script), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                     else [node.module] if isinstance(node, ast.ImportFrom) and node.module else [])
+            for name in (n.split('.')[0] for n in names):
+                if any(os.path.isfile(os.path.join(folder, name + '.py')) for folder in (HOOKS, TOOLS)):
+                    assert name + '.py' in copied, f'{script} imports {name}, which the installer does not copy'
+
+
+def test_dry_run_names_the_report_files(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    r = run('--settings', settings, '--target', target, '--dry-run')
+    assert r.returncode == 0, r.stdout
+    assert f'Report: usage_report.py, log_summary.py, prices.json would be copied to {target}.' in r.stdout, r.stdout
+    assert f'Files: {len(INSTALLED_FILES)} runtime files would be copied' in r.stdout and not target.exists()
+
+
+@pytest.mark.parametrize('name', REPORT_FILES)
+def test_a_missing_report_source_stops_before_anything_is_written(repo, tmp_path, name):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    (repo / 'tools' / name).unlink()
+    r = run_in(repo, '--settings', settings, '--target', target)
+    assert r.returncode == 1 and 'files missing in the source folders' in r.stdout and name in r.stdout, r.stdout
+    assert read(settings) == {} and not target.exists() and not backups(tmp_path)
+
+
+@pytest.mark.posix_only
+def test_report_file_permissions_are_kept_when_copying(repo, tmp_path):
+    os.chmod(repo / 'tools' / 'usage_report.py', 0o755)
+    os.chmod(repo / 'tools' / 'prices.json', 0o640)
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert run_in(repo, '--settings', settings, '--target', target).returncode == 0
+    assert stat.S_IMODE(os.stat(target / 'usage_report.py').st_mode) == 0o755
+    assert stat.S_IMODE(os.stat(target / 'prices.json').st_mode) == 0o640
+
+
+@pytest.mark.posix_only
+def test_a_link_in_place_of_a_report_file_is_replaced_not_written_through(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    target.mkdir()
+    victim = tmp_path / 'victim.txt'
+    victim.write_text('keep me', encoding='utf-8')
+    (target / 'usage_report.py').symlink_to(victim)
+    (target / 'prices.json').symlink_to(tmp_path / 'not-yet-there.json')
+    r = run('--settings', settings, '--target', target)
+    assert r.returncode == 0, r.stdout
+    assert victim.read_text(encoding='utf-8') == 'keep me' and not (tmp_path / 'not-yet-there.json').exists()
+    for name in ('usage_report.py', 'prices.json'):
+        assert not (target / name).is_symlink()
+        assert (target / name).read_bytes() == open(os.path.join(TOOLS, name), 'rb').read()
 
 
 def test_target_that_is_a_file_fails_without_touching_settings(tmp_path):
@@ -1466,6 +1572,16 @@ def test_check_names_an_installed_file_that_differs_from_this_checkout(tmp_path)
     assert r.returncode == 1
     assert 'FIX  Files: missing soft_stop.py; different from this checkout _config.py' in r.stdout, r.stdout
     assert 'Run install.py again' in r.stdout and r.stdout.rstrip().splitlines()[-1] == 'Check: 1 problem(s), see the FIX lines.'
+
+
+def test_check_names_a_missing_and_an_outdated_report(tmp_path):
+    installed(tmp_path)
+    (tmp_path / 'target' / 'usage_report.py').unlink()
+    with open(tmp_path / 'target' / 'prices.json', 'a', encoding='utf-8') as f:
+        f.write('\n')
+    r = check(tmp_path)
+    assert r.returncode == 1
+    assert 'FIX  Files: missing usage_report.py; different from this checkout prices.json' in r.stdout, r.stdout
 
 
 def test_check_names_a_missing_entry_and_a_wrong_matcher(tmp_path):

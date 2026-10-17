@@ -4,7 +4,9 @@
 What it does:
 1. Smoke test: every selected hook is started once from a temporary copy, before anything is written.
 2. Copies the runtime files from hooks/ to --target and creates config.json from config.example.json
-   there, but only if it does not exist (an existing config.json is never touched).
+   there, but only if it does not exist (an existing config.json is never touched). The usage report
+   (tools/usage_report.py with log_summary.py and prices.json) goes the same way, so that it runs from --target
+   without this checkout.
 3. Backs up settings.json, then adds the selected components:
      statusline   statusLine = python3 <target>/statusline.py (refreshInterval 60)
    (On Windows the command is `"<this python>" -X utf8 "<target>/statusline.py"`, in forward slashes, for Git
@@ -31,7 +33,7 @@ An existing statusLine that runs something else is left alone unless --replace-s
 <target>/statusline.py. It deletes no files. --dry-run shows the changes and writes nothing.
 
 --check checks an existing installation and changes nothing: the entries in settings.json (matcher, mode), the
-files in --target against this checkout, config.json as the hooks read it, Git Bash on Windows, the smoke test, the
+files in --target (hooks and report) against this checkout, config.json as the hooks read it, Git Bash on Windows, the smoke test, the
 age of the usage numbers and the log folder. Each line is OK, FIX (something to repair) or NOTE (worth knowing).
 
 Exit codes: 0 ok, 1 smoke test or file operation failed or, on Windows, no Git Bash (nothing written to
@@ -55,6 +57,7 @@ from datetime import date, datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
+SOURCE_TOOLS = os.path.join(ROOT, 'tools')
 WINDOWS_MODULE = os.path.join(ROOT, 'windows', 'cli', '_win.py')
 sys.path.append(SOURCE_HOOKS)
 import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
@@ -70,6 +73,8 @@ COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'so
 REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_plat.py', '_spawn_check.py',
                   '_usage.py', '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
                   'soft_stop.py', 'wake_watcher.py')
+# The usage report from tools/ and everything it loads from beside itself (its other modules come from hooks/).
+REPORT_FILES = ('usage_report.py', 'log_summary.py', 'prices.json')
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
 NEVER_BLOCK = ' || true'
@@ -420,16 +425,19 @@ def missing_sources() -> list[str]:
 
 
 def runtime_required() -> list[str]:
-    return list(REQUIRED_FILES) + (['_win.py'] if os.name == 'nt' else [])
+    return list(REQUIRED_FILES) + list(REPORT_FILES) + (['_win.py'] if os.name == 'nt' else [])
 
 
 def runtime_files() -> list[str]:
-    """The files that go to the target: hooks/*.py, and on Windows the Windows module from windows/cli/."""
-    return sorted([name for name in os.listdir(SOURCE_HOOKS) if name.endswith('.py')]
+    """The files that go to the target: hooks/*.py, the usage report from tools/, and on Windows the Windows module
+    from windows/cli/."""
+    return sorted([name for name in os.listdir(SOURCE_HOOKS) if name.endswith('.py')] + list(REPORT_FILES)
                   + (['_win.py'] if os.name == 'nt' else []))
 
 
 def source_of(name: str) -> str:
+    if name in REPORT_FILES:
+        return os.path.join(SOURCE_TOOLS, name)
     return WINDOWS_MODULE if os.name == 'nt' and name == '_win.py' else os.path.join(SOURCE_HOOKS, name)
 
 
@@ -763,7 +771,7 @@ def run(args: argparse.Namespace) -> int:
     else:
         missing = missing_sources()
         if missing:
-            print(f'Error: files missing in the source folder {SOURCE_HOOKS}: {", ".join(missing)}')
+            print(f'Error: files missing in the source folders {SOURCE_HOOKS} and {SOURCE_TOOLS}: {", ".join(missing)}')
             return 1
         shell = _plat.hook_shell(data.get('env'))
         if shell is None:
@@ -791,6 +799,7 @@ def run(args: argparse.Namespace) -> int:
         if not args.uninstall:
             note = 'would be created from config.example.json' if not config_exists(target) else 'exists, stays untouched'
             print(f'Files: {len(runtime_files())} runtime files would be copied to {target}; config.json {note}.')
+            print(f'Report: {", ".join(REPORT_FILES)} would be copied to {target}.')
         print('DRY RUN - nothing written.' + ('' if changed else ' settings.json would stay as it is.'))
         return 0
     if not args.uninstall:
