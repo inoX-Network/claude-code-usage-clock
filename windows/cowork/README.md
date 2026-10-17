@@ -2,6 +2,9 @@
 
 No code lives here and nothing is supported. This records what is known about Cowork, so that nobody builds on a guess.
 
+Claude Code in the Claude desktop app is not Cowork: it runs on the machine, and [`../../desktop/`](../../desktop/README.md)
+shows the status line there.
+
 - Cowork runs in the cloud by default. Run locally, it runs in a Linux virtual machine (Hyper-V on Windows), not in
   the Windows terminal that [`../cli/`](../cli/) is for.
 - It loads the hooks of a plugin (`hooks/hooks.json`).

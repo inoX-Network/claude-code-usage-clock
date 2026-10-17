@@ -7,7 +7,8 @@ calls `windows/cli/_win.py` (through `hooks/_plat.py`); it does not spread Windo
 |---|---|---|
 | [`cli/`](cli/) | Claude Code in the Windows terminal, hooks in Git Bash | Built and tested: Windows 11 (Python 3.14) and `windows-latest` (Python 3.13) in CI. |
 | [`wsl/`](wsl/) | Claude Code inside WSL | Nothing to port: it is Linux. The folder holds a script that runs the main suite in WSL as the proof. |
-| [`cowork/`](cowork/) | Cowork (Claude desktop app) | Findings only, no code, nothing promised. |
+| [`../desktop/`](../desktop/README.md) | Claude Code in the Claude desktop app | A plugin draws the status line under the prompt, which the app does not show. |
+| [`cowork/`](cowork/) | Cowork (cloud, or a Linux VM on the machine) | Findings only, no code, nothing promised. |
 
 ## What you need
 
