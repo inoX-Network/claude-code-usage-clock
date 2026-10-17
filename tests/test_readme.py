@@ -12,6 +12,7 @@ EXAMPLE = os.path.join(ROOT, 'config.example.json')
 INSTALL = os.path.join(ROOT, 'tools', 'install.py')
 LOG_SUMMARY = os.path.join(ROOT, 'tools', 'log_summary.py')
 USAGE_REPORT = os.path.join(ROOT, 'tools', 'usage_report.py')
+USAGE_REPORT_DOC = os.path.join(ROOT, 'docs', 'usage-report.md')
 
 
 def readme_text():
@@ -25,6 +26,16 @@ def installer_options():
     spec.loader.exec_module(module)
     return {option for action in module.build_parser()._actions for option in action.option_strings
             if option.startswith('--')} - {'--help'}
+
+
+def usage_report_doc_text():
+    with open(USAGE_REPORT_DOC, encoding='utf-8') as f:
+        return f.read()
+
+
+def report_text():
+    """The report section of the README and docs/usage-report.md, which has the details."""
+    return section(readme_text(), '## Reports: what was used') + '\n' + usage_report_doc_text()
 
 
 def table_after(text, marker):
@@ -324,7 +335,7 @@ def test_every_usage_report_option_is_in_the_readme_section_and_the_architecture
         options = set(re.findall(r"add_argument\('(--[a-z-]+)'", f.read()))
     assert options >= {'--day', '--week', '--month', '--since', '--until', '--json', '--archive', '--projects-dir',
                        '--config'}
-    body = section(readme_text(), '## Reports: what was used')
+    body = report_text()
     assert [o for o in sorted(options) if o not in body] == []
     architecture = architecture_text()
     assert 'usage_report.py' in section(architecture, '## Layout') and 'prices.json' in section(architecture, '## Layout')
@@ -335,7 +346,7 @@ def test_the_report_section_names_the_limits_the_code_has():
     spec = importlib.util.spec_from_file_location('usage_report_for_readme_test', USAGE_REPORT)
     usage_report = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(usage_report)
-    body = flat(section(readme_text(), '## Reports: what was used'))
+    body = flat(usage_report_doc_text())
     architecture = flat(section(architecture_text(), '## Usage report'))
     assert f'{usage_report.COLD_START_TOKENS:,}'.replace(',', ' ') in body
     assert f'{usage_report.MIN_SECTIONS} such stretches' in body
@@ -365,17 +376,19 @@ def usage_report_module():
 
 def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
     text = readme_text()
-    body = flat(section(text, '### The overview'))
+    body = flat(section(usage_report_doc_text(), '## The overview'))
     for needle in ('name of the folder', 'without a setting', 'no paths', '30 characters', '`my-company-fron…dmin-dashboard`',
                    'both shown whole', 'Where it went', 'Notable', '`~week pts`', '`<1`', 'thresholds.start_block_5h',
                    'below 90 %', 'more than half', 'unexplained', '--project NAME', '--session ID', 'beginning of it',
-                   'exit code 2', 'docs/report-format.md', '`--json` has all projects and sessions'):
+                   'exit code 2', '`--json` has all projects and sessions'):
         assert needle in body, needle
+    assert 'docs/report-format.md' in section(text, '### The overview')
     ask = flat(section(text, '### Ask your agent about your usage'))
     for needle in ('docs/report-format.md', '--json', 'overview.notable', 'transcripts', 'measurement history',
                    'day archive', 'no model call', 'never message text'):
         assert needle in ask, needle
-    gates = flat(section(text, '## Reports: what was used'))
+    assert 'docs/usage-report.md' in section(text, '## Reports: what was used')
+    gates = flat(usage_report_doc_text())
     for needle in ('by reason', '`reason not recorded`', 'checkpoint due', 'at least 20 stretches', '`<1`, not `~0.0`'):
         assert needle in gates, needle
 
@@ -397,7 +410,7 @@ def test_the_architecture_names_the_overview_the_projects_the_reasons_and_the_de
 
 def test_the_documents_explain_the_startup_context():
     usage_report = usage_report_module()
-    body = flat(section(readme_text(), '## Reports: what was used'))
+    body = flat(report_text())
     for needle in ('**Startup context:**', '**Measured:**', '**Estimated (`~`):**', 'warm', 'start_estimate.chars_per_token',
                    '--claude-dir', 'omitClaudeMd: true', 'first 200 lines or 25 KB', 'Not estimable',
                    'only for `--full` and `--json`', 'Start: main 45k tokens (median), subagents 36k-61k (median per type)'):
