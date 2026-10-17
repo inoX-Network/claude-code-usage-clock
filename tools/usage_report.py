@@ -1725,7 +1725,8 @@ def agent_definitions(folders: list[str]) -> dict[str, dict]:
 
 def skill_definitions(folders: list[str]) -> dict[str, int]:
     """name -> characters of name and description of the skills (`<folder>/<skill>/SKILL.md` with a description; the name
-    is the `name` of the frontmatter, else the name of the skill's folder); the first definition of a name wins."""
+    is the `name` of the frontmatter, else the name of the skill's folder); the first definition of a name wins. A skill
+    with `disable-model-invocation: true` (any case) has no description in the context and is left out."""
     found: dict[str, int] = {}
     for folder in folders:
         try:
@@ -1735,7 +1736,10 @@ def skill_definitions(folders: list[str]) -> dict[str, int]:
         for skill in skills:
             text = _read_chars(os.path.join(folder, skill, 'SKILL.md'), HEAD_CHARS)
             length = description_length(text) if text is not None else None
-            name = (_spawn_check._head(text).get('name') or skill) if length else None
+            head = _spawn_check._head(text) if length else {}
+            if head.get('disable-model-invocation', '').lower() == 'true':
+                continue
+            name = (head.get('name') or skill) if length else None
             if name and name not in found:
                 found[name] = len(name) + length
     return found
