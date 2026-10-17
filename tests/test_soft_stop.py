@@ -17,11 +17,14 @@ import pytest
 import _config
 import _usage
 import soft_stop
-from conftest import HOOKS
+from conftest import HOOKS, WINDOWS_CLI
 
 SCRIPT = os.path.join(HOOKS, 'soft_stop.py')
 CFG = _config.DEFAULTS
 NOW = datetime(2026, 1, 14, 10, 0, tzinfo=timezone.utc)
+# Only a drive path is absolute for the checkpoint exception on Windows; on POSIX the paths are /srv/proj/...
+DRIVE = 'C:' if os.name == 'nt' else ''
+PROJ = f'{DRIVE}/srv/proj'
 CUSTOM = '/work/notes'
 SUFFIXES = ['/agent-checkpoints', CUSTOM]
 
@@ -45,7 +48,7 @@ READ = ('Read', {'file_path': '/srv/app/a.py'})
 
 
 def save(suffix='/agent-checkpoints'):
-    return ('Write', {'file_path': f'/srv/proj{suffix}/a.md'})
+    return ('Write', {'file_path': f'{PROJ}{suffix}/a.md'})
 
 
 def decide(five, tool=READ, since=0, has=False, cfg=CFG, age=1.0):
@@ -150,7 +153,7 @@ def bash(command):
 
 @pytest.mark.parametrize('suffix', SUFFIXES)
 def test_checkpoint_writes_are_recognised(suffix):
-    z = f'/srv/proj{suffix}/x.md'
+    z = f'{PROJ}{suffix}/x.md'
     for tool in ('Write', 'Edit', 'MultiEdit'):
         assert soft_stop.is_checkpoint_write(tool, {'file_path': z}, suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f"cat >> {z} <<'EOF'\n- item 3 done\nEOF"), suffix)
@@ -160,7 +163,7 @@ def test_checkpoint_writes_are_recognised(suffix):
     assert soft_stop.is_checkpoint_write('Bash', bash(f"echo 'new' | tee --append {z}"), suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f"echo 'new' >> {z}"), suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f'echo "no dollar sign" >> {z}'), suffix)
-    assert soft_stop.is_checkpoint_write('Bash', bash(f"printf '%s\\n' \"line\" >> '/srv/proj{suffix}/a b.md'"), suffix)
+    assert soft_stop.is_checkpoint_write('Bash', bash(f"printf '%s\\n' \"line\" >> '{PROJ}{suffix}/a b.md'"), suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f'  echo \'x\' >> "{z}"  \n'), suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f"printf 'plain text\\n' >> {z}"), suffix)
     assert soft_stop.is_checkpoint_write('Bash', bash(f"printf '%-10s|%b|%%\\n' 'a' \"b\" >> {z}"), suffix)
@@ -170,17 +173,17 @@ def test_checkpoint_writes_are_recognised(suffix):
 
 
 def test_other_calls_are_not_checkpoint_writes():
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': '/srv/proj/src/app.ts'})
-    assert not soft_stop.is_checkpoint_write('Bash', bash('cat /srv/proj/agent-checkpoints/notes.md'))
-    assert not soft_stop.is_checkpoint_write('Read', {'file_path': '/srv/proj/agent-checkpoints/notes.md'})
-    assert not soft_stop.is_checkpoint_write('Glob', {'file_path': '/srv/proj/agent-checkpoints/notes.md'})
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{PROJ}/src/app.ts'})
+    assert not soft_stop.is_checkpoint_write('Bash', bash(f'cat {PROJ}/agent-checkpoints/notes.md'))
+    assert not soft_stop.is_checkpoint_write('Read', {'file_path': f'{PROJ}/agent-checkpoints/notes.md'})
+    assert not soft_stop.is_checkpoint_write('Glob', {'file_path': f'{PROJ}/agent-checkpoints/notes.md'})
     assert not soft_stop.is_checkpoint_write('Write', {})
     assert not soft_stop.is_checkpoint_write('Bash', {})
 
 
 def forgeries(suffix):
     """Commands that look like a checkpoint write but are something else, or do more."""
-    z = f'/srv/proj{suffix}/x.md'
+    z = f'{PROJ}{suffix}/x.md'
     return [
         f'rm -rf /tmp/scratch/junk  # >{suffix}/',
         f'rm -rf /tmp/scratch/junk  # >> {z}',
@@ -188,7 +191,7 @@ def forgeries(suffix):
         f"echo 'x' >> {z}; rm -rf /tmp/a",
         f"echo 'x' >> {z} && rm -rf /tmp/a",
         f"echo 'x' >> {z} || rm -rf /tmp/a",
-        f'python3 long_run.py 2>/srv/proj{suffix}/log',
+        f'python3 long_run.py 2>{PROJ}{suffix}/log',
         f'python3 long_analysis.py > {z}',
         f'echo "see >{suffix}/"',
         f'echo "$(rm -rf /tmp/a)" >> {z}',
@@ -201,7 +204,7 @@ def forgeries(suffix):
         f"cat >> {z} <<'EOF' && rm -rf /tmp/a\nx\nEOF",
         f"cat >> {z} <<'EOF'\nx\nEOF\nrm -rf /tmp/a\nEOF",
         f"cat >> {z} <<'EOF'\nx\nEOF\nrm -rf /tmp/a",
-        f"echo 'x' >> /srv/proj{suffix}/../../src/app.py",
+        f"echo 'x' >> {PROJ}{suffix}/../../src/app.py",
         f"echo 'x' >> {suffix.lstrip('/')}/x.md",
         f"echo 'x' >> ~{suffix}/x.md",
         # printf -v assigns and runs $(...) in the array subscript (bash and zsh), quoted or not
@@ -230,10 +233,10 @@ def test_forged_checkpoints_are_not_checkpoints_and_are_denied_at_the_deny_level
 
 def bad_paths(suffix):
     tail = suffix.lstrip('/')
-    return [f'/srv/proj{suffix}/../../src/app.py', f'/srv/proj{suffix}', f'/srv/proj{suffix}-new/x.md',
-            f'/srv/proj{suffix}/sub/x.md', f'/srv/proj/my{tail}/x.md', f'{tail}/x.md', '', None, 5, ['x'],
+    return [f'{PROJ}{suffix}/../../src/app.py', f'{PROJ}{suffix}', f'{PROJ}{suffix}-new/x.md',
+            f'{PROJ}{suffix}/sub/x.md', f'{PROJ}/my{tail}/x.md', f'{tail}/x.md', '', None, 5, ['x'],
             f'proj{suffix}/x.md',  # relative, although the parent directory ends with the suffix
-            f'/srv/proj{suffix}/../{tail}/x.md']  # a detour through '..' is refused even if it ends up inside
+            f'{PROJ}{suffix}/../{tail}/x.md']  # a detour through '..' is refused even if it ends up inside
 
 
 @pytest.mark.parametrize('suffix', SUFFIXES)
@@ -241,17 +244,18 @@ def test_bad_paths_are_not_checkpoints(suffix):
     for path in bad_paths(suffix):
         for tool in ('Write', 'Edit', 'MultiEdit'):
             assert not soft_stop.is_checkpoint_write(tool, {'file_path': path}, suffix), (tool, path)
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'/srv/{suffix}/x\0.md'}, suffix)
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{DRIVE}/srv/{suffix}/x\0.md'}, suffix)
     assert not soft_stop.is_checkpoint_write('Bash', {'command': ['echo', 'x']}, suffix)
 
 
 def test_a_multi_level_suffix_needs_all_its_levels():
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': '/var/notes/x.md'}, CUSTOM)
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': '/usr/lib/notes/x.py'}, CUSTOM)
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': '/srv/proj/agent-checkpoints/x.md'}, CUSTOM)
-    assert soft_stop.is_checkpoint_write('Write', {'file_path': '/srv/proj/work/notes/x.md'}, CUSTOM)
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{DRIVE}/var/notes/x.md'}, CUSTOM)
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{DRIVE}/usr/lib/notes/x.py'}, CUSTOM)
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{PROJ}/agent-checkpoints/x.md'}, CUSTOM)
+    assert soft_stop.is_checkpoint_write('Write', {'file_path': f'{PROJ}/work/notes/x.md'}, CUSTOM)
 
 
+@pytest.mark.posix_only  # Windows: the junction test in windows/cli/tests/test_win_soft_stop.py
 @pytest.mark.parametrize('suffix', SUFFIXES)
 def test_a_checkpoint_directory_that_is_a_symlink_to_elsewhere_is_no_checkpoint(tmp_path, suffix):
     target = tmp_path / 'src'
@@ -264,14 +268,14 @@ def test_a_checkpoint_directory_that_is_a_symlink_to_elsewhere_is_no_checkpoint(
 
 
 def test_the_default_suffix_is_used_when_no_configured_one_is_given():
-    assert soft_stop.is_checkpoint_write('Write', {'file_path': '/srv/proj/agent-checkpoints/a.md'})
-    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'/srv/proj{CUSTOM}/a.md'})
+    assert soft_stop.is_checkpoint_write('Write', {'file_path': f'{PROJ}/agent-checkpoints/a.md'})
+    assert not soft_stop.is_checkpoint_write('Write', {'file_path': f'{PROJ}{CUSTOM}/a.md'})
 
 
 def test_the_configured_suffix_replaces_the_default():
     cfg = config_with(checkpoint_dir_suffix=CUSTOM)
-    assert decide(96, ('Write', {'file_path': f'/srv/proj{CUSTOM}/a.md'}), cfg=cfg).action == 'allow'
-    assert decide(96, ('Write', {'file_path': '/srv/proj/agent-checkpoints/a.md'}), cfg=cfg).action == 'deny'
+    assert decide(96, ('Write', {'file_path': f'{PROJ}{CUSTOM}/a.md'}), cfg=cfg).action == 'allow'
+    assert decide(96, ('Write', {'file_path': f'{PROJ}/agent-checkpoints/a.md'}), cfg=cfg).action == 'deny'
 
 
 @pytest.mark.parametrize('value,expected', [('/agent-checkpoints', '/agent-checkpoints'), ('agent-checkpoints', '/agent-checkpoints'),
@@ -286,8 +290,8 @@ def test_suffix_normalisation(value, expected):
 
 def test_an_empty_suffix_does_not_turn_every_path_into_a_checkpoint():
     cfg = config_with(checkpoint_dir_suffix='')
-    assert decide(96, ('Write', {'file_path': '/srv/app/src/main.py'}), cfg=cfg).action == 'deny'
-    assert decide(96, ('Write', {'file_path': '/srv/proj/agent-checkpoints/a.md'}), cfg=cfg).action == 'allow'
+    assert decide(96, ('Write', {'file_path': f'{DRIVE}/srv/app/src/main.py'}), cfg=cfg).action == 'deny'
+    assert decide(96, ('Write', {'file_path': f'{PROJ}/agent-checkpoints/a.md'}), cfg=cfg).action == 'allow'
 
 
 # --- Messages tell the model the exact way to save -----------------------------------------------------------------
@@ -331,6 +335,7 @@ def test_counter_keeps_agents_apart(tmp_path):
     assert c.read('a') == (1, True) and c.read('b') == (0, False)
 
 
+@pytest.mark.posix_only
 def test_counter_files_and_folders_are_private_whatever_the_umask(tmp_path):
     directory = tmp_path / 'log' / 'counters'
     old = os.umask(0o022)
@@ -343,6 +348,7 @@ def test_counter_files_and_folders_are_private_whatever_the_umask(tmp_path):
     assert stat.S_IMODE((tmp_path / 'log').stat().st_mode) == 0o700
 
 
+@pytest.mark.posix_only
 def test_the_counter_is_never_written_through_a_link(tmp_path):
     directory = tmp_path / 'counters'
     directory.mkdir()
@@ -355,7 +361,12 @@ def test_the_counter_is_never_written_through_a_link(tmp_path):
     assert soft_stop.Counter(str(directory)).read('agent-1') == (1, False)
 
 
-@pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"x"', 'null', '{"since": "x"}', '{"since": null}', '', '[' * 100000])
+# The deep nesting gets a short id: pytest puts the id into the variable PYTEST_CURRENT_TEST, and Windows refuses a
+# variable above 32767 characters
+DEEP = pytest.param('[' * 100000, id='deep-nesting')
+
+
+@pytest.mark.parametrize('content', ['{broken', '[1, 2]', '"x"', 'null', '{"since": "x"}', '{"since": null}', '', DEEP])
 def test_counter_survives_broken_files(tmp_path, content):
     (tmp_path / 'x.json').write_text(content, encoding='utf-8')
     c = soft_stop.Counter(str(tmp_path))
@@ -464,22 +475,22 @@ def test_subagent_is_denied_from_the_deny_level_with_the_finish_instruction(tmp_
 
 def test_checkpoint_write_is_allowed_at_the_deny_level(tmp_path):
     write_usage(tmp_path, 96)
-    assert run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE) is None
-    ok = call('Bash', command="cat >> /srv/proj/agent-checkpoints/a.md <<'EOF'\n- item done\nEOF")
+    assert run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE) is None
+    ok = call('Bash', command=f"cat >> {PROJ}/agent-checkpoints/a.md <<'EOF'\n- item done\nEOF")
     assert run(ok, ENFORCE) is None
 
 
 def test_forged_checkpoints_are_denied_at_the_deny_level(tmp_path):
     write_usage(tmp_path, 96)
-    for command in ('rm -rf /tmp/scratch/junk  # >/agent-checkpoints/', 'ls; echo ok >> /srv/proj/agent-checkpoints/x',
-                    'python3 long_run.py 2>/srv/proj/agent-checkpoints/log'):
+    for command in ('rm -rf /tmp/scratch/junk  # >/agent-checkpoints/', f'ls; echo ok >> {PROJ}/agent-checkpoints/x',
+                    f'python3 long_run.py 2>{PROJ}/agent-checkpoints/log'):
         assert is_deny(run(call('Bash', command=command), ENFORCE)), command
-    assert is_deny(run(call('Write', file_path='/srv/proj/agent-checkpoints/../../src/app.py', content='x'), ENFORCE))
+    assert is_deny(run(call('Write', file_path=f'{PROJ}/agent-checkpoints/../../src/app.py', content='x'), ENFORCE))
 
 
 def test_printf_with_an_option_or_a_numeric_conversion_is_denied_and_not_booked(tmp_path):
     write_usage(tmp_path, 97)
-    target = '/srv/proj/agent-checkpoints/f.md'
+    target = f'{PROJ}/agent-checkpoints/f.md'
     for command in (f"printf '-v' 'a[$(touch {tmp_path}/pwned)]' 'x' >> {target}",
                     f"printf '%d' 'path[$(touch {tmp_path}/pwned)]' >> {target}"):
         out = run(call('Bash', command=command), ENFORCE)
@@ -494,7 +505,7 @@ def test_warning_from_the_warn_level_has_the_context_key_and_no_decision(tmp_pat
 
 def test_between_warn_and_checkpoint_only_the_counter_is_the_only_denial(tmp_path):
     write_usage(tmp_path, 90)
-    assert run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE) is None
+    assert run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE) is None
     for _ in range(15):
         assert is_warning(run(call(), ENFORCE))
     assert is_deny(run(call(), ENFORCE))
@@ -502,7 +513,7 @@ def test_between_warn_and_checkpoint_only_the_counter_is_the_only_denial(tmp_pat
 
 def test_counter_forces_a_checkpoint_end_to_end(tmp_path):
     write_usage(tmp_path, 10)
-    save_call = call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x')
+    save_call = call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x')
     assert run(save_call, ENFORCE) is None
     for _ in range(15):
         assert run(call(), ENFORCE) is None
@@ -514,7 +525,7 @@ def test_counter_forces_a_checkpoint_end_to_end(tmp_path):
 
 def test_denied_calls_are_not_counted(tmp_path):
     write_usage(tmp_path, 10)
-    run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     for _ in range(15):
         run(call(), ENFORCE)
     for _ in range(4):
@@ -524,7 +535,7 @@ def test_denied_calls_are_not_counted(tmp_path):
 
 def test_counter_file_lives_under_the_log_directory_and_agents_are_kept_apart(tmp_path):
     write_usage(tmp_path, 10)
-    run(call('Write', agent_id='a', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    run(call('Write', agent_id='a', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     for _ in range(15):
         run(call(agent_id='a'), ENFORCE)
     assert is_deny(run(call(agent_id='a'), ENFORCE))
@@ -534,7 +545,7 @@ def test_counter_file_lives_under_the_log_directory_and_agents_are_kept_apart(tm
 
 def test_forged_checkpoint_does_not_reset_the_counter_end_to_end(tmp_path):
     write_usage(tmp_path, 10)
-    run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     for _ in range(15):
         run(call(), ENFORCE)
     assert is_deny(run(call('Bash', command='echo "see >/agent-checkpoints/"'), ENFORCE))
@@ -545,7 +556,7 @@ def test_completion_tool_is_allowed_at_the_deny_level_and_when_a_checkpoint_is_d
     write_usage(tmp_path, 96)
     assert run(call('StructuredOutput', agent_id='x', result='done'), ENFORCE) is None
     write_usage(tmp_path, 10)
-    run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     for _ in range(15):
         run(call(), ENFORCE)
     assert is_deny(run(call(), ENFORCE))
@@ -599,7 +610,7 @@ def test_shadow_turns_a_warning_into_the_hint_and_stays_silent_when_enforce_woul
 
 def test_shadow_still_counts_so_that_switching_to_enforce_continues_the_count(tmp_path):
     write_usage(tmp_path, 10)
-    run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'))
+    run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'))
     for _ in range(15):
         run(call())
     assert is_deny(run(call(), ENFORCE))
@@ -619,10 +630,10 @@ def test_log_line_has_the_decision_the_keys_and_the_counter_but_no_values(tmp_pa
 def test_custom_suffix_from_the_config_end_to_end(tmp_path, set_config):
     set_config({'checkpoint_dir_suffix': CUSTOM})
     write_usage(tmp_path, 96)
-    assert run(call('Write', file_path=f'/srv/proj{CUSTOM}/a.md', content='x'), ENFORCE) is None
-    ok = call('Bash', command=f"echo 'x' | tee -a /srv/proj{CUSTOM}/a.md")
+    assert run(call('Write', file_path=f'{PROJ}{CUSTOM}/a.md', content='x'), ENFORCE) is None
+    ok = call('Bash', command=f"echo 'x' | tee -a {PROJ}{CUSTOM}/a.md")
     assert run(ok, ENFORCE) is None
-    out = run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    out = run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     assert is_deny(out)
     assert f'<absolute path>{CUSTOM}/<file>' in out['hookSpecificOutput']['permissionDecisionReason']
 
@@ -634,7 +645,7 @@ def test_custom_thresholds_from_the_config_end_to_end(tmp_path, set_config):
     write_usage(tmp_path, 45)
     assert is_deny(run(call(), ENFORCE))
     write_usage(tmp_path, 10)
-    run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE)
+    run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE)
     assert run(call(), ENFORCE) is None
     assert run(call(), ENFORCE) is None
     assert is_deny(run(call(), ENFORCE))
@@ -649,7 +660,7 @@ def test_max_age_from_the_config_decides_between_ok_and_stale(tmp_path, set_conf
 def test_broken_config_falls_back_to_defaults_and_is_logged(tmp_path, set_config):
     set_config({'checkpoint_dir_suffix': 5, 'thresholds': {'deny': 'high'}, 'bogus': 1})
     write_usage(tmp_path, 96)
-    assert run(call('Write', file_path='/srv/proj/agent-checkpoints/a.md', content='x'), ENFORCE) is None
+    assert run(call('Write', file_path=f'{PROJ}/agent-checkpoints/a.md', content='x'), ENFORCE) is None
     assert is_deny(run(call(), ENFORCE))
     assert any(line['hook'] == 'config' for line in log_lines(tmp_path))
 
@@ -657,10 +668,10 @@ def test_broken_config_falls_back_to_defaults_and_is_logged(tmp_path, set_config
 def test_an_empty_configured_suffix_is_no_free_pass(tmp_path, set_config):
     set_config({'checkpoint_dir_suffix': ''})
     write_usage(tmp_path, 96)
-    assert is_deny(run(call('Write', file_path='/srv/app/src/main.py', content='x'), ENFORCE))
+    assert is_deny(run(call('Write', file_path=f'{DRIVE}/srv/app/src/main.py', content='x'), ENFORCE))
 
 
-@pytest.mark.parametrize('text', ['', '{broken', '[1]', 'null', '"x"', '[' * 100000])
+@pytest.mark.parametrize('text', ['', '{broken', '[1]', 'null', '"x"', DEEP])
 def test_unusable_input_exits_zero_without_output(text):
     assert run_raw(SCRIPT, text, ENFORCE) == (0, None)
 
@@ -694,9 +705,11 @@ def test_an_unwritable_log_directory_never_disturbs_the_hook(tmp_path, monkeypat
 def copy_hooks(tmp_path, broken=(), missing=()):
     target = tmp_path / 'copy'
     target.mkdir(exist_ok=True)
-    for name in ('soft_stop.py', '_config.py', '_usage.py', '_hookio.py'):
+    # On Windows _usage and _hookio import the platform switch, which needs its Windows half (windows/cli/_win.py)
+    names = ['soft_stop.py', '_config.py', '_usage.py', '_hookio.py'] + (['_plat.py', '_win.py'] if os.name == 'nt' else [])
+    for name in names:
         if name not in missing:
-            shutil.copy(os.path.join(HOOKS, name), target / name)
+            shutil.copy(os.path.join(WINDOWS_CLI if name == '_win.py' else HOOKS, name), target / name)
     for name in broken:
         (target / name).write_text('def (:\n', encoding='utf-8')
     return target
