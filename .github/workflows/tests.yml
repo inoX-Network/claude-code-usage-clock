@@ -37,15 +37,34 @@ jobs:
       # A green run that collected nothing, or silently skipped cases, proves nothing.
       - name: No empty run, no skips
         shell: bash
-        run: |
-          summary=$(tail -3 pytest.txt)
-          echo "$summary"
-          if ! printf '%s' "$summary" | grep -Eq '[0-9]+ passed'; then
-            echo "No test passed - the suite collected nothing."
-            exit 1
-          fi
-          if printf '%s' "$summary" | grep -q 'skipped'; then
-            echo "Skipped cases are cases nobody measures:"
-            grep '^SKIPPED' pytest.txt || true
-            exit 1
-          fi
+        run: python .github/check_pytest_output.py pytest.txt
+
+  # The hooks run in Git Bash under the `python` that the installer writes into the commands (windows/README.md).
+  windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      # The report tests set TZ to a CET rule string. The Windows C runtime takes the offset from TZ but applies
+      # daylight saving time only if the system time zone has it; the runner's is UTC, which has none. A system
+      # zone with summer time, as on a desktop in Central Europe, makes TZ behave as the tests expect.
+      - name: Give the runner a system time zone with daylight saving time
+        run: tzutil /s "W. Europe Standard Time"
+
+      - name: Run the suite and the Windows track
+        run: python -m pytest tests/ windows/cli/tests/ -q -rs | tee pytest.txt; exit ${PIPESTATUS[0]}
+        shell: bash
+
+      # No empty run, and no skips except the POSIX-only ones (tests marked posix_only, one fixed reason).
+      - name: No empty run, no skips but POSIX-only
+        shell: bash
+        run: python .github/check_pytest_output.py pytest.txt --allow-posix-only-skips

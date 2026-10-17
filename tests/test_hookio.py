@@ -53,7 +53,8 @@ def test_week_ok_until_date_parsing():
 
 @pytest.mark.parametrize('text,expected', [('{"tool_name": "Agent"}', {'tool_name': 'Agent'}), ('', {}),
                                            ('{broken', {}), ('[1, 2]', {}), ('"x"', {}), ('null', {}),
-                                           ('[' * 100000, {})])
+                                           ('[' * 100000, {})],
+                         ids=['valid', 'empty', 'broken', 'list', 'string', 'null', 'deeply-nested'])
 def test_read_input_always_returns_a_dict(monkeypatch, text, expected):
     monkeypatch.setattr(sys, 'stdin', io.StringIO(text))
     assert _hookio.read_input() == expected
@@ -102,9 +103,10 @@ def home_of(tmp_path):
 
 
 def test_skill_dirs_default_personal_before_project(tmp_path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_PROJECT_DIR', '/project')
-    skills, commands = _hookio.skill_dirs({'cwd': '/project/below'})
-    roots = [home_of(tmp_path), '/project', '/project/below']
+    project = str(tmp_path / 'project')
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', project)
+    skills, commands = _hookio.skill_dirs({'cwd': os.path.join(project, 'below')})
+    roots = [home_of(tmp_path), project, os.path.join(project, 'below')]
     assert skills == [skills_in(r) for r in roots]
     assert commands == [commands_in(r) for r in roots]
 
@@ -158,7 +160,8 @@ def test_git_file_without_a_worktree_target_adds_nothing(tmp_path, content):
     assert _hookio._project_roots(str(tmp_path / 'wt')) == [str(tmp_path / 'wt')]
 
 
-@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.posix_only
 def test_unreadable_git_file_gives_no_main_checkout_and_no_crash(tmp_path):
     wt = tmp_path / 'wt'
     wt.mkdir()
@@ -172,7 +175,7 @@ def test_unreadable_git_file_gives_no_main_checkout_and_no_crash(tmp_path):
 
 def test_no_git_up_to_the_filesystem_root(monkeypatch):
     monkeypatch.setattr(os.path, 'exists', lambda p: False)
-    assert _hookio._project_roots('/a/b/c') == ['/a/b/c']
+    assert _hookio._project_roots('/a/b/c') == [os.path.abspath('/a/b/c')]
 
 
 # --- Output ------------------------------------------------------------------------------------
@@ -262,6 +265,7 @@ def test_log_rotates_above_five_megabytes(tmp_path):
     assert [line['n'] for line in read_log(tmp_path)] == [1, 2]
 
 
+@pytest.mark.posix_only
 def test_log_folder_and_file_are_private_whatever_the_umask(tmp_path):
     old = os.umask(0o022)
     try:
@@ -272,6 +276,7 @@ def test_log_folder_and_file_are_private_whatever_the_umask(tmp_path):
     assert stat.S_IMODE((tmp_path / 'log' / 'log.jsonl').stat().st_mode) == 0o600
 
 
+@pytest.mark.posix_only
 def test_a_log_left_readable_by_an_earlier_version_becomes_private(tmp_path):
     log = tmp_path / 'log' / 'log.jsonl'
     log.parent.mkdir()
@@ -282,6 +287,7 @@ def test_a_log_left_readable_by_an_earlier_version_becomes_private(tmp_path):
     assert [line['n'] for line in read_log(tmp_path)] == [0, 1]
 
 
+@pytest.mark.posix_only
 def test_the_log_is_never_written_through_a_link(tmp_path):
     (tmp_path / 'log').mkdir()
     victim = tmp_path / 'victim.txt'
@@ -313,13 +319,13 @@ def test_logging_errors_never_raise(tmp_path, monkeypatch):
 def test_log_dir_env_override_and_config_default(tmp_path, monkeypatch):
     assert _hookio.log_dir() == str(tmp_path / 'log')
     monkeypatch.delenv('CCUC_LOG_DIR')
-    assert _hookio.log_dir() == str(tmp_path / 'home' / '.cache' / 'claude-usage-clock')
+    assert os.path.normpath(_hookio.log_dir()) == str(tmp_path / 'home' / '.cache' / 'claude-usage-clock')
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'log_dir': '~/mylogs'}), encoding='utf-8')
     monkeypatch.setenv('CCUC_CONFIG', str(config))
-    assert _hookio.log_dir() == str(tmp_path / 'home' / 'mylogs')
+    assert os.path.normpath(_hookio.log_dir()) == str(tmp_path / 'home' / 'mylogs')
     monkeypatch.setenv('CCUC_LOG_DIR', '~/fromenv')
-    assert _hookio.log_dir() == str(tmp_path / 'home' / 'fromenv')
+    assert os.path.normpath(_hookio.log_dir()) == str(tmp_path / 'home' / 'fromenv')
 
 
 # --- shadow_note ------------------------------------------------------------------------------------------------

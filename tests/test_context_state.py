@@ -38,6 +38,7 @@ def test_the_file_has_exactly_the_documented_content(tmp_path):
     assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', read(tmp_path)['measured_at'])
 
 
+@pytest.mark.posix_only
 def test_the_file_is_private_and_so_is_the_folder(tmp_path):
     old = os.umask(0o022)
     try:
@@ -137,6 +138,7 @@ def test_numbers_that_are_not_positive_finite_numbers_write_nothing(tmp_path, si
 
 # --- No links are followed -------------------------------------------------------------------------------------
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_target_is_replaced_and_its_victim_stays_untouched(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -148,6 +150,7 @@ def test_a_planted_link_as_the_target_is_replaced_and_its_victim_stays_untouched
     assert not target.is_symlink() and read(tmp_path)['used_tokens'] == 231_000
 
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_temporary_file_is_not_written_through(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -158,6 +161,7 @@ def test_a_planted_link_as_the_temporary_file_is_not_written_through(tmp_path):
     assert os.listdir(state_dir(tmp_path)) == ['abc-123_X.json']
 
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_folder_is_not_followed(tmp_path):
     elsewhere = tmp_path / 'elsewhere'
     elsewhere.mkdir()
@@ -167,6 +171,7 @@ def test_a_planted_link_as_the_folder_is_not_followed(tmp_path):
     assert os.listdir(elsewhere) == []
 
 
+@pytest.mark.posix_only
 def test_old_links_are_not_followed_when_cleaning_up(tmp_path):
     victim = tmp_path / 'victim.json'
     victim.write_text('keep me', encoding='utf-8')

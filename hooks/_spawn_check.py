@@ -24,6 +24,7 @@ import unicodedata
 from dataclasses import dataclass, field
 
 import _config
+import _plat
 
 TIME_BUDGET_S = 1.0          # shared by the definition search and the tokenizer
 MAX_FILES = 5000             # per agent directory
@@ -193,7 +194,7 @@ _INDEX: dict[tuple[str, ...], dict[str, dict[str, str]]] = {}
 def _read_head(path: str) -> dict[str, str] | None:
     """Frontmatter of a regular file up to MAX_FILE_BYTES, else None. O_NONBLOCK: FIFOs do not block."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        fd = os.open(path, os.O_RDONLY | _plat.O_NONBLOCK | _plat.O_BINARY)
     except OSError:
         return None
     try:
@@ -343,7 +344,7 @@ def _read_skill_head(path: str) -> dict[str, str] | None:
     """Frontmatter of a skill or command file. Only the first HEAD_CHARS bytes, decoded tolerantly: size and
     encoding must not hide a fork. '_fork' = 'yes' for a fork or a suspected fork."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        fd = os.open(path, os.O_RDONLY | _plat.O_NONBLOCK | _plat.O_BINARY)
     except OSError:
         return None
     try:
@@ -792,7 +793,7 @@ def _read_script(path: str, cwd: str | None) -> str:
     unreadable = f'Workflow script "{path}" not readable; model and effort cannot be checked.'
     try:
         # O_NONBLOCK: a FIFO must not block the hook; only a regular file counts as a script
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        fd = os.open(path, os.O_RDONLY | _plat.O_NONBLOCK | _plat.O_BINARY)
     except (OSError, ValueError):
         raise Unclear(unreadable)
     try:

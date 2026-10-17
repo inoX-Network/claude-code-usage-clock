@@ -82,6 +82,7 @@ def test_fail_closed_rules_deny_with_their_reason(code, expected):
     assert not p.allowed and expected in p.reason, (code, p.reason)
 
 
+@pytest.mark.posix_only
 def test_workflow_name_or_script_path_with_an_escape_is_not_read_literally(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))
     (tmp_path / 'a\\x2fb.js').write_text("await agent('p', " + OPT + ")\n", encoding='utf-8')  # the literal name
@@ -244,7 +245,8 @@ def test_template_with_several_expressions():
     assert p.allowed and p.agent_count == 1
 
 
-@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.posix_only
 def test_unreadable_definition_file_is_skipped(agents):
     base, create = agents
     create('locked', 'model: opus\neffort: high')
@@ -316,17 +318,17 @@ def test_agent_type_with_definition(agents):
 def test_child_workflow_by_script_path_is_checked(tmp_path):
     child = tmp_path / 'child.js'
     child.write_text("await agent('k')\n", encoding='utf-8')
-    p = script(f"await workflow({{scriptPath: '{child}'}})")
+    p = script(f"await workflow({{scriptPath: '{child.as_posix()}'}})")
     assert not p.allowed and 'Child workflow' in p.reason
     child.write_text("await agent('k', " + OPT + ")\nawait agent('l', " + OPT + ")\n", encoding='utf-8')
-    p = script(f"await agent('e', {OPT}); await workflow({{scriptPath: '{child}'}}, {{a: 1}})")
+    p = script(f"await agent('e', {OPT}); await workflow({{scriptPath: '{child.as_posix()}'}}, {{a: 1}})")
     assert p.allowed and p.agent_count == 3
 
 
 def test_child_workflow_problem_is_appended_to_the_parent_problem(tmp_path):
     child = tmp_path / 'child.js'
     child.write_text("await agent('k')\n", encoding='utf-8')
-    p = script(f"await agent('e'); await workflow({{scriptPath: '{child}'}})")
+    p = script(f"await agent('e'); await workflow({{scriptPath: '{child.as_posix()}'}})")
     assert not p.allowed and 'agent call 1: model and effort missing' in p.reason and 'Child workflow' in p.reason
 
 
@@ -334,8 +336,8 @@ def test_child_workflow_must_not_call_a_workflow(tmp_path):
     grandchild = tmp_path / 'grandchild.js'
     grandchild.write_text("await agent('k', " + OPT + ")\n", encoding='utf-8')
     child = tmp_path / 'child.js'
-    child.write_text(f"await workflow({{scriptPath: '{grandchild}'}})\n", encoding='utf-8')
-    p = script(f"await workflow({{scriptPath: '{child}'}})")
+    child.write_text(f"await workflow({{scriptPath: '{grandchild.as_posix()}'}})\n", encoding='utf-8')
+    p = script(f"await workflow({{scriptPath: '{child.as_posix()}'}})")
     assert not p.allowed and 'depth 1' in p.reason
 
 
@@ -397,6 +399,7 @@ def test_unreadable_and_too_large_scripts_cannot_be_checked(tmp_path, monkeypatc
     assert 'too large' in sc.check_workflow({'scriptPath': str(tmp_path / 'big.js')}, []).reason
 
 
+@pytest.mark.posix_only
 def test_fifo_or_folder_as_script_path_is_denied_without_blocking(tmp_path):
     fifo = tmp_path / 'wf.js'
     os.mkfifo(fifo)
@@ -658,6 +661,7 @@ def test_definition_search_shares_the_deadline_with_the_tokenizer(tmp_path):
         sc.find_definition('n1', [str(tmp_path / 'ag')], time.monotonic() - 1)
 
 
+@pytest.mark.posix_only
 def test_definition_search_symlinks_and_limits(tmp_path, agents):
     base, create = agents
     root_link = tmp_path / 'root-link'
@@ -730,15 +734,15 @@ def test_single_agent_stays_one(code):
 def test_child_workflow_in_loop_counts_more_than_once(tmp_path):
     child = tmp_path / 'child.js'
     child.write_text("await agent('k', " + OPT + ")\n", encoding='utf-8')
-    assert script(f"await workflow({{scriptPath: '{child}'}})").agent_count == 1
-    p = script(f"for (const x of xs) await workflow({{scriptPath: '{child}'}})")
+    assert script(f"await workflow({{scriptPath: '{child.as_posix()}'}})").agent_count == 1
+    p = script(f"for (const x of xs) await workflow({{scriptPath: '{child.as_posix()}'}})")
     assert p.allowed and p.agent_count == 2
 
 
 def test_child_workflow_without_agents_in_a_loop_counts_none(tmp_path):
     child = tmp_path / 'empty.js'
     child.write_text("log('nothing')\n", encoding='utf-8')
-    p = script(f"for (const x of xs) {{ await workflow({{scriptPath: '{child}'}}) }}")
+    p = script(f"for (const x of xs) {{ await workflow({{scriptPath: '{child.as_posix()}'}}) }}")
     assert p.allowed and p.agent_count == 0, p.agent_count
 
 
@@ -791,7 +795,7 @@ def test_synthetic_multi_phase_script_allowed_and_counted_as_a_block(tmp_path, w
     child = tmp_path / 'child.js'
     child.write_text("await agent('Child', { agentType: 'reviewer' })\n", encoding='utf-8')
     path = tmp_path / 'multi-phase.js'
-    path.write_text(MULTI_PHASE.replace('CHILD', str(child)), encoding='utf-8')
+    path.write_text(MULTI_PHASE.replace('CHILD', child.as_posix()), encoding='utf-8')
     p = sc.check_workflow({'scriptPath': str(path)}, workflow_agents)
     assert p.allowed, p.reason
     assert p.agent_count >= 2 and p.agent_count == 5
@@ -881,7 +885,7 @@ def test_model_check_off_and_script_not_analysable_leaves_the_count_unknown(tool
 def test_model_check_off_still_resolves_child_workflows(tmp_path):
     child = tmp_path / 'child.js'
     child.write_text("await agent('k')\nawait agent('l')\n", encoding='utf-8')
-    p = script(f"await agent('e'); await workflow({{scriptPath: '{child}'}})",
+    p = script(f"await agent('e'); await workflow({{scriptPath: '{child.as_posix()}'}})",
                rule_set=rules(model_effort_action='off'))
     assert p.allowed and p.agent_count == 3
 
@@ -922,7 +926,8 @@ def test_protected_paths_of_the_skill_search(tmp_path):
     assert sc.find_skill('apps/missing:deploy', [], [str(tmp_path)], 1e12, cwd=str(tmp_path)) is None
 
 
-@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.posix_only
 def test_unreadable_skill_file_and_unlistable_folder_are_skipped(tmp_path):
     base = tmp_path / 'skills'
     skill_file(base / 'locked' / 'SKILL.md', 'name: locked\ncontext: fork')

@@ -1,5 +1,4 @@
 """Tests for hooks/_usage.py: block validity, merge rules, locked writing and reading."""
-import fcntl
 import json
 import os
 import random
@@ -134,6 +133,7 @@ def test_update_file_reports_an_error_if_the_temporary_file_cannot_be_created(tm
     assert not os.path.exists(path)
 
 
+@pytest.mark.posix_only
 def test_update_file_raises_oserror_if_the_folder_is_not_writable(tmp_path):
     locked = tmp_path / 'locked'
     locked.mkdir()
@@ -147,6 +147,7 @@ def test_update_file_raises_oserror_if_the_folder_is_not_writable(tmp_path):
         locked.chmod(0o700)
 
 
+@pytest.mark.posix_only
 def test_update_file_never_writes_through_a_planted_temporary_link(tmp_path):
     path = str(tmp_path / 'usage.json')
     victim = tmp_path / 'victim.txt'
@@ -162,10 +163,12 @@ def test_the_lock_lives_in_the_lock_folder_not_next_to_the_file(tmp_path):
     """Next to the file a guard would have to know an extra path; in the tool's own folder it is covered."""
     path = str(tmp_path / 'usage.json')
     update(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW)
-    assert lock_of(tmp_path).is_file() and stat.S_IMODE(os.stat(lock_of(tmp_path)).st_mode) == 0o600
+    assert lock_of(tmp_path).is_file()
+    assert os.name == 'nt' or stat.S_IMODE(os.stat(lock_of(tmp_path)).st_mode) == 0o600      # Windows has no modes
     assert not os.path.exists(f'{path}.lock')
 
 
+@pytest.mark.posix_only
 def test_the_lock_folder_is_private_whatever_the_umask(tmp_path):
     old = os.umask(0o022)
     try:
@@ -177,17 +180,16 @@ def test_the_lock_folder_is_private_whatever_the_umask(tmp_path):
 
 def test_a_lock_held_at_the_old_place_next_to_the_file_does_not_stop_the_update(tmp_path):
     path = str(tmp_path / 'usage.json')
-    with open(f'{path}.lock', 'wb') as old:
-        fcntl.flock(old, fcntl.LOCK_EX)
+    with open(f'{path}.lock', 'wb') as old, _usage.locked(old):
         worker = threading.Thread(target=update, args=(path, {'rate_limits': {'five_hour': b(10, WINDOW_5H)}}, NOW))
         worker.start()
         worker.join(timeout=5)
         alive = worker.is_alive()
-        fcntl.flock(old, fcntl.LOCK_UN)
     worker.join()
     assert not alive and json.load(open(path, encoding='utf-8'))['five_hour'] == b(10, WINDOW_5H)
 
 
+@pytest.mark.posix_only
 def test_update_file_refuses_a_planted_lock_link(tmp_path):
     path = str(tmp_path / 'usage.json')
     target = tmp_path / 'elsewhere' / 'created-by-link'
@@ -400,9 +402,9 @@ def test_file_in_the_old_format_reads_as_unknown(tmp_path):
 def test_default_path_and_env_override(tmp_path, monkeypatch):
     assert _usage.usage_path() == str(tmp_path / 'usage.json')
     monkeypatch.delenv('CCUC_USAGE_FILE')
-    assert _usage.usage_path() == str(tmp_path / 'home' / '.claude' / 'rate-limit.json')
+    assert os.path.normpath(_usage.usage_path()) == str(tmp_path / 'home' / '.claude' / 'rate-limit.json')
     monkeypatch.setenv('CCUC_USAGE_FILE', '~/x/u.json')
-    assert _usage.usage_path() == str(tmp_path / 'home' / 'x' / 'u.json')
+    assert os.path.normpath(_usage.usage_path()) == str(tmp_path / 'home' / 'x' / 'u.json')
 
 
 def test_read_usage_uses_the_env_path_by_default(tmp_path):

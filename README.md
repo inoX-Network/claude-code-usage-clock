@@ -39,7 +39,9 @@ in its report. Run them that way for a while, read the log, then switch to `enfo
   Claude Code passes to the status line; API key, Bedrock and Vertex sessions do not get it, and neither does
   a session before its first response. Without it everything reports usage as `unknown`.
 - Python 3.10 or newer as `python3` (the macOS system Python 3.9 is too old; install a current one).
-- Linux or macOS. Windows is not supported (`fcntl`).
+- Linux, macOS, or Windows 11 with [Git for Windows](https://git-scm.com/downloads/win) (Claude Code runs hooks in Git
+  Bash there). Windows has its own folder, [`windows/`](windows/README.md): the commands, the differences and the
+  limits. In WSL it runs as on Linux.
 - No third-party packages at runtime.
 
 ## Install
@@ -82,6 +84,9 @@ Options:
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
 
 Restart Claude Code (or open `/hooks`) after installing.
+
+On Windows, run `python tools\install.py` instead of `python3 tools/install.py`; the installer writes the commands for
+Git Bash with the Python that runs it ([`windows/README.md`](windows/README.md)).
 
 ### Uninstall completely
 
@@ -272,6 +277,8 @@ The arguments of `echo` and `printf` must be quoted (double quotes without `$`, 
 counts only without options and only with `%s`, `%b` and `%%` in its format (flags, a width and a precision
 such as `%-8s` are fine, `*` is not): an option such as `-v` or a
 numeric conversion such as `%d` can run code in bash and zsh, so such a command is no checkpoint write.
+On Windows the path must be a drive path (`C:\...`, `C:/...` or `/c/...`, no network share); the exact rules are in
+[`windows/README.md`](windows/README.md#soft-stop).
 An agent that has saved once must save again at least every 15 calls, whatever the usage. Tell your agents in
 their prompt where their checkpoint file is. Unknown or stale usage never triggers the three levels above; the
 agent gets one warning instead.
@@ -639,6 +646,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
 Run the tests as a normal user. As root (for example in a container) the tests that need an unreadable file are
 skipped, because root can read every file.
+
+On Windows: `python -m pytest tests/ windows/cli/tests/ -q -rs`. The tests that need
+symlinks, FIFOs, file modes, user ids or POSIX time zone rules carry `@pytest.mark.posix_only` and are skipped there, with
+one fixed reason that the CI check accepts and no other; on Linux and macOS no test may be skipped
+([`windows/README.md`](windows/README.md#tests)).
 
 [`docs/architecture.md`](docs/architecture.md) is the contract between the parts.
 

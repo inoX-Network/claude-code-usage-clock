@@ -190,7 +190,7 @@ def append_examples(text):
 
 def test_the_documented_append_examples_are_checkpoint_writes(tmp_path):
     import soft_stop
-    target = str(tmp_path / 'agent-checkpoints' / 'notes.md')
+    target = (tmp_path / 'agent-checkpoints' / 'notes.md').as_posix()   # unquoted in bash: slashes on Windows too
     readme = append_examples(section(readme_text(), '## The two gates'))
     architecture = append_examples(section(architecture_text(), '### soft_stop.py'))
     assert any(c.startswith('printf ') for c in readme) and any(c.startswith('printf ') for c in architecture)

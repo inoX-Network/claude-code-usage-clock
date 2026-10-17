@@ -17,7 +17,9 @@ import pytest
 
 import _config
 import _context_state
+import _plat
 import _wake
+import _win
 import context_reporter
 import statusline
 from conftest import HOOKS
@@ -258,6 +260,7 @@ def test_a_folder_instead_of_the_file_stays_silent(tmp_path):
     assert build(tmp_path) is None
 
 
+@pytest.mark.posix_only
 def test_a_link_instead_of_the_file_is_not_followed(tmp_path):
     other = tmp_path / 'elsewhere.json'
     other.write_text(json.dumps(state()), encoding='utf-8')
@@ -268,6 +271,7 @@ def test_a_link_instead_of_the_file_is_not_followed(tmp_path):
     assert build(tmp_path) is None
 
 
+@pytest.mark.posix_only
 def test_a_link_instead_of_the_folder_is_not_followed(tmp_path):
     real = tmp_path / 'real-context'
     real.mkdir()
@@ -277,14 +281,14 @@ def test_a_link_instead_of_the_folder_is_not_followed(tmp_path):
     assert build(tmp_path) is None
 
 
-@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='needs named pipes')
+@pytest.mark.posix_only
 def test_a_named_pipe_instead_of_the_file_stays_silent_and_does_not_hang(tmp_path):
     state_dir(tmp_path).mkdir(parents=True)
     os.mkfifo(state_dir(tmp_path) / f'{SID}.json')
     assert run_hook(PROMPT) is None          # nobody writes into the pipe: a blocking open would hang here
 
 
-@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='needs named pipes')
+@pytest.mark.posix_only
 def test_a_named_pipe_that_holds_a_valid_state_is_still_not_read(tmp_path):
     """Only a regular file counts: what a pipe delivers is not what the status line wrote."""
     state_dir(tmp_path).mkdir(parents=True)
@@ -299,7 +303,9 @@ def test_a_named_pipe_that_holds_a_valid_state_is_still_not_read(tmp_path):
 
 
 @pytest.mark.parametrize('content', ['', 'not json', '{', '[1, 2]', 'null', '"text"', '5', '{"a": ' * 5000,
-                                     '\xff\xfe', '{"session_id": "' + 'x' * 100_000 + '"}'])
+                                     '\xff\xfe', '{"session_id": "' + 'x' * 100_000 + '"}'],
+                         ids=['empty', 'text', 'open-brace', 'list', 'null', 'string', 'number', 'deeply-nested', 'bytes',
+                              'huge-session-id'])
 def test_a_broken_or_odd_file_stays_silent(tmp_path, content):
     write_state(tmp_path, content)
     assert build(tmp_path) is None
@@ -498,7 +504,8 @@ def test_any_internal_error_gives_exit_0_and_no_output(monkeypatch, capsys, tmp_
     assert call_main(monkeypatch, capsys, PROMPT) == (0, '')
 
 
-@pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root can read everything')
+@pytest.mark.posix_only
 def test_a_file_that_cannot_be_read_stays_silent(tmp_path):
     path = write_state(tmp_path, state())
     path.chmod(0)
@@ -537,8 +544,8 @@ def test_the_hook_does_not_read_a_transcript_even_when_the_input_names_one(tmp_p
 # --- The offer to start the wake-up watcher ------------------------------------------------------------------
 
 WATCHER = os.path.join(HOOKS, 'wake_watcher.py')
-HINT = (f' Wake-up watcher: start it once now in the background (Bash, run_in_background true, timeout 7200000): '
-        f'python3 {WATCHER} {SID}')
+HINT = (' Wake-up watcher: start it once now in the background (Bash, run_in_background true, timeout 7200000): '
+        + _plat.script_command(WATCHER, SID))
 
 
 def wake_cfg(from_k=200):
@@ -583,6 +590,7 @@ def test_the_threshold_may_be_fractional(tmp_path):
     assert 'Wake-up' in build(tmp_path, cfg=wake_cfg(12.5))[1]
 
 
+@pytest.mark.posix_only
 def test_the_path_of_the_script_is_absolute_and_quoted(tmp_path, monkeypatch):
     save(tmp_path, used=250_000)
     monkeypatch.setattr(context_reporter, '__file__', '/opt/my hooks/it\'s/context_reporter.py')
@@ -594,7 +602,7 @@ def test_the_path_is_made_absolute_from_a_relative_script_name(tmp_path, monkeyp
     save(tmp_path, used=250_000)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(context_reporter, '__file__', 'context_reporter.py')
-    assert build(tmp_path, cfg=wake_cfg())[1].endswith(f'python3 {tmp_path}/wake_watcher.py {SID}')
+    assert build(tmp_path, cfg=wake_cfg())[1].endswith(_plat.script_command(str(tmp_path / 'wake_watcher.py'), SID))
 
 
 def test_after_a_tool_there_is_never_an_offer_even_far_above_the_threshold(tmp_path):
@@ -667,8 +675,9 @@ def test_the_command_in_the_offer_splits_into_interpreter_script_and_session_id(
     import shlex
     fresh_state(tmp_path, used=250_000)
     command = run_hook(PROMPT, write_config(tmp_path, {'wake_watcher': {'from_k': 200}}))[1].split('): ', 1)[1]
-    assert shlex.split(command) == ['python3', WATCHER, SID]
-    assert os.path.isfile(shlex.split(command)[1])
+    tokens = shlex.split(command)
+    assert tokens[-1] == SID and os.path.samefile(tokens[-2], WATCHER)
+    assert tokens[:-2] == (['python3'] if os.name != 'nt' else [_plat.normalize_path(_win.interpreter()), '-X', 'utf8'])
 
 
 # --- The session-end routine after a wake-up call ------------------------------------------------------------
@@ -786,6 +795,7 @@ def test_one_of_several_notifications_in_one_prompt_is_enough(tmp_path):
     assert build(tmp_path, dict(PROMPT, prompt=prompt), routine_cfg(routine_at(tmp_path)))[1] == HEADER + ROUTINE.strip()
 
 
+@pytest.mark.posix_only
 def test_the_output_file_must_be_a_regular_file_given_by_an_absolute_path(tmp_path, monkeypatch):
     routine = routine_cfg(routine_at(tmp_path))
     real = task_output(tmp_path)
@@ -801,6 +811,7 @@ def test_the_output_file_must_be_a_regular_file_given_by_an_absolute_path(tmp_pa
     assert build(tmp_path, woken(tmp_path, fifo), routine) is None                             # and does not hang
 
 
+@pytest.mark.posix_only
 def test_an_output_file_of_another_user_is_not_trusted(tmp_path, monkeypatch):
     output = task_output(tmp_path)
     routine = routine_cfg(routine_at(tmp_path))
@@ -812,9 +823,9 @@ def test_an_output_file_of_another_user_is_not_trusted(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('make,reason', [
     (lambda p: p / 'missing.md', 'missing'),
-    (lambda p: p, 'not a regular file'),                                            # a folder
-    (lambda p: routine_at(p, mode=0o620), 'writable by group or others'),
-    (lambda p: routine_at(p, mode=0o602), 'writable by group or others'),
+    pytest.param(lambda p: p, 'not a regular file', marks=pytest.mark.posix_only),       # a folder: Windows cannot open it
+    pytest.param(lambda p: routine_at(p, mode=0o620), 'writable by group or others', marks=pytest.mark.posix_only),
+    pytest.param(lambda p: routine_at(p, mode=0o602), 'writable by group or others', marks=pytest.mark.posix_only),
     (lambda p: routine_at(p, 'x' * 4097), 'larger than 4096 bytes'),
     (lambda p: routine_at(p, ' \n\t\n'), 'empty'),
     (lambda p: routine_at(p, b'\xff\xfe not utf-8'), 'not UTF-8'),
@@ -829,6 +840,7 @@ def test_an_unusable_routine_file_brings_nothing_and_one_log_line(tmp_path, make
     assert str(path) not in json.dumps(lines[0])            # the path is the user's business, not the log's
 
 
+@pytest.mark.posix_only
 def test_a_link_in_place_of_the_routine_file_is_not_followed(tmp_path):
     target = routine_at(tmp_path)
     link = tmp_path / 'link.md'
@@ -837,6 +849,7 @@ def test_a_link_in_place_of_the_routine_file_is_not_followed(tmp_path):
     assert log_lines(tmp_path)[0]['reason'] == 'wake_watcher.routine_file: a link'
 
 
+@pytest.mark.posix_only
 def test_a_named_pipe_in_place_of_the_routine_file_brings_nothing_and_does_not_hang(tmp_path):
     fifo = tmp_path / 'routine.md'
     os.mkfifo(fifo, 0o600)
@@ -853,6 +866,7 @@ def test_a_read_only_routine_file_is_fine(tmp_path):
     assert build(tmp_path, woken(tmp_path), routine_cfg(routine_at(tmp_path, mode=0o400)))[1] == HEADER + ROUTINE.strip()
 
 
+@pytest.mark.posix_only
 def test_a_routine_file_of_another_user_is_not_read(tmp_path, monkeypatch):
     path = routine_at(tmp_path)
     real_uid = os.getuid()
@@ -901,6 +915,7 @@ def test_the_hook_process_logs_an_unusable_routine_file(tmp_path):
     assert [line['reason'] for line in log_lines(tmp_path)] == ['wake_watcher.routine_file: missing']
 
 
+@pytest.mark.posix_only
 def test_a_routine_file_that_cannot_be_opened_is_reported_as_not_readable(tmp_path):
     path = routine_at(tmp_path, mode=0o000)
     assert context_reporter.read_routine(str(path)) == (None, 'not readable')
