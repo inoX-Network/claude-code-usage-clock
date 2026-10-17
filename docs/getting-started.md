@@ -175,6 +175,33 @@ status line of your own. See [The status line shows nothing](#the-status-line-sh
 **Step 5: restart Claude Code.** Close every Claude Code window and start it again. The tool is only loaded when
 Claude Code starts.
 
+**Step 6: check that it worked.** In the same terminal as before:
+
+On Linux and macOS:
+
+```sh
+python3 tools/install.py --check
+```
+
+On Windows:
+
+```powershell
+python tools\install.py --check
+```
+
+This changes nothing. Every line starts with `OK`, `FIX` or `NOTE`, and the last line should read:
+
+```
+Check: no problems.
+```
+
+A `FIX` line says what is wrong and what to do; most often it is "Run install.py again". A `NOTE` is only worth
+knowing: right after installing, `NOTE Usage: no measurement yet` is normal, because Claude has not answered yet.
+Run the check again after Claude's first answer, and that line becomes an `OK` line ("measured 0 min ago").
+
+Run the check after every update (`git pull`, then the installer) too: it tells you if the installed copy is older
+than the downloaded one.
+
 ## What you see now
 
 At the bottom of the Claude Code window there is a new line, the *status line*:

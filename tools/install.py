@@ -30,13 +30,18 @@ An existing statusLine that runs something else is left alone unless --replace-s
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
 <target>/statusline.py. It deletes no files. --dry-run shows the changes and writes nothing.
 
+--check checks an existing installation and changes nothing: the entries in settings.json (matcher, mode), the
+files in --target against this checkout, config.json as the hooks read it, Git Bash on Windows, the smoke test, the
+age of the usage numbers and the log folder. Each line is OK, FIX (something to repair) or NOTE (worth knowing).
+
 Exit codes: 0 ok, 1 smoke test or file operation failed or, on Windows, no Git Bash (nothing written to
-settings.json), 2 bad arguments or unusable settings.json.
+settings.json), or --check found something to fix, 2 bad arguments or unusable settings.json.
 """
 from __future__ import annotations
 
 import argparse
 import copy
+import filecmp
 import json
 import os
 import re
@@ -53,6 +58,8 @@ SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
 WINDOWS_MODULE = os.path.join(ROOT, 'windows', 'cli', '_win.py')
 sys.path.append(SOURCE_HOOKS)
 import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
+import _config  # noqa: E402  --check reads config.json and the usage file as the hooks do
+import _usage  # noqa: E402
 EXAMPLE_CONFIG = os.path.join(ROOT, 'config.example.json')
 
 TIMEOUT_S = 5
@@ -113,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--auto-continue', action='store_true', help='set autoContinueAtUsageLimit to true')
     parser.add_argument('--dry-run', action='store_true', help='show what would change, write nothing')
     parser.add_argument('--uninstall', action='store_true', help='remove the entries again (files stay)')
+    parser.add_argument('--check', action='store_true',
+                        help='check an existing installation and change nothing (exit 1 if something needs fixing)')
     return parser
 
 
@@ -145,6 +154,9 @@ def validate_args(args: argparse.Namespace) -> None:
             raise UsageError('--week-ok-until needs the component spawn-gate.')
     if args.replace_statusline and 'statusline' not in args.components:
         raise UsageError('--replace-statusline needs the component statusline.')
+    if args.check and (args.dry_run or args.uninstall or args.mode or args.week_ok_until or args.replace_statusline
+                       or args.auto_continue):
+        raise UsageError('--check changes nothing and takes only --settings, --target and --components.')
 
 
 # --- Commands ---------------------------------------------------------------------------------------------------
@@ -610,11 +622,138 @@ def write_settings(path: str, data: dict, existed: bool) -> str | None:
     return backup
 
 
+# --- Check ------------------------------------------------------------------------------------------------------
+
+def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
+    """(group, entry) of our entry for this event (the one that runs `path`), None if there is none."""
+    for group in data.get('hooks', {}).get(event, []):
+        for entry in group.get('hooks', []):
+            if points_to(entry.get('command'), path):
+                return group, entry
+    return None
+
+
+def check_entries(data: dict, args: argparse.Namespace, target: str) -> list[tuple[str, str]]:
+    results = []
+    for component in (c for c in args.components if c in HOOKS):
+        script = SCRIPTS[component]
+        for event, matcher in HOOKS[component]:
+            found = _find_entry(data, event, os.path.join(target, script))
+            if found is None:
+                results.append(('FIX', f'{event}: {script} not installed. Run install.py again.'))
+                continue
+            group, entry = found
+            if matcher is not None and group.get('matcher') != matcher:
+                results.append(('FIX', f'{event}: {script} has the matcher {group.get("matcher")}, expected {matcher}. '
+                                       'Run install.py again.'))
+                continue
+            details = [f'matcher {matcher}'] if matcher is not None else []
+            if component in GATES:
+                details.append(f'mode {"enforce" if option_value(entry.get("command"), "mode") == "enforce" else "shadow"}')
+            results.append(('OK', f'{event}: {script}' + (f' ({", ".join(details)})' if details else '')))
+    if 'statusline' in args.components:
+        current = data.get('statusLine')
+        if isinstance(current, dict) and points_to(current.get('command'), os.path.join(target, SCRIPTS['statusline'])):
+            results.append(('OK', 'statusLine: runs statusline.py'))
+        elif current is None:
+            results.append(('FIX', 'statusLine: not installed. Run install.py again.'))
+        else:
+            results.append(('FIX', 'statusLine: runs something else, so nothing writes the usage numbers and the hooks '
+                                   'see them as unknown. Run install.py again with --replace-statusline to use ours.'))
+    return results
+
+
+def check_files(target: str) -> list[tuple[str, str]]:
+    missing, different = [], []
+    for name in runtime_files():
+        path = os.path.join(target, name)
+        if not os.path.isfile(path):
+            missing.append(name)
+        elif not filecmp.cmp(source_of(name), path, shallow=False):
+            different.append(name)
+    if missing or different:
+        parts = ([f'missing {", ".join(missing)}'] if missing else []) + (
+            [f'different from this checkout {", ".join(different)}'] if different else [])
+        return [('FIX', f'Files: {"; ".join(parts)}. Run install.py again (after git pull, to install the new version).')]
+    return [('OK', f'Files: {len(runtime_files())} runtime files in {target} match this checkout')]
+
+
+def check_config(path: str) -> tuple[list[tuple[str, str]], dict]:
+    """The results for config.json and the configuration the hooks would use (defaults where it is broken)."""
+    if not os.path.isfile(path):
+        return [('FIX', f'config.json: {path} does not exist, the hooks use the defaults. Run install.py again to '
+                        'create it.')], copy.deepcopy(_config.DEFAULTS)
+    try:
+        with open(path, encoding='utf-8') as f:
+            given = json.load(f)
+    except (OSError, ValueError, RecursionError) as error:
+        return [('FIX', f'config.json: {path} cannot be read as JSON ({type(error).__name__}), the hooks use the '
+                        'defaults.')], copy.deepcopy(_config.DEFAULTS)
+    problems: list[str] = []
+    cfg = _config._merge_section(_config.DEFAULTS, given, '', problems)
+    if problems:
+        return [('FIX', f'config.json: {"; ".join(problems)}')], cfg
+    return [('OK', f'config.json: {path}')], cfg
+
+
+def check_usage(cfg: dict) -> list[tuple[str, str]]:
+    path = os.path.expanduser(os.environ.get('CCUC_USAGE_FILE') or cfg['usage_file'])
+    usage = _usage.read_usage(path, max_age_min=cfg['thresholds']['max_age_min'])
+    if usage.state == 'unknown':
+        return [('NOTE', 'Usage: no measurement yet. Start Claude Code in a terminal and send a message: the status '
+                         'line writes the numbers after the first answer.')]
+    age = f'measured {round(usage.age_min)} min ago'
+    if usage.state == 'stale':
+        return [('NOTE', f'Usage: {age}, older than {cfg["thresholds"]["max_age_min"]:g} min, so the hooks see it as '
+                         'STALE. Only the status line of Claude Code in a terminal writes the numbers; send a message '
+                         'there to renew them.')]
+    return [('OK', f'Usage: {age}')]
+
+
+def check_log_dir(cfg: dict) -> list[tuple[str, str]]:
+    log_dir = os.path.normpath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
+    if not os.path.isdir(log_dir):
+        return [('NOTE', f'Log folder: {log_dir} does not exist yet; the first hook run creates it.')]
+    if not os.access(log_dir, os.W_OK):
+        return [('FIX', f'Log folder: {log_dir} is not writable, the hooks cannot log.')]
+    return [('OK', f'Log folder: {log_dir}')]
+
+
+def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
+    """Checks an installation and changes nothing. FIX = something to repair (exit 1), NOTE = worth knowing only."""
+    print(f'Settings: {settings_path}')
+    print(f'Target:   {target}')
+    data, existed = load_settings(settings_path)
+    results = [] if existed else [('FIX', 'settings.json: does not exist. Run install.py to install.')]
+    results += check_entries(data, args, target)
+    results += check_files(target)
+    config_results, cfg = check_config(os.environ.get('CCUC_CONFIG') or os.path.join(target, 'config.json'))
+    results += config_results
+    shell = _plat.hook_shell(data.get('env'))
+    if shell is None:
+        results.append(('FIX', 'Git Bash: not found. Claude Code runs the hooks in Git Bash on Windows; install Git for '
+                               'Windows (https://git-scm.com/downloads/win).'))
+    else:
+        errors = smoke_test(args, resolve_modes(data, args, target), shell)
+        results += ([('FIX', f'Smoke test: {error}') for error in errors] if errors
+                    else [('OK', f'Smoke test: passed ({", ".join(args.components)})')])
+    if 'statusline' in args.components:
+        results += check_usage(cfg)
+    results += check_log_dir(cfg)
+    for status, text in results:
+        print(f'{status:<4} {text}')
+    problems = sum(status == 'FIX' for status, _ in results)
+    print(f'Check: {problems} problem(s), see the FIX lines.' if problems else 'Check: no problems.')
+    return 1 if problems else 0
+
+
 # --- Main -------------------------------------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> int:
     settings_path = os.path.abspath(os.path.expanduser(args.settings))
     target = os.path.abspath(os.path.expanduser(args.target))
+    if args.check:
+        return check(args, settings_path, target)
     data, existed = load_settings(settings_path)
     before = copy.deepcopy(data)
     print(f'Settings: {settings_path}' + ('' if existed else ' (does not exist yet)'))

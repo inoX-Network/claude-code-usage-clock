@@ -11,7 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -1412,3 +1412,117 @@ def test_a_broken_history_module_fails_the_status_line_smoke_test(repo, tmp_path
     r = run_in(repo, '--settings', settings, '--target', tmp_path / 'target', '--components', 'statusline')
     assert r.returncode == 1 and 'SMOKE TEST FAILED' in r.stdout and 'statusline.py' in r.stdout, r.stdout
     assert read(settings) == {}
+
+
+# --- --check: is the installation clean? ------------------------------------------------------------------------
+
+def check(tmp_path, *args, **env):
+    """install.py --check against the settings and target of a test. The config of the installation is the one in
+    the target, as for the installed hooks (conftest's CCUC_CONFIG is taken away)."""
+    environment = {name: value for name, value in os.environ.items() if name != 'CCUC_CONFIG'}
+    environment.update(env)
+    return subprocess.run([sys.executable, INSTALL, '--check', '--settings', str(tmp_path / 'settings.json'),
+                           '--target', str(tmp_path / 'target'), *map(str, args)],
+                          capture_output=True, text=True, encoding='utf-8', timeout=120, env=environment)
+
+
+def installed(tmp_path, *args):
+    settings = write_settings(tmp_path)
+    r = run('--settings', settings, '--target', tmp_path / 'target', *args)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return settings
+
+
+def fresh_usage(tmp_path, minutes_ago=1):
+    measured = datetime.now(timezone.utc).timestamp() - minutes_ago * 60
+    stamp = datetime.fromtimestamp(measured, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    later = int(datetime.now(timezone.utc).timestamp()) + 3600      # resets still ahead, as in a real file
+    path = tmp_path / 'usage.json'
+    path.write_text(json.dumps({'measured_at': stamp, 'five_hour': {'used_percentage': 40, 'resets_at': later},
+                                'seven_day': {'used_percentage': 61, 'resets_at': later + 86400}}), encoding='utf-8')
+    return path
+
+
+def test_check_passes_a_fresh_installation_and_changes_nothing(tmp_path):
+    settings = installed(tmp_path)
+    usage = fresh_usage(tmp_path)
+    before, files = settings.read_text(encoding='utf-8'), sorted(p.name for p in tmp_path.iterdir())
+    r = check(tmp_path, CCUC_USAGE_FILE=str(usage))
+    assert r.returncode == 0, r.stdout
+    assert 'FIX' not in r.stdout and r.stdout.rstrip().splitlines()[-1].startswith('Check: no problems')
+    for needle in ('OK   UserPromptSubmit: usage_clock.py', 'OK   PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, '
+                   'mode shadow)', 'OK   statusLine', 'match this checkout', 'OK   config.json', 'OK   Smoke test',
+                   'OK   Usage: measured 1 min ago'):
+        assert needle in r.stdout, needle
+    assert settings.read_text(encoding='utf-8') == before and sorted(p.name for p in tmp_path.iterdir()) == files
+
+
+def test_check_names_an_installed_file_that_differs_from_this_checkout(tmp_path):
+    installed(tmp_path)
+    with open(tmp_path / 'target' / '_config.py', 'a', encoding='utf-8') as f:
+        f.write('\n# an older copy\n')
+    (tmp_path / 'target' / 'soft_stop.py').unlink()
+    r = check(tmp_path)
+    assert r.returncode == 1
+    assert 'FIX  Files: missing soft_stop.py; different from this checkout _config.py' in r.stdout, r.stdout
+    assert 'Run install.py again' in r.stdout and r.stdout.rstrip().splitlines()[-1] == 'Check: 1 problem(s), see the FIX lines.'
+
+
+def test_check_names_a_missing_entry_and_a_wrong_matcher(tmp_path):
+    settings = installed(tmp_path)
+    data = read(settings)
+    del data['hooks']['UserPromptSubmit']
+    next(g for g in data['hooks']['PreToolUse'] if g['matcher'] == '*')['matcher'] = 'Bash'
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = check(tmp_path)
+    assert r.returncode == 1
+    for needle in ('FIX  UserPromptSubmit: usage_clock.py not installed', 'FIX  UserPromptSubmit: context_reporter.py not installed',
+                   'FIX  PreToolUse: soft_stop.py has the matcher Bash, expected *'):
+        assert needle in r.stdout, r.stdout
+
+
+def test_check_explains_a_foreign_status_line(tmp_path):
+    settings = installed(tmp_path)
+    data = read(settings)
+    data['statusLine'] = {'type': 'command', 'command': 'my-own-line'}
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = check(tmp_path)
+    assert r.returncode == 1 and 'FIX  statusLine: runs something else' in r.stdout and '--replace-statusline' in r.stdout
+
+
+@pytest.mark.parametrize('content, expected', [('{not json', 'cannot be read as JSON'),
+                                               ('{"thresholds": {"start_block_5h": "high"}}', 'thresholds.start_block_5h: wrong type'),
+                                               ('{"no_such_key": 1}', 'no_such_key: unknown key')])
+def test_check_reports_a_config_json_the_hooks_would_not_take_as_it_is(tmp_path, content, expected):
+    installed(tmp_path)
+    (tmp_path / 'target' / 'config.json').write_text(content, encoding='utf-8')
+    r = check(tmp_path)
+    assert r.returncode == 1 and 'FIX  config.json' in r.stdout and expected in r.stdout, r.stdout
+
+
+def test_check_notes_old_or_missing_usage_numbers_without_failing(tmp_path):
+    installed(tmp_path)
+    r = check(tmp_path, CCUC_USAGE_FILE=str(fresh_usage(tmp_path, minutes_ago=90)))
+    assert r.returncode == 0 and 'NOTE Usage: measured 90 min ago' in r.stdout and 'terminal' in r.stdout, r.stdout
+    r = check(tmp_path, CCUC_USAGE_FILE=str(tmp_path / 'nothing.json'))
+    assert r.returncode == 0 and 'NOTE Usage: no measurement yet' in r.stdout, r.stdout
+
+
+def test_check_with_some_components_checks_only_those(tmp_path):
+    installed(tmp_path, '--components', 'usage-clock')
+    r = check(tmp_path, '--components', 'usage-clock')
+    assert r.returncode == 0, r.stdout
+    assert 'usage_clock.py' in r.stdout and 'statusLine' not in r.stdout and 'spawn_gate.py' not in r.stdout
+
+
+def test_check_without_settings_is_a_problem_not_a_crash(tmp_path):
+    r = check(tmp_path)
+    assert r.returncode == 1 and 'FIX  settings.json: does not exist' in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize('extra', [['--dry-run'], ['--uninstall'], ['--mode', 'enforce'], ['--auto-continue'],
+                                   ['--week-ok-until', '2026-01-19'], ['--replace-statusline']])
+def test_check_takes_no_option_that_would_change_something(tmp_path, extra):
+    write_settings(tmp_path)
+    r = check(tmp_path, *extra)
+    assert r.returncode == 2 and '--check' in r.stderr
