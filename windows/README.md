@@ -10,6 +10,11 @@ calls `windows/cli/_win.py` (through `hooks/_plat.py`); it does not spread Windo
 | [`../desktop/`](../desktop/README.md) | Claude Code in the Claude desktop app | A plugin draws the status line under the prompt, which the app does not show. |
 | [`cowork/`](cowork/) | Cowork (cloud, or a Linux VM on the machine) | Findings only, no code, nothing promised. |
 
+![The status line in the Windows terminal: 5h 24 %, week 77 % in red with the weekly stop marker, ctx 460k in yellow, cache 60m](../docs/images/statusline-windows.png)
+
+The status line in the Windows terminal, the same as on Linux: the week has passed the start threshold of the spawn
+gate (`<- weekly limit reached`), the context is past 300k.
+
 ## What you need
 
 - Windows 10 1809 or newer (the minimum of Claude Code itself), tested on Windows 11.
