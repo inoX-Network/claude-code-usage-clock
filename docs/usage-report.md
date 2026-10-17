@@ -4,6 +4,21 @@ The details of `tools/usage_report.py`. What it does, its commands and an exampl
 [README](../README.md#reports-what-was-used); every line and JSON field is explained in
 [`report-format.md`](report-format.md).
 
+## Running it from the installation
+
+`tools/install.py` copies `usage_report.py`, `log_summary.py` and `prices.json` to the target folder of the hooks
+(`~/.claude/hooks/usage-clock/`) in the same way as the hook scripts; the other modules the report needs are hook
+modules and are copied anyway. The report finds those modules and `prices.json` next to itself, not in the working
+folder, so the installed copy runs from any folder without the checkout:
+
+```sh
+python3 ~/.claude/hooks/usage-clock/usage_report.py --week
+```
+
+On Windows: `python -X utf8 "%USERPROFILE%\.claude\hooks\usage-clock\usage_report.py" --week`. `install.py --check`
+reports a missing or outdated report file as `FIX` in its `Files:` line, and `install.py --dry-run` names the three
+files. A change to `prices.json` in the checkout reaches the installed copy with the next `install.py` run.
+
 ## The overview
 
 What the parts of the overview mean; the example is in the [README](../README.md#the-overview).
@@ -180,7 +195,7 @@ Gates
 
 Claude Code deletes old transcripts (after 30 days by default). `--archive` keeps what a finished day showed: it
 writes every finished day that is not in `<log_dir>/usage-days.jsonl` yet, never overwrites a day, and prints
-nothing. Run it once a day, for example from cron (`5 0 * * * python3 /path/to/tools/usage_report.py --archive`)
+nothing. Run it once a day, for example from cron (`5 0 * * * python3 ~/.claude/hooks/usage-clock/usage_report.py --archive`, the installed copy)
 or a systemd user timer. A finished day that the archive has is always reported from the archive (the transcripts of that day may be partly
 deleted by now), so a month stays whole; a line of another format, or one that does not fit the figures, is not
 an archive line (it is counted as unreadable and its day is computed from the transcripts). The

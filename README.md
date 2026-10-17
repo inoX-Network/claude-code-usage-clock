@@ -55,7 +55,8 @@ python3 tools/install.py --dry-run     # shows what would change
 python3 tools/install.py               # installs all five parts, gates in shadow mode
 ```
 
-The installer copies the scripts to `~/.claude/hooks/usage-clock/`, creates `config.json` there if it does not
+The installer copies the scripts to `~/.claude/hooks/usage-clock/` (the usage report with them, see
+[Reports](#reports-what-was-used)), creates `config.json` there if it does not
 exist yet, and adds the hooks and the status line to `~/.claude/settings.json`. Before writing it runs each
 hook it installs once as a smoke test and keeps a backup (`settings.json.bak-usage-clock-<timestamp>`). Running it again
 updates the entries instead of adding duplicates.
@@ -355,6 +356,16 @@ python3 tools/usage_report.py --week --full             # every figure
 python3 tools/usage_report.py --json                # the same figures for other tools, the overview included
 python3 tools/usage_report.py --archive             # see docs/usage-report.md
 ```
+
+The installer copies the report, `log_summary.py` and `prices.json` to `~/.claude/hooks/usage-clock/` as well, so you
+can run it without this checkout, from any folder, with the same switches:
+
+```sh
+python3 ~/.claude/hooks/usage-clock/usage_report.py --week
+```
+
+Run `tools/install.py` again after a `git pull` to update the installed copy; `install.py --check` names a report
+file that is missing or older than the checkout.
 
 ### The overview
 

@@ -64,6 +64,7 @@ file that is not in `hooks/`). `--uninstall` removes the entries and needs no Gi
 | Path lists | `:` | `;` (`CCUC_AGENT_DIRS`, `CCUC_SKILL_DIRS`, `CCUC_COMMAND_DIRS`, as `os.pathsep`). |
 | Wake-up watcher command | `python3 '<path>' <session>` | `"<python>" -X utf8 "<path>" <session>`, in the offer the context reporter gives. |
 | Time zone (`usage_report.py`) | the system zone | The system zone of Windows, through the C runtime. |
+| Calling the installed report | `python3 ~/.claude/hooks/usage-clock/usage_report.py --week` | `python -X utf8 "%USERPROFILE%\.claude\hooks\usage-clock\usage_report.py" --week`. The installer copies the report next to the hooks; `-X utf8` is for the characters outside ASCII. |
 | Day archive (`usage_report.py --archive`) | cron or a systemd user timer | A task of your own user in the Task Scheduler, no admin rights: `Register-ScheduledTask` with a daily `New-ScheduledTaskTrigger` and `New-ScheduledTaskSettingsSet -StartWhenAvailable` (a PC that was off or in Linux at that time catches up after the next login), run by `pythonw.exe` so that no window opens. Windows has transcripts of its own: the archive of Linux does not hold them. |
 
 Where the core was found to assume a POSIX path, the place and what was done are listed in the pull request that
