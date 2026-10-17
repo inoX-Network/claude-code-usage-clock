@@ -1976,7 +1976,8 @@ def test_a_fall_to_exactly_half_is_a_new_window_and_a_five_hour_span_is_two_wind
 
 
 def test_the_days_at_the_edge_of_the_allowed_years_work(world):
-    for args in (['--day', '2000-01-01'], ['--day', '2999-12-31'], ['--month', '2000-01'], ['--month', '2999-12']):
+    for args in (['--day', '2000-01-01'], ['--day', '2999-12-31'], ['--month', '2000-01'], ['--month', '2999-12'],
+                 ['--year', '2000'], ['--year', '2999']):
         assert world.report(*args)['total']['requests'] == 0
 
 
