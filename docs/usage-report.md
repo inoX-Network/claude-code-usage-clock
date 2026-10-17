@@ -49,7 +49,9 @@ What the parts of the overview mean; the example is in the [README](../README.md
 Days are local days. `--week` is the subscription week, not the calendar week: it ends at the weekly reset time
 that the measurement history last saw, else the one in the shared usage file (`seven_day.resets_at`), and counts on in
 steps of seven days. With neither it stops with exit code 1 and asks for `--since`.
-`--since` and `--until` are whole days, both included. The log folder is found like `log_summary.py` finds it
+`--since` and `--until` are whole days, both included. `--year [YYYY]` is the days of a calendar year, like
+`--since YYYY-01-01 --until YYYY-12-31`; the current year (the default) only up to today. As for `--month`, a finished
+day that the archive has comes from the archive, so a year stays whole after Claude Code has deleted the transcripts. The log folder is found like `log_summary.py` finds it
 (`--config PATH`, else `CCUC_LOG_DIR`, else the config file of your installation). Exit code 0 is a report (an empty
 transcripts folder gives an empty one), 1 the transcripts folder is missing (or a price file that cannot be read, or an
 archive that cannot be written), 2 bad arguments, also a day outside the years 2000 to 2999. An example, with invented numbers:
@@ -69,7 +71,8 @@ Total
   Cost weight: 5.39 USD at API prices (main 5.39, subagents 0.01)
   Output: thinking 46k (30 %), web searches 3, web fetches 0
   Cache: hit rate 97 %, cold starts 1
-  Subagents by type: reviewer 0.01 USD (6)
+  Main session: ~3.99 pts ~53.9 pts 5h
+  Subagents by type: reviewer 0.01 USD (6) <1 pts <1 pts 5h
   Models:
     model Opus 5.5: 5.11 USD, 37 requests; thinking 46k (30 %), web searches 3, web fetches 0; cache hits 97 %
     model Sonnet 5.x: 0.28 USD, 6 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 98 %
@@ -183,6 +186,15 @@ Gates
   the cost.
   Below 50 such stretches it says "not calibrated yet". A model is listed only with 50 stretches of its own. In the text,
   a day is listed only with at least 20 stretches (the JSON lists every day with its count).
+- **Points by agent type (`~`, an estimate):** the same shares, by agent instead of by CLI: in each stretch the rise
+  is shared by the cost weight of the requests of the main sessions (one entry, `Main session`) and of each type of
+  subagent (`Subagents by type`, `~x pts` of the weekly limit and `~y pts 5h`), so main and all types add up to the
+  shared points (`~54.0` and `~4.0` in the example, for each limit). A subagent whose type the transcript does not name is
+  `unknown`; a name given to a subagent is never shown. The overview names the weekly points of the most expensive
+  type after `top:`. The JSON has `week_points` and `five_points` for `total.main` and for each type of
+  `total.subagents.by_type`. A day archived by an earlier version has no points by type: they are computed from the
+  transcripts while these exist; where they do not hold the whole day, the day is named under `Sources:` and in
+  `coverage.archive_days_without_agent_split`.
 - **Small estimates:** an estimate below one point is written `<1`, not `~0.0` or `~1.0`: a session's share of a
   rise of a few points is not known to a tenth.
 - **Gates:** how many starts the spawn gate allowed, warned about, asked about and denied, and the warnings and

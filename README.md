@@ -349,6 +349,7 @@ python3 tools/usage_report.py                       # today, as an overview
 python3 tools/usage_report.py --day 2026-01-14
 python3 tools/usage_report.py --week                # the subscription week, up to the weekly reset time
 python3 tools/usage_report.py --month 2026-01
+python3 tools/usage_report.py --year 2026           # the days of the year (this year: up to today)
 python3 tools/usage_report.py --since 2026-01-05 --until 2026-01-11
 python3 tools/usage_report.py --week --project shop     # the details of one project (as in --full) and their sum
 python3 tools/usage_report.py --week --session 5f3a     # the details of one session: any start of its id
