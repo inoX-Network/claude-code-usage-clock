@@ -101,6 +101,20 @@ def test_settings_json_is_written_with_plain_line_feeds(paths):
     assert b'\r' not in data and data.endswith(b'}\n') and data.count(b'\n') > 10
 
 
+def test_a_missing_windows_module_stops_before_anything_is_written(paths, tmp_path):
+    settings, target = paths
+    code = ('import importlib.util, sys\n'
+            f'spec = importlib.util.spec_from_file_location("install_real", {INSTALL!r})\n'
+            'module = importlib.util.module_from_spec(spec)\n'
+            'spec.loader.exec_module(module)\n'
+            f'module.WINDOWS_MODULE = {str(tmp_path / "gone" / "_win.py")!r}\n'
+            'sys.exit(module.main(sys.argv[1:]))\n')
+    done = subprocess.run([sys.executable, '-c', code, '--settings', str(settings), '--target', str(target)],
+                          capture_output=True, text=True, encoding='utf-8', timeout=120)
+    assert done.returncode == 1 and 'files missing' in done.stdout and '_win.py' in done.stdout
+    assert read(settings) == {} and not target.exists() and not list(tmp_path.glob('settings.json.bak*'))
+
+
 def installer_module():
     spec = importlib.util.spec_from_file_location('install_under_test', INSTALL)
     module = importlib.util.module_from_spec(spec)

@@ -76,7 +76,11 @@ path. A Write/Edit/MultiEdit or a Bash append goes through near the usage limit 
   `.` and `..` included: Win32 drops such endings when it opens a file, so the path would name another one;
 - has a parent folder that ends with `checkpoint_dir_suffix` as written and after `os.path.realpath`, which resolves
   symlinks and junctions: a junction planted as the checkpoint folder is no checkpoint folder. The comparison is
-  case-sensitive, stricter than NTFS: `Agent-Checkpoints` does not count for `/agent-checkpoints`.
+  case-sensitive, stricter than NTFS: `Agent-Checkpoints` does not count for `/agent-checkpoints`;
+- has no part that Git Bash follows as a link while Windows does not: a file with `!<symlink>` and the system
+  attribute, a shortcut `name.lnk` that stands for `name` (both made by `ln -s` with `MSYS=winsymlinks:sys` or `:lnk`,
+  no privilege needed), a WSL symlink or any other reparse point that is neither a symlink nor a junction. `realpath`
+  does not see them, and an append in Bash would land where they point.
 
 In a Bash append the path goes unquoted with forward slashes (`C:/...`, `/c/...`) or in single quotes (`'C:\...'`). In
 double quotes or unquoted, a backslash is an escape for bash, so such a command is refused. The deny message tells the
@@ -89,8 +93,10 @@ model to give the path with the drive and forward slashes.
   gate refuses it (fail closed) and says so.
 - **Junctions** are not detected where the hooks write their own files (see Links above). The soft stop resolves them
   in its checkpoint check.
-- **Mapped network drives:** a drive letter that names a network share is a drive path, so the soft stop resolves it
-  with `realpath`; on a slow network that can take part of the hook's 5 s.
+- **Mapped network drives:** a drive letter that names a network share is a drive path. The soft stop calls
+  `realpath` only for a path whose parent folder already ends with the suffix, and an error there makes no checkpoint;
+  on a slow network that one check can still take part of the hook's 5 s.
+- **Hard links** and a link swapped in between the check and the write are not caught, as on Linux.
 - **Without Git Bash** (hooks run in PowerShell then) the commands do not work; the installer refuses.
 - The reports (`tools/usage_report.py`) print characters outside ASCII. In a console that is fine; to write them to
   a file or pipe them, use `python -X utf8 tools\usage_report.py ... > report.txt`.
