@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -13,7 +14,7 @@ SCRIPT = os.path.join(ROOT, 'tools', 'log_summary.py')
 
 
 def run(*args, env=None):
-    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, timeout=30, env=env)
+    done = subprocess.run([sys.executable, SCRIPT, *map(str, args)], capture_output=True, text=True, encoding='utf-8', timeout=30, env=env)
     return done.returncode, done.stdout + done.stderr
 
 
@@ -154,7 +155,7 @@ def test_an_unreadable_file_is_reported_not_raised(tmp_path, monkeypatch, capsys
 
 def hook(script, payload, *args):
     done = subprocess.run([sys.executable, os.path.join(HOOKS, script), *args], input=json.dumps(payload),
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, encoding='utf-8', timeout=30)
     assert done.returncode == 0, done.stderr
 
 
@@ -282,7 +283,8 @@ def test_a_broken_config_falls_back_to_the_default_folder(home_env, tmp_path):
 def test_the_no_log_message_names_the_config_option(home_env):
     code, out = run()
     assert code == 1 and 'No log at' in out and '--config' in out
-    assert str(home_env / '.cache' / 'claude-usage-clock' / 'log.jsonl') in out
+    shown = re.search(r'No log at (.*?) - are the hooks', out).group(1)
+    assert os.path.normpath(shown) == str(home_env / '.cache' / 'claude-usage-clock' / 'log.jsonl')
 
 
 def test_config_option_expands_the_home_folder(home_env, tmp_path):

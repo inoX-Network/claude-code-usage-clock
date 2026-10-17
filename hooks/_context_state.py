@@ -60,7 +60,7 @@ def write_private(directory: str, name: str, content: str) -> bool:
         descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _usage.NO_FOLLOW, 0o600)
         with os.fdopen(descriptor, 'w', encoding='utf-8') as f:
             f.write(content)
-        os.replace(tmp, path)
+        _usage.replace(tmp, path)
     except OSError:
         try:
             os.unlink(tmp)

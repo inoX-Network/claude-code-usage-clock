@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import fcntl
 import json
 import math
 import os
@@ -45,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'hooks'))
 sys.path.insert(0, HERE)
 import _config  # noqa: E402
+import _plat  # noqa: E402
 import _spawn_check  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
@@ -1774,15 +1774,15 @@ def estimate_folder(data: Data, start: float, end: float) -> tuple[str, str] | N
 def write_archive(log_dir: str, new_days: dict[str, dict]) -> None:
     """Appends a line for each day of `new_days` that the file does not have yet (a day is never overwritten). Same
     care as the measurement history: folder 0700, file 0600, opened without following links, a cut-off last line
-    gets a line break, one writer at a time (flock). Raises OSError."""
+    gets a line break, one writer at a time (a file lock, see _plat.py). Raises OSError."""
     if os.path.islink(log_dir):
         raise OSError(f'{log_dir} is a link')
     os.makedirs(os.path.dirname(os.path.abspath(log_dir)), mode=0o700, exist_ok=True)
     os.makedirs(log_dir, mode=0o700, exist_ok=True)
-    descriptor = os.open(os.path.join(log_dir, ARCHIVE_FILE), os.O_RDWR | os.O_APPEND | os.O_CREAT | _usage.NO_FOLLOW, 0o600)
-    with os.fdopen(descriptor, 'r+b') as archive:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(archive, fcntl.LOCK_EX)
+    descriptor = os.open(os.path.join(log_dir, ARCHIVE_FILE),
+                         os.O_RDWR | os.O_APPEND | os.O_CREAT | _usage.NO_FOLLOW | _plat.O_BINARY, 0o600)
+    with os.fdopen(descriptor, 'r+b') as archive, _usage.locked(archive):
+        _plat.fchmod(descriptor, 0o600)
         content = archive.read()
         known = {day for day, _ in _archive_days(content.decode('utf-8', errors='replace'))}
         text = ''.join(json.dumps({'v': ARCHIVE_VERSION, 'day': day, 'stats': stats}, separators=(',', ':')) + '\n'

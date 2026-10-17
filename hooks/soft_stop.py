@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 
@@ -52,12 +53,65 @@ def normalize_suffix(value) -> str:
 def save_form(suffix: str) -> str:
     """The forms that count as a checkpoint write, spelled out for the model."""
     target = f'<absolute path>{suffix}/<file>'
-    return (f'Write/Edit/MultiEdit to {target}, or a Bash command that is nothing but an append: '
+    form = (f'Write/Edit/MultiEdit to {target}, or a Bash command that is nothing but an append: '
             f"cat >> {target} <<'EOF' ... EOF, echo '<text>' >> {target}, or echo '<text>' | tee -a {target}")
+    if os.name == 'nt':
+        form += (f'; on Windows give the absolute path with the drive and forward slashes, '
+                 f'for example C:/Users/<name>/project{suffix}/<file>')
+    return form
+
+
+def _is_windows_checkpoint_path(path, suffix: str) -> bool:
+    """A drive path in any spelling of hook input, the rest as on POSIX. The suffix is compared case-sensitively,
+    which is stricter than the file system: a folder that differs in case is no checkpoint folder."""
+    if not isinstance(path, str) or not path or '\0' in path:
+        return False
+    import _plat  # here, like the imports in main(): a failed import must let the call through
+    text = _plat.normalize_path(path)
+    # Only a drive path is absolute enough: no UNC share (resolving a network path can outlast the hook timeout),
+    # nothing root-relative ('/x', on the current drive) or drive-relative ('C:x', below that drive's current folder)
+    if not re.match('[A-Z]:/', text):
+        return False
+    # After the drive: no ':' (alternate data streams, devices) and no part that ends with '.' or ' ' ('.' and '..'
+    # included). Win32 drops such endings when it opens the file, realpath keeps them: the two would differ.
+    if ':' in text[2:] or any(part.endswith(('.', ' ')) for part in text[3:].split('/')):
+        return False
+    # Lexically first: realpath on a hanging network drive must not delay calls that are no checkpoint anyway
+    if not os.path.dirname(text).endswith(suffix):
+        return False
+    try:
+        real = _plat.normalize_path(os.path.realpath(text))   # resolves symlinks and junctions
+    except (OSError, ValueError):
+        return False
+    if not os.path.dirname(real).endswith(suffix):
+        return False
+    # Every part as written; through a junction, lstat sees the same files as Git Bash
+    parts = text.split('/')
+    return not any(_git_bash_link('/'.join(parts[:i])) for i in range(2, len(parts) + 1))
+
+
+def _git_bash_link(path: str) -> bool:
+    """Does Git Bash read this part of a path as a link that realpath does not see? Then an append in Bash would
+    land wherever the link points. Git Bash links need no privilege: a file with '!<symlink>' and the system
+    attribute, a shortcut 'name.lnk' that stands for 'name', a WSL symlink."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return os.path.lexists(path + '.lnk')
+    except OSError:
+        return True
+    # realpath resolves symlinks and junctions; Git Bash follows other reparse points too (a WSL symlink).
+    # The tags exist on Windows only, hence here and not at module level.
+    resolved = (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)
+    if st.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and st.st_reparse_tag not in resolved:
+        return True
+    return bool(st.st_file_attributes & stat.FILE_ATTRIBUTE_SYSTEM) and not stat.S_ISDIR(st.st_mode)
 
 
 def _is_checkpoint_path(path, suffix: str) -> bool:
     """Absolute, no '..', parent directory ends with the suffix. Also after resolving symlinks."""
+    if os.name == 'nt':
+        return _is_windows_checkpoint_path(path, suffix)
     if not isinstance(path, str) or not path or '\0' in path or '..' in path.split('/'):
         return False
     norm = os.path.normpath(path)

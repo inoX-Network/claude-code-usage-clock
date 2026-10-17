@@ -34,7 +34,7 @@ def no_reset(text):
 def run(status_input, tmp_path, extra_env=None, raw=None):
     env = dict(os.environ, **(extra_env or {}))
     return subprocess.run([sys.executable, SCRIPT], input=raw if raw is not None else json.dumps(status_input),
-                          capture_output=True, text=True, env=env, timeout=20)
+                          capture_output=True, text=True, encoding='utf-8', env=env, timeout=20)
 
 
 # --- The rendered line ---------------------------------------------------------------------------
@@ -149,7 +149,8 @@ def test_without_rate_limits_only_the_model_is_shown_and_nothing_is_written(tmp_
     assert not (tmp_path / 'usage.json').exists()
 
 
-@pytest.mark.parametrize('raw', ['not json', '', '[1, 2]', '"text"', 'null', '[' * 100000])
+@pytest.mark.parametrize('raw', ['not json', '', '[1, 2]', '"text"', 'null', '[' * 100000],
+                         ids=['text', 'empty', 'list', 'string', 'null', 'deeply-nested'])
 def test_garbage_on_stdin_still_exits_zero_with_a_line(tmp_path, raw):
     r = run(None, tmp_path, raw=raw)
     assert r.returncode == 0 and plain(r.stdout).strip() == 'Claude'

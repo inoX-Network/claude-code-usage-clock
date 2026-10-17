@@ -20,6 +20,9 @@ from datetime import date, datetime, timezone
 
 import _config
 
+if os.name == 'nt':
+    import _plat      # the Windows side of the platform switch (windows/cli/_win.py)
+
 LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -91,9 +94,12 @@ def _project_roots(start: str) -> list[str]:
                 except OSError:
                     line = ''
                 target = line[len('gitdir:'):].strip() if line.startswith('gitdir:') else ''
-                marker = os.sep + '.git' + os.sep + 'worktrees' + os.sep
+                marker = '/.git/worktrees/'
+                if os.name == 'nt':      # git writes `gitdir: C:/...` with forward slashes, the folders here have backslashes
+                    target = _plat.normalize_path(target)
                 if marker in target:
-                    chain.append(target.split(marker)[0])
+                    root = target.split(marker)[0]
+                    chain.append(_plat.native_path(root) if os.name == 'nt' else root)
             return chain
         parent = os.path.dirname(folder)
         if parent == folder:
@@ -166,11 +172,12 @@ def write_log_line(record: dict, directory: str | None = None) -> None:
         os.makedirs(directory, mode=0o700, exist_ok=True)
         path = os.path.join(directory, 'log.jsonl')
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
-            os.replace(path, path + '.1')
+            (_plat.replace if os.name == 'nt' else os.replace)(path, path + '.1')      # Windows: tried again for a moment
         # O_NOFOLLOW here rather than from _usage: logging must not depend on the module it may have to report
         descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-        with os.fdopen(descriptor, 'a', encoding='utf-8') as f:
-            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'a', encoding='utf-8', newline='\n') as f:      # no CRLF on Windows
+            if os.name != 'nt':      # Windows has no file modes
+                os.fchmod(descriptor, 0o600)
             f.write(line)
     except (OSError, TypeError, ValueError):
         pass

@@ -1,5 +1,6 @@
 [run]
-source = hooks, tools
+source = hooks, tools, windows/cli
+omit = windows/cli/tests/*
 patch = subprocess
 
 [report]

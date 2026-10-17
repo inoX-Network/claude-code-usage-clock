@@ -39,7 +39,9 @@ in its report. Run them that way for a while, read the log, then switch to `enfo
   Claude Code passes to the status line; API key, Bedrock and Vertex sessions do not get it, and neither does
   a session before its first response. Without it everything reports usage as `unknown`.
 - Python 3.10 or newer as `python3` (the macOS system Python 3.9 is too old; install a current one).
-- Linux or macOS. Windows is not supported (`fcntl`).
+- Linux, macOS, or Windows 11 with [Git for Windows](https://git-scm.com/downloads/win) (Claude Code runs hooks in Git
+  Bash there). Windows has its own folder, [`windows/`](windows/README.md): the commands, the differences and the
+  limits. In WSL it runs as on Linux.
 - No third-party packages at runtime.
 
 ## Install
@@ -82,6 +84,9 @@ Options:
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
 
 Restart Claude Code (or open `/hooks`) after installing.
+
+On Windows, run `python tools\install.py` instead of `python3 tools/install.py`; the installer writes the commands for
+Git Bash with the Python that runs it ([`windows/README.md`](windows/README.md)).
 
 ### Uninstall completely
 
@@ -168,6 +173,11 @@ background task:
   three checks in a row; a sleeping computer does not count), after 115 minutes (Claude Code ends background tasks
   after two hours; the turn that delivers its message already offers the next one), when another watcher for the
   session lives, or when `from_k` is 0.
+- After 115 minutes it does not simply restart if you have been away for a long time: that restart message is itself
+  a model turn, which would renew the cache and start the idle time again while you are gone. So when the watcher
+  reaches its time limit with a warm cache, a context of at least `from_k`, and at least 20 minutes of idle time
+  (the cache lifetime minus what is left), it sends the wake-up call instead. With the 5-minute cache the idle time
+  never gets that long, so it restarts as before.
 - After a wake-up the offer rests for an hour, so the routine does not start the next watcher.
 
 What you need for this:
@@ -212,6 +222,19 @@ spawn gate now starts no new agent blocks until the window resets at 22:40.
   (`statusline.cache_yellow_below_min`), red `cache cold` when it has run out or is not warm. Nothing is shown
   until the first request.
 - A part whose input is missing is left out, never filled with a guess.
+
+### In the Claude desktop app
+
+The desktop app does not show the `statusLine`. A plugin in [`desktop/`](desktop/README.md) draws the same line
+under its prompt, with the thresholds of your `config.json`:
+
+```
+claude plugin marketplace add inoX-Network/claude-code-usage-clock
+claude plugin install usage-clock-display@usage-clock
+```
+
+Two differences: the app tells a plugin no cache expiry, so the cache clock is an estimate from the last answer
+(`cache ~54m`), and the cost of the session follows at the end. In the terminal the plugin draws nothing.
 
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
 used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
@@ -272,6 +295,8 @@ The arguments of `echo` and `printf` must be quoted (double quotes without `$`, 
 counts only without options and only with `%s`, `%b` and `%%` in its format (flags, a width and a precision
 such as `%-8s` are fine, `*` is not): an option such as `-v` or a
 numeric conversion such as `%d` can run code in bash and zsh, so such a command is no checkpoint write.
+On Windows the path must be a drive path (`C:\...`, `C:/...` or `/c/...`, no network share); the exact rules are in
+[`windows/README.md`](windows/README.md#soft-stop).
 An agent that has saved once must save again at least every 15 calls, whatever the usage. Tell your agents in
 their prompt where their checkpoint file is. Unknown or stale usage never triggers the three levels above; the
 agent gets one warning instead.
@@ -681,6 +706,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
 Run the tests as a normal user. As root (for example in a container) the tests that need an unreadable file are
 skipped, because root can read every file.
+
+On Windows: `python -m pytest tests/ windows/cli/tests/ -q -rs`. The tests that need
+symlinks, FIFOs, file modes, user ids or POSIX time zone rules carry `@pytest.mark.posix_only` and are skipped there, with
+one fixed reason that the CI check accepts and no other; on Linux and macOS no test may be skipped
+([`windows/README.md`](windows/README.md#tests)).
 
 [`docs/architecture.md`](docs/architecture.md) is the contract between the parts.
 

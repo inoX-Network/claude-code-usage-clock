@@ -1,5 +1,4 @@
 """Tests for hooks/_history.py: the measurement history that the status line appends to under the usage file's lock."""
-import fcntl
 import json
 import os
 import stat
@@ -11,13 +10,13 @@ import pytest
 
 import _history
 import _usage
-from conftest import HOOKS
+from conftest import HOOKS, lock_is_held
 
 NOW = 1_800_000_000.0           # a fixed "now"; the blocks below reset after it
 FIVE_RESET = NOW + 3600
 WEEK_RESET = NOW + 86400
 STATUSLINE = os.path.join(HOOKS, 'statusline.py')
-NOT_ROOT = pytest.mark.skipif(not hasattr(os, 'geteuid') or os.geteuid() == 0, reason='root can write everywhere')
+NOT_ROOT = pytest.mark.skipif(hasattr(os, 'geteuid') and os.geteuid() == 0, reason='root can write everywhere')
 
 
 def merged(five: object = 40, week: object = 61, five_reset: object = FIVE_RESET, week_reset: object = WEEK_RESET):
@@ -218,7 +217,7 @@ def test_an_empty_file_gets_no_line_break_either(tmp_path):
 
 def fill(tmp_path, size, text='x'):
     (tmp_path / 'log').mkdir(exist_ok=True)
-    history(tmp_path).write_text(text * (size - 1) + '\n', encoding='utf-8')
+    history(tmp_path).write_text(text * (size - 1) + '\n', encoding='utf-8', newline='')      # exact size, no CRLF
 
 
 def test_a_file_exactly_at_the_limit_is_not_rotated(tmp_path):
@@ -263,6 +262,7 @@ def test_an_unchanged_measurement_does_not_rotate(tmp_path):
 # --- Permissions ------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('mask', [0o022, 0o002, 0o000])
+@pytest.mark.posix_only
 def test_the_file_is_private_and_so_are_the_folders(tmp_path, mask):
     old = os.umask(mask)
     try:
@@ -273,6 +273,7 @@ def test_the_file_is_private_and_so_are_the_folders(tmp_path, mask):
     assert stat.S_IMODE(os.stat(tmp_path / 'log').st_mode) == 0o700
 
 
+@pytest.mark.posix_only
 def test_a_file_that_was_readable_is_made_private_on_the_next_write(tmp_path):
     add(tmp_path, merged())
     os.chmod(history(tmp_path), 0o644)
@@ -280,6 +281,7 @@ def test_a_file_that_was_readable_is_made_private_on_the_next_write(tmp_path):
     assert stat.S_IMODE(os.stat(history(tmp_path)).st_mode) == 0o600
 
 
+@pytest.mark.posix_only
 def test_the_log_folder_above_a_new_folder_is_private_too(tmp_path):
     old = os.umask(0o022)
     try:
@@ -292,6 +294,7 @@ def test_the_log_folder_above_a_new_folder_is_private_too(tmp_path):
 
 # --- No links are followed --------------------------------------------------------------------------------------
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_file_is_never_written_through(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -301,6 +304,7 @@ def test_a_planted_link_as_the_file_is_never_written_through(tmp_path):
     assert victim.read_text(encoding='utf-8') == 'keep me'
 
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_the_folder_is_not_followed(tmp_path):
     elsewhere = tmp_path / 'elsewhere'
     elsewhere.mkdir()
@@ -309,6 +313,7 @@ def test_a_planted_link_as_the_folder_is_not_followed(tmp_path):
     assert os.listdir(elsewhere) == []
 
 
+@pytest.mark.posix_only
 def test_a_planted_link_as_dot_one_is_replaced_not_written_through(tmp_path):
     victim = tmp_path / 'victim.txt'
     victim.write_text('keep me', encoding='utf-8')
@@ -334,6 +339,7 @@ def test_a_directory_as_the_file_is_swallowed(tmp_path):
 
 
 @NOT_ROOT
+@pytest.mark.posix_only
 def test_an_unwritable_folder_is_swallowed(tmp_path):
     (tmp_path / 'log').mkdir(mode=0o700)
     os.chmod(tmp_path / 'log', 0o500)
@@ -360,12 +366,7 @@ def test_the_callback_runs_after_the_merge_with_the_merged_content_and_while_the
     seen = []
 
     def after(content):
-        probe = os.open(str(tmp_path / 'log' / 'usage.json.lock'), os.O_RDWR)
-        try:
-            with pytest.raises(BlockingIOError):
-                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(probe)
+        assert lock_is_held(str(tmp_path / 'log' / 'usage.json.lock'))
         seen.append((content, (tmp_path / 'usage.json').exists()))
 
     status = {'rate_limits': {'five_hour': {'used_percentage': 40, 'resets_at': FIVE_RESET},
@@ -407,7 +408,7 @@ def test_parallel_sessions_write_one_line_for_one_measurement(tmp_path):
     now = time.time()
     status = json.dumps({'rate_limits': {'five_hour': {'used_percentage': 40, 'resets_at': now + 3600},
                                          'seven_day': {'used_percentage': 61, 'resets_at': now + 86400}}})
-    procs = [subprocess.Popen([sys.executable, STATUSLINE], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
+    procs = [subprocess.Popen([sys.executable, STATUSLINE], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8')
              for _ in range(8)]
     for proc in procs:
         proc.stdin.write(status)
@@ -421,7 +422,7 @@ def test_parallel_sessions_with_growing_numbers_leave_each_value_once(tmp_path):
     procs = []
     for value in range(1, 9):
         status = json.dumps({'rate_limits': {'five_hour': {'used_percentage': value, 'resets_at': now + 3600}}})
-        proc = subprocess.Popen([sys.executable, STATUSLINE], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True)
+        proc = subprocess.Popen([sys.executable, STATUSLINE], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8')
         proc.stdin.write(status)
         proc.stdin.close()
         procs.append(proc)

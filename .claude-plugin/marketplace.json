@@ -1,0 +1,15 @@
+{
+  "name": "usage-clock",
+  "description": "claude-code-usage-clock: the status line for the Claude desktop app.",
+  "owner": {
+    "name": "inoX-Network",
+    "url": "https://github.com/inoX-Network"
+  },
+  "plugins": [
+    {
+      "name": "usage-clock-display",
+      "source": "./desktop",
+      "description": "The usage-clock status line under the prompt of the Claude desktop app."
+    }
+  ]
+}

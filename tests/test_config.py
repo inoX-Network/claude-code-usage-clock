@@ -34,11 +34,11 @@ def test_missing_file_gives_defaults_without_log(tmp_path):
 def test_tilde_in_paths_is_expanded_but_not_in_defaults(tmp_path):
     cfg = _config.load()
     home = str(tmp_path / 'home')
-    assert cfg['usage_file'] == os.path.join(home, '.claude', 'rate-limit.json')
-    assert cfg['log_dir'] == os.path.join(home, '.cache', 'claude-usage-clock')
+    assert os.path.normpath(cfg['usage_file']) == os.path.join(home, '.claude', 'rate-limit.json')
+    assert os.path.normpath(cfg['log_dir']) == os.path.join(home, '.cache', 'claude-usage-clock')
     assert _config.DEFAULTS['usage_file'].startswith('~')
     write_config(tmp_path, {'usage_file': '~/elsewhere/usage.json'})
-    assert _config.load()['usage_file'] == os.path.join(home, 'elsewhere', 'usage.json')
+    assert os.path.normpath(_config.load()['usage_file']) == os.path.join(home, 'elsewhere', 'usage.json')
 
 
 def test_valid_keys_override_defaults_others_stay(tmp_path):
@@ -60,7 +60,8 @@ def test_loaded_config_does_not_alias_the_defaults():
     assert _config.DEFAULTS['thresholds']['deny'] == 95
 
 
-@pytest.mark.parametrize('content', ['{broken', '', '\x00\x01', '[' * 100000])
+@pytest.mark.parametrize('content', ['{broken', '', '\x00\x01', '[' * 100000],
+                         ids=['broken', 'empty', 'control-characters', 'deeply-nested'])
 def test_unreadable_file_gives_defaults_and_one_log_line(tmp_path, content):
     write_config(tmp_path, content)
     cfg = _config.load()

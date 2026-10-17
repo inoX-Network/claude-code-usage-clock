@@ -20,8 +20,14 @@ It stops quietly (message, exit 0) when
   (after `/clear` or closing the session the status line stops writing; a sleeping machine does not count, the
   counter starts again with the first fresh file),
 - it has run MAX_RUN_MIN minutes (Claude Code stops background tasks after two hours); it first writes the
-  heartbeat `ended`, so the turn that delivers its message already offers the next watcher,
+  heartbeat `ended`, so the turn that delivers its message already offers the next watcher (exception below),
 - the heartbeat file cannot be written.
+
+The one exception at MAX_RUN_MIN: a restart message is a model turn that renews the prompt cache, and the idle time
+starts again while the user is long gone. So if the state file is fresh, the cache is warm, the context has reached
+`from_k` and the user has been idle for IDLE_FIRE_AT_MAX_RUN_MIN minutes (the cache lifetime minus what is left),
+the watcher fires the wake-up call (heartbeat `fired`) instead of the restart message.
+
 An invalid session id is exit 2. Nothing else is read or written; only the standard library is used.
 """
 from __future__ import annotations
@@ -42,21 +48,47 @@ POLL_S = 60
 STALE_MIN = 2
 STALE_POLLS = 3
 MAX_RUN_MIN = 115
+IDLE_FIRE_AT_MAX_RUN_MIN = 20
 TTL_MIN = {'1h': 60, '5m': 5}
+
+
+def _warm_cache(state: dict, used: int, from_k: float) -> tuple[int, float] | None:
+    """(cache lifetime in minutes, expiry) if the context has reached `from_k` thousand tokens and the cache clock
+    is usable (known lifetime, positive finite expiry), else None. Whether the cache is still warm is up to the
+    caller: it depends on the clock."""
+    ttl = state.get('cache_ttl')
+    expires = state.get('cache_expires_at')
+    if used < from_k * 1000 or ttl not in _context_state.CACHE_TTLS or not _usage._number(expires) or expires <= 0:
+        return None
+    return TTL_MIN[ttl], expires
 
 
 def due(state: dict, used: int, from_k: float, lead_min: float, now: float) -> dict | None:
     """The facts for the wake-up call if it is time (enough context, warm cache, expiry within the lead time),
     else None. `used` is the measured context of the same state."""
-    ttl = state.get('cache_ttl')
-    expires = state.get('cache_expires_at')
-    if used < from_k * 1000 or ttl not in _context_state.CACHE_TTLS or not _usage._number(expires) or expires <= 0:
+    cache = _warm_cache(state, used, from_k)
+    if cache is None:
         return None
-    lead_s = min(lead_min, TTL_MIN[ttl] / 5) * 60
+    ttl_min, expires = cache
+    lead_s = min(lead_min, ttl_min / 5) * 60
     rest = expires - now
     if not 0 < rest <= lead_s:
         return None
-    return {'ttl_min': TTL_MIN[ttl], 'rest_s': rest, 'used': used}
+    return {'ttl_min': ttl_min, 'rest_s': rest, 'used': used}
+
+
+def idle_at_limit(state: dict, used: int, from_k: float, now: float) -> dict | None:
+    """The facts for the wake-up call at the maximum run time (same format as `due`) if the cache is still warm and
+    the user has been idle for at least IDLE_FIRE_AT_MAX_RUN_MIN minutes (the lifetime minus what is left), else
+    None. The lead time does not matter here: the watcher cannot wait any longer."""
+    cache = _warm_cache(state, used, from_k)
+    if cache is None:
+        return None
+    ttl_min, expires = cache
+    rest = expires - now
+    if rest <= 0 or ttl_min * 60 - rest < IDLE_FIRE_AT_MAX_RUN_MIN * 60:
+        return None
+    return {'ttl_min': ttl_min, 'rest_s': rest, 'used': used}
 
 
 def _fired_text(session_id: str, facts: dict, from_k: float, routine_file: str) -> str:
@@ -70,6 +102,36 @@ def _fired_text(session_id: str, facts: dict, from_k: float, routine_file: str) 
             f'min, the prompt cache has about {rest_min} min left, the context is {facts["used"] // 1000}k tokens '
             f'(wake-up threshold {from_k:g}k). The user is away. Run your session-end routine now, without asking'
             f'{": " if routine_file else " "}{routine}, then end the turn. Do not start a new watcher.')
+
+
+def _fresh_state(directory: str, session_id: str, moment: float) -> dict | None:
+    """The state file of the session if it is alive at `moment` (not older than STALE_MIN minutes), else None."""
+    state = context_reporter.read_state(directory, session_id)
+    if state is not None and context_reporter.is_fresh(state.get('measured_at'),
+                                                      datetime.fromtimestamp(moment, timezone.utc), STALE_MIN):
+        return state
+    return None
+
+
+def _end_of_run(session_id: str, cfg: dict, directory: str, moment: float) -> str:
+    """The closing message at the maximum run time. A restart message is a model turn that renews the prompt cache
+    and starts the idle time again, so with a warm cache, enough context and a long idle time the watcher wakes
+    the session now instead (heartbeat `fired`). Otherwise it writes `ended`, so the turn that delivers the
+    restart message already offers the next watcher. A heartbeat that cannot be written changes nothing: the
+    last `watching` beat blocks a second offer for a while anyway."""
+    from_k = cfg['wake_watcher']['from_k']
+    state = _fresh_state(directory, session_id, moment)
+    measured = context_reporter.numbers(state) if state is not None else None
+    facts = idle_at_limit(state, measured[1], from_k, moment) if measured is not None else None
+    try:
+        _wake.write_heartbeat(directory, session_id, 'ended' if facts is None else 'fired', moment)
+    except OSError:
+        pass
+    if facts is not None:
+        return _fired_text(session_id, facts, from_k, cfg['wake_watcher']['routine_file'])
+    return (f'Wake-up watcher stopped: session {session_id} reached its maximum run time of {MAX_RUN_MIN} '
+            'minutes. The reminder that comes with this message offers a new watcher; if it does, start it '
+            'again.')
 
 
 def watch(session_id: str, cfg: dict, directory: str, now=time.time, sleep=time.sleep) -> str:
@@ -87,19 +149,11 @@ def watch(session_id: str, cfg: dict, directory: str, now=time.time, sleep=time.
     while True:
         moment = now()
         if moment - started >= MAX_RUN_MIN * 60:
-            try:     # frees the offer: its last `watching` beat is seconds old and would block it for ALIVE_MIN
-                _wake.write_heartbeat(directory, session_id, 'ended', moment)
-            except OSError:
-                pass
-            return (f'Wake-up watcher stopped: session {session_id} reached its maximum run time of {MAX_RUN_MIN} '
-                    'minutes. The reminder that comes with this message offers a new watcher; if it does, start it '
-                    'again.')
-        state = context_reporter.read_state(directory, session_id)
-        if state is not None and context_reporter.is_fresh(state.get('measured_at'),
-                                                          datetime.fromtimestamp(moment, timezone.utc), STALE_MIN):
+            return _end_of_run(session_id, cfg, directory, moment)
+        state = _fresh_state(directory, session_id, moment)
+        if state is not None:
             missed = 0
         else:
-            state = None
             missed += 1
             if missed >= STALE_POLLS:
                 return (f'Wake-up watcher stopped: session {session_id} is no longer active (cleared or closed). '

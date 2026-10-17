@@ -18,6 +18,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json); the reporter reads it
   _wake.py                what reporter and watcher share: ALIVE_MIN, REST_AFTER_FIRE_MIN, the heartbeat file
   _hookio.py              hook input/output, JSONL log, directory discovery
+  _plat.py                the platform switch: replace, pread, fchmod, path and command spelling, open flags (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run)
@@ -25,14 +26,22 @@ tools/
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
   usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
   prices.json             API prices per million tokens for usage_report.py, with source and date
+windows/                  everything Windows-specific, see windows/README.md
+  cli/_win.py             file lock, replace retry, path normalisation, Git Bash commands (copied next to the hooks on Windows)
+  cli/tests/              the Windows test track (collected on Windows only)
+  wsl/                    script that runs the main suite in WSL; cowork/: findings only
 docs/agents.md            how to give agents model and effort, for users and for the model
 docs/report-format.md     what every line of the usage report and every field of its JSON means (units, source, measured or estimated)
-tests/                    pytest, synthetic data only
+tests/                    pytest, synthetic data only (the main suite, every system)
+.github/check_pytest_output.py   the CI rule: no empty run, no skip (Windows: only the posix_only reason)
 config.example.json       every key with its default
 ```
 
 Scripts import their siblings by inserting their own directory into `sys.path`. No packages, no third-party
-runtime dependencies. Python 3.10 or newer, Linux and macOS (`fcntl` is required; Windows is not supported).
+runtime dependencies. Python 3.10 or newer, Linux, macOS and Windows (Git Bash). What differs on Windows is in
+`hooks/_plat.py` (the switch) and `windows/cli/_win.py`; the rest of the core does not ask which system it runs on.
+`_usage.py` and `_hookio.py` do their POSIX side themselves and import `_plat` on Windows only, because the soft stop
+copies them with `_config.py`. `soft_stop.py` does the same: it imports `_plat` on Windows only, inside its path check.
 
 ## Shared usage file
 
@@ -51,7 +60,8 @@ Default path `~/.claude/rate-limit.json` (config `usage_file`, env override `CCU
   - Later window: the new block wins, even with a lower value (after a reset).
   - `measured_at` is renewed only if this session contributed a valid five-hour block that did not lose.
     An idle session can therefore never make old data look fresh.
-- Write under an exclusive `fcntl.flock` on `<log_dir>/<file name>.lock` (the tool's own folder, so a guard that
+- Write under an exclusive lock (`fcntl.flock`; on Windows `msvcrt.locking` on one byte far behind the data, polled
+  until it is free) on `<log_dir>/<file name>.lock` (the tool's own folder, so a guard that
   protects it covers the lock; whoever holds the lock stops the updates), atomically via `<file>.tmp.<pid>` +
   `os.replace` (next to the file: the rename is atomic only within one file system).
   Write only when something changed. The status line appends to the measurement history under the same lock
@@ -277,14 +287,15 @@ with the other runtime files; there is no settings entry and no component. `watc
 sleep)` is the whole logic with injectable clock and sleep; `main` prints its result and exits 0 (invalid or
 missing session id: a message and exit 2).
 
-Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `wake_watcher.py`), `ALIVE_MIN` 3 and
+Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE_FIRE_AT_MAX_RUN_MIN` 20 (all
+`wake_watcher.py`), `ALIVE_MIN` 3 and
 `REST_AFTER_FIRE_MIN` 60 (`_wake.py`, shared with the reporter).
 
 - **At the start**, in this order: `from_k` is 0: message `disabled`, nothing written. A heartbeat of state
   `watching` at most `ALIVE_MIN` minutes old (a living watcher): message `already running`, nothing written. A
   `fired` or `ended` heartbeat or a broken file does not stop a start.
-- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: write the
-  heartbeat `ended` (a failure to write it is ignored, the message goes out anyway) and end. (2) read
+- **Per poll**, the first one at once: (1) the maximum run time of `MAX_RUN_MIN` minutes is reached: see **Maximum
+  run time** below, then end. (2) read
   the state file through `context_reporter.read_state` (no link, no named pipe, size limit) and take it as alive if
   `measured_at` is at most `STALE_MIN` minutes old and not more than a minute in the future. A missing, stale or
   unreadable file counts one missed poll; the third in a row ends with `session ... is no longer active`; a fresh
@@ -296,6 +307,18 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115 (all `
   `0 < expires_at - now <= min(lead_min, ttl_minutes / 5) * 60`. So the lead is 10 minutes for `1h` and 1 minute
   for `5m` with the default `lead_min`; a bigger `lead_min` does not widen it. Before the message the heartbeat
   `fired` is written; if that fails, the watcher ends without waking anyone.
+- **Maximum run time:** a restart message is a model turn; it renews the prompt cache and the idle time starts
+  again while the user is gone (seen 14 Oct 2026). So at `MAX_RUN_MIN` the state file is read again with the same
+  freshness rule as in the loop (`_fresh_state`), and the watcher wakes instead of restarting if the shared check
+  `_warm_cache` passes (plausible numbers, `used_tokens` at least `from_k * 1000`, known `cache_ttl`, positive
+  `cache_expires_at`), the cache is still warm (`rest = expires_at - now > 0`) and the idle time
+  `ttl_minutes * 60 - rest` is at least `IDLE_FIRE_AT_MAX_RUN_MIN * 60` seconds (`idle_at_limit`; no lead time,
+  the watcher cannot wait any longer). Then: heartbeat `fired`, and the wake-up call (facts as in `due()`). If
+  that heartbeat cannot be written the call goes out anyway: the last `watching` beat blocks a second offer for
+  `ALIVE_MIN`, and a fire must not be lost. In every other case (cold or unknown cache, context below `from_k`,
+  idle time shorter, state stale or missing, 5-minute cache, whose idle time is under 5 minutes): heartbeat
+  `ended` (a failure to write it is ignored) and the restart message. `due()` and `idle_at_limit()` share the
+  check of context and cache clock, not the time window.
 - **Message** (English, one paragraph, with the session id): how long the user was away (about TTL minus the
   rest), the rest of the cache in minutes (rounded up), the context in k and the threshold; then `The user is away.
   Run your session-end routine now, without asking (save progress, commit, push, summary), then end the turn. Do
@@ -398,6 +421,13 @@ after resolving symlinks) ends with `checkpoint_dir_suffix`, or a Bash command t
 `%d` can run code in bash and zsh); either of them `| tee -a file`; `cat >> file <<'EOF'`. Double-quoted
 arguments must not contain `$`, backticks or `\`.
 
+On Windows (`_is_windows_checkpoint_path`) the path is first brought into the spelling of `_plat.normalize_path`
+(forward slashes, capital drive letter, `/c/` and `\\?\` resolved, `..` kept). Only a drive path `X:/...` counts:
+no UNC path, nothing root- or drive-relative, no `:` after the drive, no part that ends with `.` or a space (`.` and
+`..` included, because Win32 drops such endings when it opens a file). Then the parent directory must end with the
+suffix as written and after `realpath` (symlinks and junctions), compared case-sensitively. `_plat` is imported
+inside the check, so a failed import fails open like the imports in `main()`.
+
 ## Log
 
 `<log_dir>/log.jsonl`, rotated to `log.jsonl.1` above 5 MB. One line per decision: UTC time, hook, mode,
@@ -488,7 +518,7 @@ takes every whole finished day (before today) from the archive if the archive ha
 period is computed from the transcripts. `parse_archive_line` accepts a line only if its figures merge into empty figures, so a line in another format is
 unreadable (counted, and `--archive` writes its day again). A day whose figures do not fit the live figures when merged is
 computed from the transcripts instead and counted; a day is never half merged. `--archive` computes every finished day (before today, local) with requests that the file does not have,
-and appends them under an exclusive `flock` of the file, re-reading the file's days first (two runs never write a day
+and appends them under an exclusive lock of the file (`_usage.locked`: `flock`, `msvcrt` on Windows), re-reading the file's days first (two runs never write a day
 twice, a day is never overwritten). Like the measurement history the file is 0600 in a 0700 folder, opened
 `O_APPEND|O_NOFOLLOW` (a link as the file or as the folder is refused, exit 1), `fchmod` on every open, and a cut-off
 last line gets a line break first.

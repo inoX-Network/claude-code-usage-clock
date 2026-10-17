@@ -17,7 +17,7 @@ import pytest
 import _config
 import _usage
 import usage_clock
-from conftest import HOOKS
+from conftest import HOOKS, WINDOWS_CLI
 
 SCRIPT = os.path.join(HOOKS, 'usage_clock.py')
 UTC = timezone.utc
@@ -405,8 +405,10 @@ def test_broken_sibling_files_give_exit_0_and_no_output(tmp_path):
 def test_a_broken_usage_module_still_leaves_the_time_part(tmp_path):
     folder = tmp_path / 'partial'
     folder.mkdir()
-    for name in ('usage_clock.py', '_config.py', '_hookio.py'):
+    for name in ('usage_clock.py', '_config.py', '_hookio.py', '_plat.py'):
         shutil.copy(os.path.join(HOOKS, name), folder / name)
+    if os.name == 'nt':      # _plat.py finds the Windows module next to itself in an installation
+        shutil.copy(os.path.join(WINDOWS_CLI, '_win.py'), folder / '_win.py')
     (folder / '_usage.py').write_text('def (:\n', encoding='utf-8')
     code, out, _ = run_raw(folder / 'usage_clock.py', '{}')
     context = json.loads(out)['hookSpecificOutput']['additionalContext']
