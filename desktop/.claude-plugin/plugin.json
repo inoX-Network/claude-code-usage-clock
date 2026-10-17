@@ -1,0 +1,20 @@
+{
+  "name": "usage-clock-display",
+  "displayName": "usage-clock display",
+  "version": "0.1.0",
+  "description": "Shows the usage-clock status line (five-hour window, weekly limit, context, cache clock, cost) under the prompt in the Claude desktop app, which does not show the statusLine.",
+  "author": {
+    "name": "inoX-Network"
+  },
+  "repository": "https://github.com/inoX-Network/claude-code-usage-clock",
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "config_file": {
+      "type": "string",
+      "title": "usage-clock config.json",
+      "description": "The config.json the usage-clock hooks read; its statusline thresholds colour this line, too. Missing file: the defaults.",
+      "default": "~/.claude/hooks/usage-clock/config.json"
+    }
+  }
+}

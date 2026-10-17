@@ -1,0 +1,84 @@
+// The parts of the status line (hooks/statusline.py) for the app, which does not show the statusLine.
+// Same texts and the same thresholds; one difference: the cache clock is an estimate (`cache ~54m`), because
+// the app tells a plugin no prompt_cache expiry, only when the last answer came.
+
+import type { SessionUsage } from 'claude-code'
+
+import type { LineConfig } from './config'
+
+export const CACHE_TTL_MS = 60 * 60_000   // the one-hour cache of a Claude subscription
+const WEEK_STOP_TEXT = '<- weekly limit reached'
+
+export type Color = 'warning' | 'error' | undefined
+// attached: follows the part before it with a space, not with ' | ' (the weekly stop marker)
+export type Part = { text: string; color: Color; attached?: true }
+
+/** Half to even, like '%.0f' in the status line: 74.5 → 74, 75.5 → 76. */
+export function rounded(value: number): number {
+  const down = Math.floor(value)
+  const rest = value - down
+  return rest > 0.5 || (rest === 0.5 && down % 2 !== 0) ? down + 1 : down
+}
+
+function level(value: number, yellow: number, red: number): Color {
+  return value >= red ? 'error' : value >= yellow ? 'warning' : undefined
+}
+
+/** ` ↻19:10` in the given zone (the system's when absent), with the weekday ` ↻Mon 15:00`; '' when past or broken. */
+export function resetText(iso: string | undefined, now: number, withDay: boolean, timeZone?: string): string {
+  const moment = iso === undefined ? NaN : Date.parse(iso)
+  if (!Number.isFinite(moment) || moment <= now) return ''
+  const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone })
+    .format(moment)
+  const day = withDay ? new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone }).format(moment) + ' ' : ''
+  return ` ↻${day}${time}`
+}
+
+export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number | null, now: number,
+                      timeZone?: string): Part[] {
+  const result: Part[] = []
+  const limit = (kind: string) => usage.rateLimits.find(r => r.kind === kind)
+
+  const five = limit('five_hour')
+  if (five !== undefined) {
+    const number = rounded(five.percentUsed)
+    const reset = cfg.showReset ? resetText(five.resetsAt, now, false, timeZone) : ''
+    result.push({ text: `5h ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom) })
+  }
+  const week = limit('seven_day')
+  if (week !== undefined) {
+    const number = rounded(week.percentUsed)
+    // the weekly reset only from yellow on: below that it is days away and only takes room
+    const reset = cfg.showReset && number >= cfg.yellowFrom ? resetText(week.resetsAt, now, true, timeZone) : ''
+    result.push({ text: `week ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom) })
+    if (cfg.weekStopMarker && number >= cfg.startBlockWeek) {
+      result.push({ text: WEEK_STOP_TEXT, color: 'error', attached: true })
+    }
+  }
+
+  const { tokens, window, percent } = usage.context
+  if (window >= 1000) {
+    const size = `${Math.floor(window / 1000)}k`
+    if (tokens === undefined || !(tokens > 0)) {
+      result.push({ text: `ctx –/${size}`, color: undefined })
+    } else {
+      const share = percent === undefined ? '' : ` ${rounded(percent)}%`
+      result.push({
+        text: `ctx ${Math.floor(tokens / 1000)}k/${size}${share}`,
+        color: level(tokens, cfg.contextYellowFromK * 1000, cfg.contextRedFromK * 1000),
+      })
+    }
+  }
+
+  if (lastAnswer !== null) {
+    const minutes = Math.ceil((lastAnswer + CACHE_TTL_MS - now) / 60_000)
+    result.push(minutes <= 0
+      ? { text: 'cache cold', color: 'error' }
+      : { text: `cache ~${minutes}m`, color: minutes < cfg.cacheYellowBelowMin ? 'warning' : undefined })
+  }
+
+  if (usage.cost !== undefined) {
+    result.push({ text: `$${usage.cost.usd.toFixed(2)}`, color: undefined })
+  }
+  return result
+}

@@ -223,6 +223,19 @@ spawn gate now starts no new agent blocks until the window resets at 22:40.
   until the first request.
 - A part whose input is missing is left out, never filled with a guess.
 
+### In the Claude desktop app
+
+The desktop app does not show the `statusLine`. A plugin in [`desktop/`](desktop/README.md) draws the same line
+under its prompt, with the thresholds of your `config.json`:
+
+```
+claude plugin marketplace add inoX-Network/claude-code-usage-clock
+claude plugin install usage-clock-display@usage-clock
+```
+
+Two differences: the app tells a plugin no cache expiry, so the cache clock is an estimate from the last answer
+(`cache ~54m`), and the cost of the session follows at the end. In the terminal the plugin draws nothing.
+
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
 used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
 (mode 0600) and cleaned up after 7 days. The context reporter and the wake-up watcher read that file; without the
