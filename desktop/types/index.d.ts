@@ -16,6 +16,22 @@ export type LineConfig = {
   startBlockWeek: number
 }
 
+export type ReportPeriod = 'day' | 'week' | 'month' | 'year'
+export type ReportView = 'overview' | 'agents' | 'models' | 'cache' | 'tokens' | 'projects'
+
+/** What the pane holds for one period: being read, the reason it failed, or the parsed `usage_report.py --json`. */
+export type ReportSlot =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ok'; report: Record<string, unknown> }
+
+/** The open report pane: the tab chosen in each row, and what was read per period since `/report` was run. */
+export type ReportState = {
+  period: ReportPeriod
+  view: ReportView
+  slots: { [period in ReportPeriod]?: ReportSlot }
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'usage-clock-display': {
@@ -23,6 +39,7 @@ declare module 'claude-code' {
       config: LineConfig
       lastAnswer: number | null
       tick: number
+      report: ReportState
     }
   }
 }
