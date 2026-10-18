@@ -74,7 +74,8 @@ export function registerReport(on: On): void {
   // The answer carries no text and no context: what the pane shows never becomes a transcript row or model input
   on('command.run', { command: 'report' }, async ($, e) => {
     const period = parsePeriod(e.args)
-    const own = await $.session.id().catch(() => null)
+    // The report names a session by the first 8 characters of its transcript name; the session id is the whole UUID
+    const own = await $.session.id().then(id => id.slice(0, 8)).catch(() => null)
     await update($, report, (): ReportState => ({ period, view: 'overview', session: null, own, slots: {} }))
     await $.ui.open({ id: PANE, title: 'Usage report', focus: true, closeOnEscape: true })
     await load($, period)

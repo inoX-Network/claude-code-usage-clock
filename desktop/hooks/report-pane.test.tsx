@@ -215,7 +215,8 @@ for (const surface of SURFACES) {
   })
 
   test(`${surface}: Sessions marks the session the pane was opened from, in the list and in its detail`, async ($, on) => {
-    world(on, { own: 'bbbbbbbb' })
+    // The session id is a whole UUID, the report knows only its first 8 characters
+    world(on, { own: 'bbbbbbbb-1c2d-4e5f-8a9b-0c1d2e3f4a5b' })
     await start($)
     await report($)
     const ui = await mountPane($, surface)
