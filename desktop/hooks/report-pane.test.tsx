@@ -223,7 +223,9 @@ for (const surface of SURFACES) {
     expect(await texts(ui)).toMatch(/  session\s+started/)
     expect((await ui.find({ key: 'session-bbbbbbbb' }))?.text).toMatch(/^▶ blog bbbbbbbb/)
     expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/^  webshop aaaaaaaa/)
-    expect((await ui.find({ type: 'Text', text: '▶ ' }))?.props.color).toBe('claude')
+    // The mark is a piece of its own in the accent colour; the row around it has none
+    const marks = (await ui.findAll({ type: 'Text' })).filter(found => found.text.trim() === '▶')
+    expect(marks.map(found => found.props.color)).toEqual(['claude'])
     await ui.press({ key: 'session-bbbbbbbb' })
     expect(await texts(ui)).toMatch(/blog bbbbbbbb · this session · /)
     await ui.unmount()
