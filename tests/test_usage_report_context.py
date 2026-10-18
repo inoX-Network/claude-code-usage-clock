@@ -344,8 +344,8 @@ def test_the_session_block_shows_total_categories_mcp_memory_skills_and_agents(w
         '    System prompt: 3,200',
         '    MCP tools: 9,000',
         '    Free space: 968,500',
-        '  MCP servers: 2,400 tokens in 2 servers',
-        '    github: 2,000 tokens, 3 tools',
+        '  MCP servers: 2,400 tokens in 2 servers, 0 of them deferred',
+        '    github: 2,000 tokens, 3 tools, 1 deferred',
         '      list_issues: 1,100',
         '      create_issue: 900',
         '      deferred_tool: 0',
@@ -421,6 +421,27 @@ def test_equal_tokens_are_listed_by_name(world):
     put_context(world, data)
     lines = block_of(world.overview('--day', DAY, '--session', 'aaaaaaaa'))
     assert [line.strip() for line in lines if line.startswith('      ')] == ['a: 5', 'b: 5', 'c: 5']
+
+
+def test_deferred_categories_and_tools_are_marked_as_not_in_the_context(world):
+    one_session(world)
+    data = context_data()
+    data['categories'] = [{'name': 'System tools', 'tokens': 16_000, 'kind': 'used'},
+                          {'name': 'MCP tools (deferred)', 'tokens': 29_000, 'kind': 'deferred'}]
+    data['mcp_tools'] = [{'server': 'blender', 'name': 'look', 'tokens': 1_000, 'loaded': False},
+                         {'server': 'blender', 'name': 'run', 'tokens': 300, 'loaded': False},
+                         {'server': 'docs', 'name': 'query', 'tokens': 400, 'loaded': None}]
+    put_context(world, data)
+    lines = [line.rstrip() for line in block_of(world.overview('--day', DAY, '--session', 'aaaaaaaa'))]
+    assert '    System tools: 16,000' in lines
+    assert '    MCP tools (deferred): 29,000 (deferred, not in the context)' in lines
+    assert '  MCP servers: 1,700 tokens in 2 servers, 1,300 of them deferred' in lines
+    assert '    blender: 1,300 tokens, 2 tools, deferred' in lines
+    assert '    docs: 400 tokens, 1 tool' in lines                       # loaded unknown is not called deferred
+    data['mcp_tools'] = data['mcp_tools'][:2]
+    put_context(world, data)
+    lines = [line.rstrip() for line in block_of(world.overview('--day', DAY, '--session', 'aaaaaaaa'))]
+    assert '  MCP servers: 1,300 tokens in 1 server (deferred, not in the context)' in lines
 
 
 def test_servers_are_listed_by_tokens_then_name(world):

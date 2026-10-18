@@ -25,12 +25,15 @@ function world(on: On, options: {
   isInstalled?: boolean
   run?: (argv: readonly string[], count: number) => Outcome | Promise<Outcome>
   denyRun?: string
+  own?: string
 } = {}) {
   const seen = { runs: [] as Run[], opened: [] as unknown[], registered: [] as unknown[] }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }))
   on('session.start', ($, e) => e)
+  const own = options.own
+  if (own !== undefined) on('session.id', () => ({ value: own }))
   on('fs.read', () => ({ deny: 'ENOENT' }))
   on('fs.exists', () => ({ value: options.isInstalled ?? true }))
   on('settings.read', () => ({
@@ -208,6 +211,23 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'period-month' })
     expect(await ui.find({ key: 'back' })).toBeUndefined()
     expect(seen.runs).toHaveLength(2)
+    await ui.unmount()
+  })
+
+  test(`${surface}: Sessions marks the session the pane was opened from, in the list and in its detail`, async ($, on) => {
+    world(on, { own: 'bbbbbbbb' })
+    await start($)
+    await report($)
+    const ui = await mountPane($, surface)
+    await ui.press({ key: 'view-sessions' })
+    expect(await texts(ui)).toMatch(/  session\s+started/)
+    expect((await ui.find({ key: 'session-bbbbbbbb' }))?.text).toMatch(/^▶ blog bbbbbbbb/)
+    expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/^  webshop aaaaaaaa/)
+    // The mark is a piece of its own in the accent colour; the row around it has none
+    const marks = (await ui.findAll({ type: 'Text' })).filter(found => found.text.trim() === '▶')
+    expect(marks.map(found => found.props.color)).toEqual(['claude'])
+    await ui.press({ key: 'session-bbbbbbbb' })
+    expect(await texts(ui)).toMatch(/blog bbbbbbbb · this session · /)
     await ui.unmount()
   })
 

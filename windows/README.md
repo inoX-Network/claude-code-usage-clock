@@ -13,7 +13,8 @@ calls `windows/cli/_win.py` (through `hooks/_plat.py`); it does not spread Windo
 ![The status line in the Windows terminal: 5h 24 %, week 77 % in red with the weekly stop marker, ctx 460k in yellow, cache 60m](../docs/images/statusline-windows.png)
 
 The status line in the Windows terminal, the same as on Linux: the week has passed the start threshold of the spawn
-gate (`<- weekly limit reached`), the context is past 300k.
+gate (the picture still shows the old marker `<- weekly limit reached`; it now reads `<- week gate: agents warn`, `ask`
+or `blocked`), the context is past 300k.
 
 ## What you need
 

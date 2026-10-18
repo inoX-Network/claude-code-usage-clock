@@ -1,9 +1,9 @@
 // The thresholds of the status line, read from the usage-clock config.json, so the app and the terminal
 // colour at the same numbers. The defaults are those of hooks/_config.py (config.example.json).
 
-import type { LineConfig } from '../types/index'
+import type { LineConfig, WeekAction } from '../types/index'
 
-export type { LineConfig }
+export type { LineConfig, WeekAction }
 
 export const DEFAULTS: LineConfig = {
   yellowFrom: 50,
@@ -14,7 +14,10 @@ export const DEFAULTS: LineConfig = {
   contextRedFromK: 500,
   cacheYellowBelowMin: 5,
   startBlockWeek: 75,
+  weekAction: 'warn',
 }
+
+const WEEK_ACTIONS: readonly WeekAction[] = ['warn', 'ask', 'deny']
 
 // config.json key → field, per section
 const STATUSLINE: Record<string, keyof LineConfig> = {
@@ -51,6 +54,9 @@ export function parseConfig(text: string | undefined): LineConfig {
       }
     }
   }
+  // A string outside the choices keeps the default, as _CHOICES in _config.py
+  const action = section(root.thresholds).week_action
+  if (WEEK_ACTIONS.includes(action as WeekAction)) result.weekAction = action as WeekAction
   return result
 }
 

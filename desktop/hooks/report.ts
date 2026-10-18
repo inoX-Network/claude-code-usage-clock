@@ -28,8 +28,8 @@ export type Period = ReportPeriod
 export type View = ReportView
 export type Report = Record<string, unknown>
 
-export type Tone = 'warning' | 'error'
-/** A piece of a row with a colour of its own: a percentage of a limit past a threshold. */
+export type Tone = 'warning' | 'error' | 'claude'
+/** A piece of a row with a colour of its own: a percentage of a limit past a threshold, the mark of the own session. */
 export type Part = { text: string; tone?: Tone }
 /** One row of a view: plain text for a monospaced Text, in a style; `parts`, when there, are the same text in pieces. */
 export type Line = { text: string; style?: 'heading' | 'dim'; parts?: Part[] }
@@ -334,20 +334,30 @@ function projects(report: Report, columns: number): Line[] {
 
 const SESSION_HEAD = ['session', 'started', 'USD', '~week pts', 'requests']
 const TOP = 10
+const OWN_MARK = '▶ '
 
 /** The list of the Sessions view: the head, then one row per session of `clis` (highest cost first, as the report
- *  orders them), each with the id the pane selects it by. */
-export function sessionList(report: Report, columns: number): { head: Line; rows: { id: string; line: Line }[] } {
+ *  orders them), each with the id the pane selects it by. The session the pane was opened from (`own`) is marked;
+ *  when it is in the list, every row moves two cells right so the columns stay aligned. */
+export function sessionList(report: Report, columns: number, own: string | null = null): { head: Line; rows: { id: string; line: Line }[] } {
   const clis = list(report.clis).map(rec).filter(cli => str(cli.id) !== null)
+  const isMarked = own !== null && clis.some(cli => str(cli.id) === own)
+  const indent = (cli: Record<string, unknown> | null) => (!isMarked ? '' : cli !== null && str(cli.id) === own ? OWN_MARK : '  ')
   const cells = clis.map(cli => [
-    `${str(cli.label) ?? '?'} ${str(cli.id)}`,
+    `${indent(cli)}${str(cli.label) ?? '?'} ${str(cli.id)}`,
     str(cli.start) === null ? '-' : localTime(str(cli.start) as string),
     usd(num(cli.cost_usd)),
     pts(num(rec(cli.estimated_share).week)),
     whole(num(cli.requests)),
   ])
-  const [head, ...lines] = table(SESSION_HEAD, cells, columns)
-  return { head: head as Line, rows: lines.map((line, i) => ({ id: str(clis[i]?.id) as string, line })) }
+  const [head, ...lines] = table([`${indent(null)}${SESSION_HEAD[0]}`, ...SESSION_HEAD.slice(1)], cells, columns)
+  return {
+    head: head as Line,
+    rows: lines.map((line, i) => {
+      const id = str(clis[i]?.id) as string
+      return { id, line: id === own ? pieces([{ text: OWN_MARK, tone: 'claude' }, { text: line.text.slice(OWN_MARK.length) }]) : line }
+    }),
+  }
 }
 
 /** A table of names and tokens, the largest first, cut to the `TOP` largest with a line for the rest. */
@@ -369,18 +379,23 @@ function contextLines(context: Record<string, unknown>, columns: number): Line[]
     style: 'heading',
   }]
   const categories = list(context.categories).map(rec).filter(row => str(row.kind) !== 'free' && str(row.kind) !== 'buffer')
-  if (categories.length > 0) {
-    out.push(BLANK, ...tokenTable('category', categories.map(row => [str(row.name) ?? '?', num(row.tokens) ?? 0]), columns))
-  }
+  const named = (rows: Record<string, unknown>[]): [string, number][] => rows.map(row => [str(row.name) ?? '?', num(row.tokens) ?? 0])
+  // Deferred tools are listed with their size but not loaded: their tokens are not part of the total above
+  const used = categories.filter(row => str(row.kind) !== 'deferred')
+  const deferred = categories.filter(row => str(row.kind) === 'deferred')
+  if (used.length > 0) out.push(BLANK, ...tokenTable('category', named(used), columns))
+  if (deferred.length > 0) out.push(BLANK, ...tokenTable('deferred, not in the context', named(deferred), columns))
   const tools = list(context.mcp_tools).map(rec)
   if (tools.length > 0) {
-    const servers = new Map<string, { tools: number; tokens: number }>()
+    const servers = new Map<string, { tools: number; deferred: number; tokens: number }>()
     for (const tool of tools) {
       const name = str(tool.server) ?? '?'
-      const sum = servers.get(name) ?? { tools: 0, tokens: 0 }
-      servers.set(name, { tools: sum.tools + 1, tokens: sum.tokens + (num(tool.tokens) ?? 0) })
+      const sum = servers.get(name) ?? { tools: 0, deferred: 0, tokens: 0 }
+      servers.set(name, { tools: sum.tools + 1, deferred: sum.deferred + (tool.loaded === false ? 1 : 0), tokens: sum.tokens + (num(tool.tokens) ?? 0) })
     }
-    out.push(BLANK, ...tokenTable('MCP server', [...servers].map(([name, sum]) => [`${name} (${sum.tools} tools)`, sum.tokens]), columns))
+    const label = (name: string, sum: { tools: number; deferred: number }) =>
+      `${name} (${sum.tools} tool${sum.tools === 1 ? '' : 's'}${sum.deferred === 0 ? '' : sum.deferred === sum.tools ? ', deferred' : `, ${sum.deferred} deferred`})`
+    out.push(BLANK, ...tokenTable('MCP server', [...servers].map(([name, sum]) => [label(name, sum), sum.tokens]), columns))
     out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => [`${str(tool.server) ?? '?'} ${str(tool.name) ?? '?'}`, num(tool.tokens) ?? 0]), columns))
   }
   const memory = list(context.memory_files).map(rec)
@@ -400,16 +415,17 @@ function contextLines(context: Record<string, unknown>, columns: number): Line[]
   return out
 }
 
-/** The detail of one session of `clis`: cost and points, tokens, models, subagents and its recorded context. */
-export function sessionDetail(report: Report, id: string, columns: number): Line[] {
+/** The detail of one session of `clis`: cost and points, tokens, models, subagents and its recorded context. `own` is
+ *  the session the pane was opened from. */
+export function sessionDetail(report: Report, id: string, columns: number, own: string | null = null): Line[] {
   const cli = list(report.clis).map(rec).find(entry => str(entry.id) === id)
   if (cli === undefined) return none('This session is not in the report any more. Press q for the list.')
   const share = rec(cli.estimated_share)
   const start = str(cli.start)
   const out: Line[] = [
     {
-      text: `${str(cli.label) ?? '?'} ${id} · ${start === null ? '-' : localTime(start)} · ${usd(num(cli.cost_usd))} USD`
-        + ` · ~${pts(num(share.week))} week pts, ~${pts(num(share.five))} 5h pts`,
+      text: `${str(cli.label) ?? '?'} ${id}${id === own ? ' · this session' : ''} · ${start === null ? '-' : localTime(start)}`
+        + ` · ${usd(num(cli.cost_usd))} USD · ~${pts(num(share.week))} week pts, ~${pts(num(share.five))} 5h pts`,
       style: 'heading',
     },
     {

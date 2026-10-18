@@ -1659,6 +1659,9 @@ def _top_lines(rows: list[tuple[str, int]], indent: str) -> list[str]:
     return lines
 
 
+DEFERRED = ' (deferred, not in the context)'
+
+
 def _context_lines(cli: dict) -> list[str]:
     """The block of --session: how the context of the session was made up after its first answer."""
     context = cli['context']
@@ -1672,17 +1675,24 @@ def _context_lines(cli: dict) -> list[str]:
              '  ' + ', '.join([window] + labels)]
     if context['categories']:
         lines.append('  Categories')
-        lines += [f'    {row["name"]}: {row["tokens"]:,}' for row in context['categories']]
+        # Deferred tools are listed with their size but not loaded: their tokens are not part of the total
+        lines += [f'    {row["name"]}: {row["tokens"]:,}' + (DEFERRED if row['kind'] == 'deferred' else '')
+                  for row in context['categories']]
     servers: dict[str, list[dict]] = {}
     for tool in context['mcp_tools']:
         servers.setdefault(tool['server'], []).append(tool)
     if servers:
         total = sum(tool['tokens'] for tool in context['mcp_tools'])
-        lines.append(f'  MCP servers: {total:,} tokens in {_plural(len(servers), "server")}')
+        waiting = [tool for tool in context['mcp_tools'] if tool['loaded'] is False]
+        lines.append(f'  MCP servers: {total:,} tokens in {_plural(len(servers), "server")}'
+                     + ('' if not waiting else DEFERRED if len(waiting) == len(context['mcp_tools'])
+                        else f', {sum(tool["tokens"] for tool in waiting):,} of them deferred'))
     else:
         lines.append('  MCP servers: none')
     for server, tools in sorted(servers.items(), key=lambda item: (-sum(t['tokens'] for t in item[1]), item[0])):
-        lines.append(f'    {server}: {sum(t["tokens"] for t in tools):,} tokens, {_plural(len(tools), "tool")}')
+        waiting = sum(1 for t in tools if t['loaded'] is False)
+        lines.append(f'    {server}: {sum(t["tokens"] for t in tools):,} tokens, {_plural(len(tools), "tool")}'
+                     + ('' if not waiting else ', deferred' if waiting == len(tools) else f', {waiting} deferred'))
         lines += _top_lines([(t['name'], t['tokens']) for t in tools], '      ')
     memory = context['memory_files']
     lines.append(f'  Memory files: {sum(f["tokens"] for f in memory):,} tokens in {_plural(len(memory), "file")}'

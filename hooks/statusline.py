@@ -36,7 +36,13 @@ GRAY = '\033[38;5;245m'
 YELLOW = '\033[38;5;179m'
 RED = '\033[38;5;167m'
 RESET = '\033[0m'
-WEEK_STOP_TEXT = '<- weekly limit reached'
+# What the spawn gate does from start_block_week on, per thresholds.week_action: the marker names the gate, not
+# the weekly limit, which is still ahead
+WEEK_MARKERS = {
+    'warn': '<- week gate: agents warn',
+    'ask': '<- week gate: agents ask',
+    'deny': '<- week gate: agents blocked',
+}
 WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')   # fixed English names, independent of the locale
 
 
@@ -161,7 +167,7 @@ def render(model: str, five: float | None, week: float | None, cfg: dict, status
     line += _part('week', week, line_cfg['yellow_from'], line_cfg['red_from'], _reset_text(week_reset, now, True))
     # The limit from which no new agents start: visible, not only agreed on.
     if line_cfg['week_stop_marker'] and week_rounded is not None and week_rounded >= limits['start_block_week']:
-        line += f' {RED}{WEEK_STOP_TEXT}{RESET}'
+        line += f' {RED}{WEEK_MARKERS[limits["week_action"]]}{RESET}'
     if status_input is not None:
         line += _context_part(_context_numbers(status_input), line_cfg)
         line += _cache_part(status_input, line_cfg, now)

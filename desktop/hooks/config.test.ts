@@ -19,7 +19,7 @@ test('no file or broken JSON: the defaults of hooks/_config.py', () => {
   expect(parseConfig('[]')).toEqual(DEFAULTS)
   expect(DEFAULTS).toEqual({
     yellowFrom: 50, redFrom: 75, weekStopMarker: true, showReset: true,
-    contextYellowFromK: 300, contextRedFromK: 500, cacheYellowBelowMin: 5, startBlockWeek: 75,
+    contextYellowFromK: 300, contextRedFromK: 500, cacheYellowBelowMin: 5, startBlockWeek: 75, weekAction: 'warn',
   })
 })
 
@@ -29,12 +29,12 @@ test('every valid key overrides its default', () => {
       yellow_from: 70, red_from: 85, week_stop_marker: false, show_reset: false,
       context_yellow_from_k: 200, context_red_from_k: 400, cache_yellow_below_min: 10,
     },
-    thresholds: { start_block_week: 90, warn: 1 },
+    thresholds: { start_block_week: 90, warn: 1, week_action: 'deny' },
     wake_watcher: { from_k: 300 },
   })
   expect(parseConfig(text)).toEqual({
     yellowFrom: 70, redFrom: 85, weekStopMarker: false, showReset: false,
-    contextYellowFromK: 200, contextRedFromK: 400, cacheYellowBelowMin: 10, startBlockWeek: 90,
+    contextYellowFromK: 200, contextRedFromK: 400, cacheYellowBelowMin: 10, startBlockWeek: 90, weekAction: 'deny',
   })
 })
 
@@ -44,6 +44,17 @@ test('a key of the wrong type keeps its default, the others still count', () => 
   expect(parseConfig(text)).toEqual({ ...DEFAULTS, redFrom: 90 })
   expect(parseConfig(JSON.stringify({ statusline: 'none', thresholds: [] }))).toEqual(DEFAULTS)
   expect(parseConfig('{"statusline": {"red_from": 1e999, "yellow_from": 60}}')).toEqual({ ...DEFAULTS, yellowFrom: 60 })
+})
+
+test('week_action: each choice of _config.py counts, anything else keeps warn', () => {
+  const action = (value: unknown) => parseConfig(JSON.stringify({ thresholds: { week_action: value } })).weekAction
+  expect(action('warn')).toBe('warn')
+  expect(action('ask')).toBe('ask')
+  expect(action('deny')).toBe('deny')
+  expect(action('later')).toBe('warn')
+  expect(action('ASK')).toBe('warn')
+  expect(action(1)).toBe('warn')
+  expect(action(null)).toBe('warn')
 })
 
 test('the home directory replaces a leading ~ only', () => {

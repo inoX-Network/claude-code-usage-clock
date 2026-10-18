@@ -4,13 +4,18 @@
 
 import type { SessionUsage } from 'claude-code'
 
-import type { LineConfig } from './config'
+import type { LineConfig, WeekAction } from './config'
 
 export const CACHE_TTL_MS = 60 * 60_000   // the one-hour cache of a Claude subscription
-const WEEK_STOP_TEXT = '<- weekly limit reached'
+// What the spawn gate does from startBlockWeek on, as WEEK_MARKERS in hooks/statusline.py
+const WEEK_MARKERS: Record<WeekAction, string> = {
+  warn: '<- week gate: agents warn',
+  ask: '<- week gate: agents ask',
+  deny: '<- week gate: agents blocked',
+}
 
 export type Color = 'warning' | 'error' | undefined
-// attached: follows the part before it with a space, not with ' | ' (the weekly stop marker)
+// attached: follows the part before it with a space, not with ' | ' (the weekly gate marker)
 export type Part = { text: string; color: Color; attached?: true }
 
 /** Half to even, like '%.0f' in the status line: 74.5 → 74, 75.5 → 76. */
@@ -52,7 +57,7 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
     const reset = cfg.showReset && number >= cfg.yellowFrom ? resetText(week.resetsAt, now, true, timeZone) : ''
     result.push({ text: `week ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom) })
     if (cfg.weekStopMarker && number >= cfg.startBlockWeek) {
-      result.push({ text: WEEK_STOP_TEXT, color: 'error', attached: true })
+      result.push({ text: WEEK_MARKERS[cfg.weekAction], color: 'error', attached: true })
     }
   }
 

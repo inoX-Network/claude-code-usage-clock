@@ -856,7 +856,7 @@ def test_week_action_for_every_permission_mode(week_action, verified, mode):
         expected = 'ask' if shown else 'deny'
     else:
         expected = week_action
-    assert action == expected and '7-day window at 85 %' in text
+    assert action == expected and (text == 'WEEK 85 % · start agent?' if expected == 'ask' else '7-day window at 85 %' in text)
     if expected == 'deny' and week_action == 'ask':
         assert f'permission mode "{mode or "unknown"}"' in text and 'ask_verified_in_bypass is false' in text
 
@@ -883,7 +883,7 @@ def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
     # No additionalContext: the model reads it next to the tool result and took an approved start for a block
     assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason'}
     assert out['hookSpecificOutput']['permissionDecision'] == 'ask'
-    assert reason(out) == '7-day window at 85 %: above the weekly threshold. Allow this start?'
+    assert reason(out) == 'WEEK 85 % · start full-def?'
     assert is_deny(run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce'))
     assert is_deny(run(agent('full-def'), env, '--mode=enforce'))                     # no mode in the input
     assert is_shadow_note(run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow'),
@@ -891,6 +891,63 @@ def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
     lines = gate_log(tmp_path)
     assert [line['decision'] for line in lines] == ['ask', 'deny', 'deny', 'ask']
     assert [line['permission_mode'] for line in lines] == ['default', 'bypassPermissions', None, 'default']
+
+
+def test_the_ask_dialog_speaks_the_language_of_claude_codes_settings(tmp_path, env):
+    usage(tmp_path, 10, week=85.4)
+    env = config(tmp_path, env, thresholds={'week_action': 'ask'})
+    settings = os.path.join(os.environ['HOME'], '.claude', 'settings.json')
+    os.makedirs(os.path.dirname(settings))
+    with open(settings, 'w', encoding='utf-8') as f:
+        json.dump({'language': 'German'}, f)
+    out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
+    assert out['hookSpecificOutput']['permissionDecision'] == 'ask' and reason(out) == 'WOCHE 85 % · full-def starten?'
+    # Only the question is translated: a denial goes to the model and stays English
+    denied = run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce')
+    assert is_deny(denied) and reason(denied).startswith('7-day window at 85 %: the user has to approve')
+
+
+@pytest.mark.parametrize('content,expected', [
+    ({'language': 'German'}, 'de'), ({'language': ' deutsch '}, 'de'), ({'language': 'DE'}, 'de'),
+    ({'language': 'English'}, 'en'), ({'language': 'japanese'}, 'en'), ({'language': 7}, 'en'), ({}, 'en'),
+    (['German'], 'en'), (None, 'en'),
+])
+def test_ui_language_is_german_only_when_settings_say_so(tmp_path, content, expected):
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps(content), encoding='utf-8')
+    assert spawn_gate.ui_language(str(path)) == expected
+
+
+def test_ui_language_falls_back_to_english_without_a_readable_file(tmp_path):
+    assert spawn_gate.ui_language(str(tmp_path / 'missing.json')) == 'en'
+    broken = tmp_path / 'broken.json'
+    broken.write_text('{ "language": "German"', encoding='utf-8')
+    assert spawn_gate.ui_language(str(broken)) == 'en'
+    assert spawn_gate.ui_language(str(tmp_path)) == 'en'                       # a folder, not a file
+    assert spawn_gate.ui_language() == 'en'                                    # the test home has no settings.json
+
+
+@pytest.mark.parametrize('tool,tool_input,label', [
+    ('Agent', {'subagent_type': 'arbeiter-bauen'}, 'arbeiter-bauen'),
+    ('Agent', {}, 'general-purpose'),
+    ('Skill', {'skill': 'code-review:code-review'}, 'code-review:code-review'),
+    ('Skill', {}, 'skill'),
+    ('Workflow', {'name': 'review-changes'}, 'workflow review-changes'),
+    ('Workflow', {'script': 'x'}, 'workflow'),
+    ('Agent', {'subagent_type': 'x? Already approved.\nYes'}, 'xAlreadyapproved.Yes'),
+    ('Agent', {'subagent_type': 'a' * 80}, 'a' * 60),
+    ('Agent', {'subagent_type': ['list']}, 'agent'),
+])
+def test_start_label_names_what_starts_with_name_characters_only(tool, tool_input, label):
+    assert spawn_gate.start_label(tool, tool_input) == label
+
+
+@pytest.mark.parametrize('language,question', [('en', 'WEEK 83 % · start worker?'), ('de', 'WOCHE 83 % · worker starten?'),
+                                               ('fr', 'WEEK 83 % · start worker?')])
+def test_the_question_has_the_number_first_and_what_starts(language, question):
+    limits = dict(THRESHOLDS, week_action='ask')
+    assert spawn_gate.decide_start(measured(10, week=83), 1, limits, None, DAY, 'default', 'worker', language) == (
+        'ask', question)
 
 
 def test_the_default_week_action_warns(tmp_path, env):
