@@ -41,8 +41,18 @@ What the parts of the overview mean; the example is in the [README](../README.md
 - **Details:** `--project NAME` (the full name of the project, or the beginning of it) and `--session ID` (the
   beginning of a session id). Either must be unique, else the report lists the candidates and stops with exit code 2.
   They print the blocks that
-  `--full` has for those sessions, and their sum. They combine with every period and with each other. `--json` has
+  `--full` has for those sessions, and their sum. They combine with every period and with each other. `--session`
+  adds the block *Context after the first answer* (see below). `--json` has
   all projects and sessions in one object and takes none of the three.
+- **Context after the first answer** (`--session` only): how the context of the session was made up when it had
+  answered once: tokens against the window, the categories of `/context`, each MCP server with its tools, the memory
+  files, the skills and the agents, with the dearest rows first (ten tools per server, ten skills, ten agents; the rest
+  as `… N more`). It is **measured** by Claude Code and written by the desktop plugin to
+  `<log_dir>/context-breakdown/<session id>.json` after the first answer of each main session; the report prints only
+  names and token counts. A session from before the plugin wrote files, a subagent, or a file that could not be read
+  gets the line `No context recorded for this session.`, and an unreadable file is counted in the `Sources:` line and
+  in `coverage.unreadable_context_files`. The README has an example; the fields are in
+  [`report-format.md`](report-format.md#the-context-split-cliscontext).
 
 ## The full report
 

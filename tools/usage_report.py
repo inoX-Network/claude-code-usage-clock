@@ -18,7 +18,8 @@ sessions and their sum. --json prints the same figures as a stable JSON object, 
 docs/report-format.md). --archive writes every finished day that is not in <log_dir>/usage-days.jsonl yet and prints
 nothing: Claude Code deletes transcripts after about 30 days, the archive keeps the day figures (run it daily).
 A project is the name of the folder a session ran in (the report knows no paths: folders of the same name
-in different places are one project).
+in different places are one project). --session also shows how the context of that session was made up after its first
+answer (the file the desktop plugin writes to <log_dir>/context-breakdown/): names and token counts, never content.
 
 The cost weight is what the tokens would cost at API prices (tools/prices.json); a model without a price is shown
 with its tokens as "no price", never estimated. The subscription rise per CLI is an ESTIMATE (marked ~): the rise of
@@ -56,6 +57,11 @@ CLAUDE_DIR = '~/.claude'
 HISTORY_FILE = 'usage-history.jsonl'
 ARCHIVE_FILE = 'usage-days.jsonl'
 ARCHIVE_VERSION = 1
+CONTEXT_DIR = 'context-breakdown'   # in the log folder: one <session id>.json per session, written by the desktop plugin
+CONTEXT_VERSION = 1
+MAX_CONTEXT_BYTES = 4_000_000       # a larger context file is not read
+CONTEXT_TEXT_CHARS = 200            # of a name or path in a context file only this much is kept
+MAX_LISTED = 10                     # tools, skills and agents with a row in the context block of --session
 
 KINDS = ('input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output')   # also the order of the prices
 METRICS = ('five', 'week')
@@ -103,6 +109,7 @@ NUMBER = re.compile(r'(?<![\w.-])\d+(?:\.\d+)?(?![\w.-])')      # a number of it
 QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # names and values a gate quotes in its reason
 REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
+CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
 YEAR_TEXT = re.compile(r'[0-9]{4}')
 
@@ -550,6 +557,98 @@ def read_archive(log_dir: str) -> tuple[dict[str, dict], int]:
             continue
         days.setdefault(day, stats)
     return days, broken
+
+
+# --- The context split of a session --------------------------------------------------------------------------------
+# The desktop plugin writes <log_dir>/context-breakdown/<session id>.json after the first answer of a session: how the
+# context was made up (the split /context shows). Only names and numbers are taken over; a field the format does not
+# name is dropped, a file that does not fit is counted and left out.
+
+CATEGORY_FIELDS = (('name', 'text'), ('tokens', 'count'), ('kind', 'label'))
+MEMORY_FIELDS = (('path', 'text'), ('type', 'label'), ('tokens', 'count'))
+TOOL_FIELDS = (('server', 'text'), ('name', 'text'), ('tokens', 'count'), ('loaded', 'flag'))
+SKILL_FIELDS = (('name', 'text'), ('tokens', 'count'))
+AGENT_FIELDS = (('type', 'text'), ('source', 'label'), ('tokens', 'count'))
+
+
+def _context_value(value, kind: str):
+    """A text (made harmless and cut), a count, or for a label / flag also None; ValueError for anything else."""
+    if value is None and kind in ('label', 'flag'):
+        return None
+    if kind == 'count':
+        if not _is_number(value) or not 0 <= value <= MAX_COUNT:
+            raise ValueError(kind)
+        return int(value)
+    if kind == 'flag':
+        if not isinstance(value, bool):
+            raise ValueError(kind)
+        return value
+    if not isinstance(value, str):
+        raise ValueError(kind)
+    return CONTROL_CHARS.sub('?', value)[:CONTEXT_TEXT_CHARS]
+
+
+def _context_row(row, fields: tuple) -> dict:
+    if not isinstance(row, dict):
+        raise ValueError('row')
+    return {name: _context_value(row.get(name), kind) for name, kind in fields}
+
+
+def _context_rows(rows, fields: tuple) -> list[dict]:
+    if not isinstance(rows, list):
+        raise ValueError('rows')
+    return [_context_row(row, fields) for row in rows]
+
+
+def parse_context(data, session: str) -> dict:
+    """The context of `session` from its file: only the fields of the format, as in the file but without `session_id`.
+    Raises ValueError for a file of another version or session or one that lacks a required field."""
+    if (not isinstance(data, dict) or type(data.get('schema_version')) is not int
+            or data['schema_version'] != CONTEXT_VERSION or data.get('session_id') != session):
+        raise ValueError('shape')
+    skills = data.get('skills')
+    if not isinstance(skills, dict):
+        raise ValueError('skills')
+    return {'schema_version': CONTEXT_VERSION, 'at': _context_value(data.get('at'), 'text'),
+            'cwd': _context_value(data.get('cwd'), 'label'), 'model': _context_value(data.get('model'), 'label'),
+            'detail': _context_value(data.get('detail'), 'label'),
+            'total_tokens': _context_value(data.get('total_tokens'), 'count'),
+            'max_tokens': _context_value(data.get('max_tokens'), 'count'),
+            'categories': _context_rows(data.get('categories'), CATEGORY_FIELDS),
+            'memory_files': _context_rows(data.get('memory_files'), MEMORY_FIELDS),
+            'mcp_tools': _context_rows(data.get('mcp_tools'), TOOL_FIELDS),
+            'skills': {'tokens': _context_value(skills.get('tokens'), 'count'),
+                       'included': _context_value(skills.get('included'), 'count'),
+                       'total': _context_value(skills.get('total'), 'count'),
+                       'items': _context_rows(skills.get('items'), SKILL_FIELDS)},
+            'agents': _context_rows(data.get('agents'), AGENT_FIELDS)}
+
+
+def read_contexts(log_dir: str, wanted: set[str]) -> tuple[dict[str, dict], int]:
+    """({CLI id: context}, unreadable files). Only the files of the CLIs in `wanted` (the first 8 characters of a session
+    id, as `clis[].id`) are read; of several files for one CLI the first by name counts. A file that cannot be read or
+    does not fit the format is counted, never an error."""
+    folder = os.path.join(log_dir, CONTEXT_DIR)
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return {}, 0
+    found, broken = {}, 0
+    for name in names:
+        session = name[:-len('.json')]
+        if not name.endswith('.json') or session[:8] not in wanted:
+            continue
+        try:
+            with open(os.path.join(folder, name), 'rb') as f:
+                raw = f.read(MAX_CONTEXT_BYTES + 1)
+            if len(raw) > MAX_CONTEXT_BYTES:
+                raise ValueError('size')
+            context = parse_context(json.loads(raw.decode('utf-8')), session)
+        except (OSError, ValueError, RecursionError):
+            broken += 1
+            continue
+        found.setdefault(session[:8], context)
+    return found, broken
 
 
 # --- Figures of a period, mergeable ---------------------------------------------------------------------------------------
@@ -1204,10 +1303,13 @@ def _overview_startup(startup: dict) -> dict | None:
             'subagent_type_median_tokens': {'min': min(medians), 'max': max(medians)} if medians else None}
 
 
-def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float, estimate: dict | None = None) -> dict:
+def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float, estimate: dict | None = None,
+                 contexts: dict | None = None) -> dict:
     """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable; `estimate`
-    the estimate of the fixed start (see `estimate_start`), if one was made."""
+    the estimate of the fixed start (see `estimate_start`), if one was made; `contexts` the context split by CLI id
+    (see `read_contexts`)."""
     abo = stats['abo']
+    contexts = contexts or {}
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
                for w in abo['five_windows']]
     subagents = {'requests': stats['sub']['requests'], 'cost_usd': stats['sub']['cost'],
@@ -1227,7 +1329,7 @@ def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: floa
                   'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
                   'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
         'startup': _start_report(stats['starts'], estimate),
-        'clis': [_cli_report(ident, cli) for ident, cli in _by_cost(stats['clis'])],
+        'clis': [{**_cli_report(ident, cli), 'context': contexts.get(ident)} for ident, cli in _by_cost(stats['clis'])],
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
         'guards': stats['guards'],
@@ -1541,6 +1643,61 @@ def render_overview(report: dict) -> str:
     return '\n\n'.join('\n'.join(block) for block in blocks)
 
 
+def _home_short(path: str) -> str:
+    """`path` with the home folder written `~`."""
+    home = os.path.expanduser('~').rstrip('/\\')
+    return '~' + path[len(home):] if home and (path == home or path.startswith((home + '/', home + '\\'))) else path
+
+
+def _top_lines(rows: list[tuple[str, int]], indent: str) -> list[str]:
+    """The MAX_LISTED dearest rows (name, tokens), dearest first (equal tokens by name), then how many are left out."""
+    rows = sorted(rows, key=lambda row: (-row[1], row[0]))
+    lines = [f'{indent}{name}: {tokens:,}' for name, tokens in rows[:MAX_LISTED]]
+    if len(rows) > MAX_LISTED:
+        lines.append(f'{indent}… {len(rows) - MAX_LISTED} more')
+    return lines
+
+
+def _context_lines(cli: dict) -> list[str]:
+    """The block of --session: how the context of the session was made up after its first answer."""
+    context = cli['context']
+    if context is None:
+        return ['No context recorded for this session.']
+    window = f'{context["total_tokens"]:,} of {context["max_tokens"]:,} tokens'
+    if context['max_tokens']:
+        window += f' ({100 * context["total_tokens"] / context["max_tokens"]:.1f} %)'
+    labels = [f'{name} {context[name]}' for name in ('model', 'detail') if context[name]]
+    lines = [f'Context after the first answer (session {cli["id"]}, {cli["label"]}, measured {context["at"]})',
+             '  ' + ', '.join([window] + labels)]
+    if context['categories']:
+        lines.append('  Categories')
+        lines += [f'    {row["name"]}: {row["tokens"]:,}' for row in context['categories']]
+    servers: dict[str, list[dict]] = {}
+    for tool in context['mcp_tools']:
+        servers.setdefault(tool['server'], []).append(tool)
+    if servers:
+        total = sum(tool['tokens'] for tool in context['mcp_tools'])
+        lines.append(f'  MCP servers: {total:,} tokens in {_plural(len(servers), "server")}')
+    else:
+        lines.append('  MCP servers: none')
+    for server, tools in sorted(servers.items(), key=lambda item: (-sum(t['tokens'] for t in item[1]), item[0])):
+        lines.append(f'    {server}: {sum(t["tokens"] for t in tools):,} tokens, {_plural(len(tools), "tool")}')
+        lines += _top_lines([(t['name'], t['tokens']) for t in tools], '      ')
+    memory = context['memory_files']
+    lines.append(f'  Memory files: {sum(f["tokens"] for f in memory):,} tokens in {_plural(len(memory), "file")}'
+                 if memory else '  Memory files: none')
+    lines += _top_lines([(_home_short(f['path']) + (f' ({f["type"]})' if f['type'] else ''), f['tokens'])
+                         for f in memory], '    ')
+    skills = context['skills']
+    lines.append(f'  Skills: {skills["tokens"]:,} tokens, {skills["included"]} of {skills["total"]} included')
+    lines += _top_lines([(item['name'], item['tokens']) for item in skills['items']], '    ')
+    agents = context['agents']
+    lines.append(f'  Agents: {sum(a["tokens"] for a in agents):,} tokens in {_plural(len(agents), "agent")}'
+                 if agents else '  Agents: none')
+    lines += _top_lines([(a['type'] + (f' ({a["source"]})' if a['source'] else ''), a['tokens']) for a in agents], '    ')
+    return lines
+
+
 class SelectionError(Exception):
     pass
 
@@ -1549,7 +1706,7 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
     """The CLIs of one project (its name or the start of it) and/or one session (the start of its id, or longer),
     with their sum. Raises SelectionError with what to say when nothing, or more than one, fits."""
     clis = report['clis']
-    parts = []
+    parts, context_of = [], None
     if project is not None:
         if not project:
             raise SelectionError('--project must not be empty')
@@ -1575,6 +1732,7 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
             listing = ', '.join(f'{cli["id"]} ({cli["label"]})' for cli in found)
             raise SelectionError(f"--session '{session}' matches {len(found)} sessions: {listing} - give more characters")
         clis = found
+        context_of = found[0]
         parts.append(f'session {found[0]["id"]}')
     merged: dict = {}
     for cli in clis:
@@ -1582,7 +1740,7 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
     ids = {cli['id'] for cli in clis}
     starts = [start for start in report['startup']['starts'] if start['session'] in ids]
     return {'description': ', '.join(parts), 'clis': clis, 'sum': _cli_report('sum', merged['sum']),
-            'startup': {'starts': starts, **startup_groups(starts)}}
+            'startup': {'starts': starts, **startup_groups(starts)}, 'context_of': context_of}
 
 
 def render(report: dict, selection: dict | None = None) -> str:
@@ -1599,6 +1757,8 @@ def render(report: dict, selection: dict | None = None) -> str:
                       ('unreadable_transcript_lines', 'transcript')):
         if coverage[key]:
             sources.append(f'{coverage[key]} unreadable {name} line(s) skipped')
+    if coverage['unreadable_context_files']:
+        sources.append(f'{coverage["unreadable_context_files"]} unreadable context file(s) skipped')
     title = f'Usage report {period["label"]} (local time, UTC{offset[:3]}:{offset[3:]})'
     head = [title + (f' - {selection["description"]}' if selection else ''), 'Sources: ' + '; '.join(sources)]
     if selection:
@@ -1606,6 +1766,8 @@ def render(report: dict, selection: dict | None = None) -> str:
         total = [f'Sum of {count} CLI{"" if count == 1 else "s"}'] + _cli_block('', selection['sum'])
         sections = [head, _cli_lines(selection['clis']), total,
                     _startup_lines(selection['startup'], 'Startup context of the selected sessions', False)]
+        if selection['context_of'] is not None:
+            sections.append(_context_lines(selection['context_of']))
     else:
         sections = [head, _subscription_lines(report['subscription']), _total_lines(report['total']),
                     _startup_lines(report['startup'])]
@@ -1861,7 +2023,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--until', metavar='YYYY-MM-DD', help='last day of the range (default: today), needs --since')
     parser.add_argument('--full', action='store_true', help='print every figure instead of the overview')
     parser.add_argument('--project', metavar='NAME', help='the blocks of --full for this project, and their sum')
-    parser.add_argument('--session', metavar='ID', help='the blocks of --full for the session whose id starts with ID')
+    parser.add_argument('--session', metavar='ID', help='the blocks of --full for the session whose id starts with ID, '
+                        'and how its context was made up after the first answer')
     parser.add_argument('--json', action='store_true', help='print the figures, overview included, as JSON')
     parser.add_argument('--archive', action='store_true',
                         help='write the finished days that are not in the archive yet, print nothing')
@@ -2051,16 +2214,18 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
             break
         archived.remove(unfit)
         broken_archive += 1
+    contexts, broken_contexts = read_contexts(log_dir, set(stats['clis']))
     coverage = {'transcript_files': data.files, 'archive_days': used, 'archive_days_without_agent_split': unsplit,
                 'unreadable_history_lines': broken_history,
-                'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests}
+                'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests,
+                'unreadable_context_files': broken_contexts}
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
     settings = load_config(config)
     folder = estimate_folder(data, start, end) if args.json or args.full else None
     estimate = None if folder is None else estimate_start(
         folder[0], folder[1], os.path.expanduser(args.claude_dir or CLAUDE_DIR), projects_dir,
         settings['start_estimate']['chars_per_token'], sorted({s['type'] for s in stats['starts'] if s['type']}))
-    report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate)
+    report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate, contexts)
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

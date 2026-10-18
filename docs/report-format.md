@@ -7,8 +7,10 @@ numbers without guessing. Where a number comes from, in which unit it is, and wh
 
 The report reads only local files and makes no model call: the Claude Code transcripts (`~/.claude/projects`, only
 token counts, models, times, folder names and ids, never message text), the measurement history
-(`usage-history.jsonl`, written by the status line), the log of the two gates (`log.jsonl`) and the day archive
-(`usage-days.jsonl`). Times are local time.
+(`usage-history.jsonl`, written by the status line), the log of the two gates (`log.jsonl`), the day archive
+(`usage-days.jsonl`) and, for the sessions of the period, the context split that the desktop plugin wrote after their
+first answer (`context-breakdown/<session id>.json`, see *The context split* under `clis` below). Times
+are local time.
 
 ## Words used
 
@@ -174,7 +176,7 @@ The top-level fields are, in this order:
 |---|---|
 | `schema_version` | The number of the format (now `1`). It changes only when a field is renamed or removed; a new field does not change it. |
 | `period` | `kind` (`day`, `week`, `month`, `year` or `range`), `label` (as in the title), `start` and `end` (the period is from `start` up to, not including, `end`). |
-| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `archive_days_without_agent_split` (the days among them whose points could not be split by agent type, see `total`), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read). |
+| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `archive_days_without_agent_split` (the days among them whose points could not be split by agent type, see `total`), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read), `unreadable_context_files` (count of context files, among those of the period's sessions, that were skipped because they could not be read or do not fit the format). |
 | `overview` | The numbers of the text overview, see below. |
 | `subscription` | The measured percentages of the subscription, see below. |
 | `total` | The figures of the whole period. |
@@ -269,8 +271,49 @@ The `estimate` (all numbers are estimates, from the sizes of local files as they
 One entry per session, highest cost first. `id` (8 characters of the session id), `label` (the working folder's last name: the project of the session),
 `start` (time of its first request), `requests`, `cost_usd`, `tokens` (as in `total`), `models` (model name to
 cost in USD), `subagents` (agent type to `requests` and `cost_usd`), `cache_hit_rate`, `cold_starts`, `thinking_tokens`,
-`thinking_share`, `web_searches`, `web_fetches` (as in `total`), and `estimated_share` with `five` and `week`: the
-**estimated** points of the 5h and of the weekly limit that fall to this session.
+`thinking_share`, `web_searches`, `web_fetches` (as in `total`), `estimated_share` with `five` and `week`: the
+**estimated** points of the 5h and of the weekly limit that fall to this session, and `context`: how the context of
+the session was made up after its first answer, or `null` (see the next section).
+
+### The context split (`clis[].context`)
+
+The desktop plugin measures it once per main session, after the first answer, with the same call `/context` uses, and
+writes it to `<log_dir>/context-breakdown/<full session id>.json`. The transcripts hold only the sum of each request,
+so this is the only place that says what the start of a session consisted of. **Measured** by Claude Code, not
+estimated; only names and numbers, never the text of a prompt, a file or a tool. Subagents have no file of their own.
+
+`context` is the content of the file of the session, or `null` if there is none (the session began before the plugin
+wrote files, the plugin is not installed, or the measurement failed). A file belongs to the CLI whose `id` is the first
+8 characters of the file's session id, the same rule `--session` uses. The report reads only the files of the
+sessions in the period. A file that is not JSON, is larger than 4 MB, has another `schema_version`, lacks a required
+field or has a field of the wrong type is not used: `context` is `null` and `coverage.unreadable_context_files` counts
+it. The exit code does not change. A field the format does not name is not passed on, a name or path longer than 200
+characters is cut and a control character in it becomes `?`.
+
+The fields of the file (`schema_version` 1), all token counts whole numbers:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | `1`. The report reads only this version. |
+| `session_id` | The full session id. Required in the file, and it must equal the file name; the report leaves it out of `context` (the CLI's `id` is the start of it). |
+| `at` | When it was measured, as the plugin wrote it (ISO time, text). |
+| `cwd`, `model`, `detail` | The working folder, the model and the level of the measurement as the plugin reports it (`full` or `summary`). Each may be missing or `null`. |
+| `total_tokens`, `max_tokens` | The tokens the context held at that moment and the size of the window. |
+| `categories` | The parts `/context` names, in its order: `name`, `tokens` and `kind` (the kind the plugin reports, may be `null`). |
+| `memory_files` | CLAUDE.md and memory files: `path` (as written; the text report shortens the home folder to `~`), `type` (may be `null`) and `tokens`. |
+| `mcp_tools` | Each MCP tool: `server`, `name`, `tokens` and `loaded` (whether the tool was loaded into the context, as reported; may be `null`). |
+| `skills` | `tokens` (all skills), `included` (how many were in the context), `total` (how many exist) and `items`: `name` and `tokens` of each one. |
+| `agents` | Each agent definition: `type`, `source` (where it comes from, may be `null`) and `tokens`. |
+
+`schema_version` of the **report** stays 1: `context` and `unreadable_context_files` are new fields, and a new field does
+not change it (see the table above).
+
+With `--session` the text report shows the same data as the block *Context after the first answer*: the total and the
+window with the percentage, the categories, the MCP servers (tokens of all their tools, number of tools and their ten
+dearest tools), the memory files, the skills (tokens, how many were included of how many exist, the ten dearest) and the
+agents (the ten dearest); every list has the dearest row first and ends with `… N more` if rows were left out. Without a
+file the block is the one line `No context recorded for this session.`; an unreadable file is named in `Sources:` as
+`N unreadable context file(s) skipped`. `--project` alone and the overview do not show the block.
 
 ### `allocation`
 
