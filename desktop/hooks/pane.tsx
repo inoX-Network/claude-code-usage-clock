@@ -57,16 +57,16 @@ async function load($: EngineInterface, period: Period): Promise<void> {
   await setSlot($, period, await fetchReport($, period))
 }
 
-export function registerReport(on: On): void {
-  on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'report',
-      description: 'Open the usage report: what a day, week, month or year of usage went into',
-      argumentHint: '[day|week|month|year]',
-    })
-    return next(e)
+/** Registers /report. Called from the one session.start hook of the plugin: the engine allows one per module. */
+export async function registerReportCommand($: EngineInterface): Promise<void> {
+  await $.command.register({
+    name: 'report',
+    description: 'Open the usage report: what a day, week, month or year of usage went into',
+    argumentHint: '[day|week|month|year]',
   })
+}
 
+export function registerReport(on: On): void {
   // The answer carries no text and no context: what the pane shows never becomes a transcript row or model input
   on('command.run', { command: 'report' }, async ($, e) => {
     const period = parsePeriod(e.args)

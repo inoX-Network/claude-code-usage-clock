@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 
 import { DEFAULTS, expandHome, parseConfig } from './config'
 import { parts } from './line'
-import { registerReport } from './pane'
+import { registerReport, registerReportCommand } from './pane'
 import { statusInput, statuslineArgv } from './record'
 
 const usage = atom({ plugin: 'usage-clock-display', key: 'usage' } as const, null)
@@ -25,6 +25,8 @@ export const register: Register = (on, options) => {
     const now = await $.session.usage()
     await update($, usage, () => now)
     $.clock.every(60_000, () => update($, tick, n => n + 1))
+    // A refused /report (a built-in of that name, say) only means no report pane; the status line stays
+    await registerReportCommand($).catch(() => undefined)
     return next(e)
   })
 
