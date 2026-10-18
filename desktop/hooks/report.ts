@@ -38,7 +38,7 @@ export type Limits = { yellowFrom: number; redFrom: number }
 
 const LIMITS: Limits = { yellowFrom: 50, redFrom: 75 }
 
-function tone(percent: number, limits: Limits): Tone | undefined {
+export function tone(percent: number, limits: Limits): Tone | undefined {
   return percent >= limits.redFrom ? 'error' : percent >= limits.yellowFrom ? 'warning' : undefined
 }
 
@@ -93,23 +93,23 @@ const str = (x: unknown): string | null => (typeof x === 'string' ? x : null)
 // --- Numbers as the text report writes them ---------------------------------------------------------------------
 
 /** USD at API prices: two decimals below 1, one below 10, none above. */
-const usd = (x: number | null): string => (x === null ? '-' : x < 1 ? x.toFixed(2) : x < 10 ? x.toFixed(1) : x.toFixed(0))
+export const usd = (x: number | null): string => (x === null ? '-' : x < 1 ? x.toFixed(2) : x < 10 ? x.toFixed(1) : x.toFixed(0))
 /** A part from 0 to 1 as a percentage; above 0 and below 1 % is `<1 %`. */
-const pct = (x: number | null, none = '-'): string =>
+export const pct = (x: number | null, none = '-'): string =>
   x === null ? none : x > 0 && x < 0.01 ? '<1 %' : `${Math.round(x * 100)} %`
 /** Points of a limit, an estimate: `<1` is more than 0 and less than one point. */
-const pts = (x: number | null): string => (x === null ? '-' : x === 0 ? '0' : x < 1 ? '<1' : x.toFixed(1))
+export const pts = (x: number | null): string => (x === null ? '-' : x === 0 ? '0' : x < 1 ? '<1' : x.toFixed(1))
 const whole = (x: number | null): string => (x === null ? '-' : String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
 /** A number with at most one decimal, without a trailing zero. */
 const plain = (x: number): string => String(Number(x.toFixed(1)))
 /** Tokens, with `k` for thousands from 10 000 on. */
-const tokens = (x: number): string => (x >= 10_000 ? `${Math.round(x / 1000)}k` : String(Math.round(x)))
+export const tokens = (x: number): string => (x >= 10_000 ? `${Math.round(x / 1000)}k` : String(Math.round(x)))
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /** A UTC time of the report in local time, as the text report writes it (`Tue 13 Oct 14:30`). */
-function localTime(iso: string): string {
+export function localTime(iso: string): string {
   const moment = new Date(iso)
   if (Number.isNaN(moment.getTime())) return iso
   const two = (n: number) => String(n).padStart(2, '0')

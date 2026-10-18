@@ -67,13 +67,13 @@ async function start($: Engine) {
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
 }
 
-async function mountPane($: Engine, surface: Surface) {
+async function mountPane($: Engine, surface: Surface, bodyColumns = 100) {
   return $.ui.mount({
     plugin: 'usage-clock-display',
     surface,
     component: 'Pane',
     requestId: 'usage-report',
-    props: { title: 'Usage report', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    props: { title: 'Usage report', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
   })
 }
 
@@ -184,8 +184,15 @@ for (const surface of SURFACES) {
     await report($)
     const ui = await mountPane($, surface)
     await ui.press({ key: 'view-sessions' })
-    expect(await texts(ui)).toMatch(/session\s+started\s+USD\s+~week pts\s+requests/)
-    expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/webshop aaaaaaaa\s+\S+ 13 Oct \d\d:\d\d\s+60\s+20\.0\s+300/)
+    if (surface === 'terminal') {
+      expect(await texts(ui)).toMatch(/session\s+started\s+USD\s+~week pts\s+requests/)
+      expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/webshop aaaaaaaa\s+\S+ 13 Oct \d\d:\d\d\s+60\s+20\.0\s+300/)
+    } else {
+      // A card per session: the button with name and cost, the start and the counts under it
+      expect(await texts(ui)).toMatch(/SESSIONS · HIGHEST COST FIRST/)
+      expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/webshop aaaaaaaa\s+60 USD/)
+      expect((await ui.find({ key: 'card-aaaaaaaa' }))?.text).toMatch(/13 Oct \d\d:\d\d · 300 requests · cache 90 % · ~20\.0 week pts/)
+    }
     expect(await ui.find({ key: 'session-bbbbbbbb' })).toBeDefined()
 
     await ui.press({ key: 'session-aaaaaaaa' })
@@ -221,12 +228,22 @@ for (const surface of SURFACES) {
     await report($)
     const ui = await mountPane($, surface)
     await ui.press({ key: 'view-sessions' })
-    expect(await texts(ui)).toMatch(/  session\s+started/)
-    expect((await ui.find({ key: 'session-bbbbbbbb' }))?.text).toMatch(/^▶ blog bbbbbbbb/)
-    expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/^  webshop aaaaaaaa/)
-    // The mark is a piece of its own in the accent colour; the row around it has none
-    const marks = (await ui.findAll({ type: 'Text' })).filter(found => found.text.trim() === '▶')
-    expect(marks.map(found => found.props.color)).toEqual(['claude'])
+    if (surface === 'terminal') {
+      expect(await texts(ui)).toMatch(/  session\s+started/)
+      expect((await ui.find({ key: 'session-bbbbbbbb' }))?.text).toMatch(/^▶ blog bbbbbbbb/)
+      expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/^  webshop aaaaaaaa/)
+      // The mark is a piece of its own in the accent colour; the row around it has none
+      const marks = (await ui.findAll({ type: 'Text' })).filter(found => found.text.trim() === '▶')
+      expect(marks.map(found => found.props.color)).toEqual(['claude'])
+    } else {
+      // The own session stands first, under a label of its own, its card toned and framed in the accent colour
+      expect(await texts(ui)).toMatch(/THIS SESSION\nblog bbbbbbbb[\s\S]*LIVE[\s\S]*ALL SESSIONS[\s\S]*webshop aaaaaaaa/)
+      const own = await ui.find({ key: 'card-bbbbbbbb' })
+      expect([own?.props.backgroundColor, own?.props.borderColor]).toEqual(['#2b1f14', '#c47a3a'])
+      const other = await ui.find({ key: 'card-aaaaaaaa' })
+      expect([other?.props.backgroundColor, other?.props.borderColor]).toEqual(['#1c1914', '#2a241d'])
+      expect(await texts(ui)).not.toContain('▶')
+    }
     await ui.press({ key: 'session-bbbbbbbb' })
     expect(await texts(ui)).toMatch(/blog bbbbbbbb · this session · /)
     await ui.unmount()
@@ -280,7 +297,9 @@ for (const surface of SURFACES) {
     await report($)
     const ui = await mountPane($, surface)
     const views: [string, RegExp[]][] = [
-      ['view-overview', [/39 % of the weekly limit used \(\+39 points\)/, /webshop\s+60\s+60 %\s+20\.0\s+1/, /Main 75 USD · subagents 25 USD/]],
+      ['view-overview', surface === 'terminal'
+        ? [/39 % of the weekly limit used \(\+39 points\)/, /webshop\s+60\s+60 %\s+20\.0\s+1/, /Main 75 USD · subagents 25 USD/]
+        : [/WEEKLY LIMIT\n\+39\.0 pts in this period/, /webshop\n60 · 20\.0/, /main 75 · agents 25/, /5H  one 5h window reached 82 %/]],
       ['view-agents', [/agent\s+USD\s+requests\s+~week pts\s+~5h pts/, /stripe-meister\s+20\s+40\s+6\.6\s+2\.0/, /main\s+75\s+300\s+30\.5\s+12\.5/]],
       ['view-models', [/Opus 5\.5\s+92\s+97\s+30 %\s+90 %/, /Mystery 1\s+-\s+3/]],
       ['view-cache', [/Cache hit rate\s+89 %/, /Cold starts\s+3/, /Thinking tokens\s+123,000/, /Thinking share\s+25 % of output/]],
@@ -382,6 +401,29 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 }
+
+for (const [bodyColumns, width] of [[30, '100%'], [60, '49%'], [120, '24%']] as const) {
+  test(`desktop: a pane ${bodyColumns} cells wide puts the key figures ${width} wide, the gauge an Svg`, async ($, on) => {
+    world(on)
+    await start($)
+    await report($)
+    const ui = await mountPane($, 'desktop', bodyColumns)
+    for (const id of ['week', 'five', 'cost', 'cache']) expect((await ui.find({ key: `kpi-${id}` }))?.props.width).toBe(width)
+    const drawings = await ui.findAll({ type: 'Svg' })
+    expect(drawings.map(found => found.props.alt)).toEqual(['39 % of the weekly limit used', 'Peaks of the 5h windows: 82, 20 %'])
+    await ui.unmount()
+  })
+}
+
+test('terminal: no tiles, the overview stays text', async ($, on) => {
+  world(on)
+  await start($)
+  await report($)
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'kpi-week' })).toBeUndefined()
+  expect(await texts(ui)).toMatch(/39 % of the weekly limit used/)
+  await ui.unmount()
+})
 
 test('/report again starts fresh: it reads again and shows the overview', async ($, on) => {
   const seen = world(on)

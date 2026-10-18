@@ -10,6 +10,8 @@ import type { ReportSlot, ReportState } from '../types/index'
 import { DEFAULTS } from './config'
 import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
+import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, tilesPerRow, toneColor } from './tiles'
+import type { Bar, Kpi } from './tiles'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
@@ -182,6 +184,104 @@ export function registerReport(on: On): void {
             </Button>
           )),
         ]
+      }
+    }
+
+    // The desktop draws tiles in place of the text: key figures, bars, and the sessions as cards. They carry a dark
+    // ground of their own, and as many stand side by side as the width of the pane allows, which the person can drag
+    if (e.surface === 'desktop' && slot?.status === 'ok') {
+      const { Svg } = $.ui.resolve(e)
+      const perRow = tilesPerRow(e.props.bodyColumns)
+      const width = (n: 1 | 2 | 4) => (n === 1 ? '100%' : n === 2 ? '49%' : '24%')
+      const card = (key: string, children: unknown[], look: { width?: string; isOwn?: boolean } = {}) => (
+        <Box key={key} flexDirection="column" width={look.width ?? '100%'} padding="md" rowGap="sm" marginBottom="sm"
+          backgroundColor={look.isOwn ? LOOK.ownCard : LOOK.card} borderStyle="round" borderColor={look.isOwn ? LOOK.accent : LOOK.border}>
+          {children}
+        </Box>
+      )
+      const caption = (key: string, text: string) => <Text key={key} size="caption" color={LOOK.muted}>{text.toUpperCase()}</Text>
+      const bar = (key: string, length: number, color: string) => (
+        <Box key={key} flexDirection="row" width="100%" backgroundColor={LOOK.border}>
+          <Box width={`${Math.max(2, Math.round(length * 100))}%`} backgroundColor={color}><Text size="caption"> </Text></Box>
+        </Box>
+      )
+      const barRows = (prefix: string, bars: Bar[]) => bars.map((b, i) => (
+        <Box key={`${prefix}-${i}`} flexDirection="column">
+          <Box flexDirection="row" justifyContent="space-between" columnGap="sm">
+            <Text color={LOOK.text} wrap="truncate-middle">{b.label}</Text>
+            <Text color={LOOK.text} tabular>{b.value}</Text>
+          </Box>
+          {bar(`${prefix}-bar-${i}`, b.length, i === 0 ? LOOK.accent : LOOK.accentMuted)}
+        </Box>
+      ))
+      const kpi = (k: Kpi) => card(`kpi-${k.id}`, [
+        caption(`kpi-${k.id}-label`, k.label),
+        k.gauge !== undefined
+          ? <Svg key={`kpi-${k.id}-gauge`} source={gaugeSvg(k.gauge, limits)} alt={`${k.value} % of the weekly limit used`} width={120} height={66} />
+          : <Text key={`kpi-${k.id}-value`}>
+              <Text key="figure" size="title" weight="bold" tabular color={toneColor(k.tone)}>{k.value}</Text>
+              <Text key="unit" size="footnote" color={LOOK.muted}>{` ${k.unit}`}</Text>
+            </Text>,
+        ...(k.peaks === undefined ? [] : [
+          <Svg key={`kpi-${k.id}-peaks`} source={peaksSvg(k.peaks)} alt={`Peaks of the 5h windows: ${k.peaks.join(', ')} %`} width={120} height={46} />,
+        ]),
+        ...(k.split === undefined ? [] : [
+          <Box key={`kpi-${k.id}-split`} flexDirection="row" width="100%">
+            <Box width={`${Math.round((k.split[0] ?? 0) * 100)}%`} backgroundColor={LOOK.accent}><Text size="caption"> </Text></Box>
+            <Box width={`${Math.round((k.split[1] ?? 0) * 100)}%`} backgroundColor={LOOK.muted}><Text size="caption"> </Text></Box>
+          </Box>,
+        ]),
+        ...k.lines.map((line, i) => <Text key={`kpi-${k.id}-line-${i}`} size="footnote" color={LOOK.muted}>{line}</Text>),
+      ], { width: width(perRow) })
+      const grid = (key: string, tiles: unknown[]) => (
+        <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" width="100%">{tiles}</Box>
+      )
+
+      if (state.view === 'overview') {
+        const t = overviewTiles(slot.report, limits)
+        const half = perRow === 1 ? '100%' : '49%'
+        body = [
+          <Text key="title" size="heading" weight="semibold" color={LOOK.text}>{t.title}</Text>,
+          grid('kpis', t.kpis.map(kpi)),
+          ...(t.projects.length === 0 ? [] : [card('projects', [
+            caption('projects-label', 'Projects · USD · week pts'),
+            ...barRows('project', t.projects),
+            ...(t.more === null ? [] : [<Text key="projects-more" size="footnote" color={LOOK.muted}>{t.more}</Text>]),
+          ])]),
+          grid('mix', [
+            ...(t.models.length === 0 ? [] : [card('models', [caption('models-label', 'Models · USD'), ...barRows('model', t.models)], { width: half })]),
+            ...(t.agents.length === 0 ? [] : [card('agents', [caption('agents-label', 'Main and agents · USD'), ...barRows('agent', t.agents)], { width: half })]),
+          ]),
+          ...(t.notable.length === 0 ? [] : [card('notable', [
+            caption('notable-label', 'Notable'),
+            ...t.notable.map((n, i) => (
+              <Text key={`notable-${i}`} color={LOOK.text}>
+                <Text key="tag" size="caption" weight="bold" color={LOOK.warning}>{`${n.tag}  `}</Text>
+                {n.text}
+              </Text>
+            )),
+          ])]),
+        ]
+      } else if (state.view === 'sessions' && state.session === null && sessionCards(slot.report, state.own).length > 0) {
+        const cards = sessionCards(slot.report, state.own)
+        const own = cards.filter(c => c.isOwn)
+        const sessionCard = (c: (typeof cards)[number]) => card(`card-${c.id}`, [
+          <Button key={`session-${c.id}`} plain onPress={chooseSession(c.id)}>
+            <Text key={`label-session-${c.id}`} weight="semibold" color={LOOK.text}>{c.title}</Text>
+            <Text key={`cost-session-${c.id}`} tabular color={LOOK.text}>{`  ${c.cost}`}</Text>
+          </Button>,
+          <Text key={`meta-${c.id}`} size="footnote" color={LOOK.muted}>
+            {c.meta}
+            {c.isOwn ? <Text key="live" size="caption" weight="bold" color={LOOK.accent}>{'  LIVE'}</Text> : ''}
+          </Text>,
+        ], { isOwn: c.isOwn })
+        body = [
+          ...(own.length === 0 ? [] : [caption('own-label', 'This session'), ...own.map(sessionCard)]),
+          caption('all-label', own.length === 0 ? 'Sessions · highest cost first' : 'All sessions · highest cost first'),
+          ...cards.filter(c => !c.isOwn).map(sessionCard),
+        ]
+      } else {
+        body = [card('view', body)]
       }
     }
 
