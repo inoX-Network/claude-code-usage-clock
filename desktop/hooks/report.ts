@@ -21,6 +21,7 @@ export const VIEWS: readonly { id: ReportView; hotkey: string; label: string }[]
   { id: 'cache', hotkey: 'd', label: 'Cache/Thinking' },
   { id: 'tokens', hotkey: 'e', label: 'Tokens' },
   { id: 'projects', hotkey: 'f', label: 'Projects' },
+  { id: 'sessions', hotkey: 'g', label: 'Sessions' },
 ]
 
 export type Period = ReportPeriod
@@ -329,6 +330,117 @@ function projects(report: Report, columns: number): Line[] {
   ]
 }
 
+// --- Sessions ---------------------------------------------------------------------------------------------------
+
+const SESSION_HEAD = ['session', 'started', 'USD', '~week pts', 'requests']
+const TOP = 10
+
+/** The list of the Sessions view: the head, then one row per session of `clis` (highest cost first, as the report
+ *  orders them), each with the id the pane selects it by. */
+export function sessionList(report: Report, columns: number): { head: Line; rows: { id: string; line: Line }[] } {
+  const clis = list(report.clis).map(rec).filter(cli => str(cli.id) !== null)
+  const cells = clis.map(cli => [
+    `${str(cli.label) ?? '?'} ${str(cli.id)}`,
+    str(cli.start) === null ? '-' : localTime(str(cli.start) as string),
+    usd(num(cli.cost_usd)),
+    pts(num(rec(cli.estimated_share).week)),
+    whole(num(cli.requests)),
+  ])
+  const [head, ...lines] = table(SESSION_HEAD, cells, columns)
+  return { head: head as Line, rows: lines.map((line, i) => ({ id: str(clis[i]?.id) as string, line })) }
+}
+
+/** A table of names and tokens, the largest first, cut to the `TOP` largest with a line for the rest. */
+function tokenTable(head: string, entries: [string, number][], columns: number): Line[] {
+  const sorted = [...entries].sort((a, b) => b[1] - a[1])
+  const rows = sorted.slice(0, TOP).map(([name, count]) => [name, whole(count)])
+  const rest = sorted.slice(TOP)
+  if (rest.length > 0) rows.push([`${rest.length} more`, whole(rest.reduce((sum, [, count]) => sum + count, 0))])
+  return table([head, 'tokens'], rows, columns)
+}
+
+/** What a session's context held after its first answer, as the plugin wrote it down (`clis[].context`). */
+function contextLines(context: Record<string, unknown>, columns: number): Line[] {
+  const total = num(context.total_tokens)
+  const window = num(context.max_tokens)
+  const out: Line[] = [{
+    text: `Context after the first answer: ${total === null ? '-' : whole(total)} tokens`
+      + (total !== null && window !== null && window > 0 ? ` of ${whole(window)} (${pct(total / window)})` : ''),
+    style: 'heading',
+  }]
+  const categories = list(context.categories).map(rec).filter(row => str(row.kind) !== 'free' && str(row.kind) !== 'buffer')
+  if (categories.length > 0) {
+    out.push(BLANK, ...tokenTable('category', categories.map(row => [str(row.name) ?? '?', num(row.tokens) ?? 0]), columns))
+  }
+  const tools = list(context.mcp_tools).map(rec)
+  if (tools.length > 0) {
+    const servers = new Map<string, { tools: number; tokens: number }>()
+    for (const tool of tools) {
+      const name = str(tool.server) ?? '?'
+      const sum = servers.get(name) ?? { tools: 0, tokens: 0 }
+      servers.set(name, { tools: sum.tools + 1, tokens: sum.tokens + (num(tool.tokens) ?? 0) })
+    }
+    out.push(BLANK, ...tokenTable('MCP server', [...servers].map(([name, sum]) => [`${name} (${sum.tools} tools)`, sum.tokens]), columns))
+    out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => [`${str(tool.server) ?? '?'} ${str(tool.name) ?? '?'}`, num(tool.tokens) ?? 0]), columns))
+  }
+  const memory = list(context.memory_files).map(rec)
+  if (memory.length > 0) {
+    out.push(BLANK, ...tokenTable('memory file', memory.map(file => [str(file.path) ?? '?', num(file.tokens) ?? 0]), columns))
+  }
+  const skills = context.skills === null || context.skills === undefined ? null : rec(context.skills)
+  if (skills !== null) {
+    out.push(BLANK, { text: `Skills: ${whole(num(skills.tokens))} tokens, ${whole(num(skills.included))} of ${whole(num(skills.total))} listed` })
+    const items = list(skills.items).map(rec)
+    if (items.length > 0) out.push(...tokenTable('skill', items.map(item => [str(item.name) ?? '?', num(item.tokens) ?? 0]), columns))
+  }
+  const agents = list(context.agents).map(rec)
+  if (agents.length > 0) {
+    out.push(BLANK, ...tokenTable('agent', agents.map(agent => [str(agent.type) ?? '?', num(agent.tokens) ?? 0]), columns))
+  }
+  return out
+}
+
+/** The detail of one session of `clis`: cost and points, tokens, models, subagents and its recorded context. */
+export function sessionDetail(report: Report, id: string, columns: number): Line[] {
+  const cli = list(report.clis).map(rec).find(entry => str(entry.id) === id)
+  if (cli === undefined) return none('This session is not in the report any more. Press q for the list.')
+  const share = rec(cli.estimated_share)
+  const start = str(cli.start)
+  const out: Line[] = [
+    {
+      text: `${str(cli.label) ?? '?'} ${id} · ${start === null ? '-' : localTime(start)} · ${usd(num(cli.cost_usd))} USD`
+        + ` · ~${pts(num(share.week))} week pts, ~${pts(num(share.five))} 5h pts`,
+      style: 'heading',
+    },
+    {
+      text: [
+        `${whole(num(cli.requests))} requests`,
+        `cache hits ${pct(num(cli.cache_hit_rate), 'n/a')}`,
+        `cold starts ${whole(num(cli.cold_starts))}`,
+        num(cli.thinking_share) === null ? null : `thinking ${pct(num(cli.thinking_share))} of output`,
+      ].filter(Boolean).join(' · '),
+    },
+  ]
+  const t = rec(cli.tokens)
+  out.push(BLANK, ...facts([
+    ['input', whole(num(t.input))],
+    ['cache write 5m', whole(num(t.cache_write_5m))],
+    ['cache write 1h', whole(num(t.cache_write_1h))],
+    ['cache read', whole(num(t.cache_read))],
+    ['output', whole(num(t.output))],
+  ], 'right'))
+  const models = Object.entries(rec(cli.models)).map(([name, cost]) => [name, usd(num(cost))])
+  if (models.length > 0) out.push(BLANK, ...table(['model', 'USD'], models, columns))
+  const subagents = Object.entries(rec(cli.subagents)).map(([name, entry]) => [name, whole(num(rec(entry).requests)), usd(num(rec(entry).cost_usd))])
+  if (subagents.length > 0) out.push(BLANK, ...table(['subagent', 'requests', 'USD'], subagents, columns))
+  out.push(BLANK)
+  const context = cli.context === null || cli.context === undefined ? null : rec(cli.context)
+  out.push(...(context === null
+    ? none('No context recorded for this session: the plugin writes it down from version 0.4.0 on, after the first answer.')
+    : contextLines(context, columns)))
+  return out
+}
+
 /** The rows of one view, for a body `columns` cells wide; percentages of a limit coloured at `limits`. */
 export function viewLines(view: View, report: Report, columns: number, limits: Limits = LIMITS): Line[] {
   switch (view) {
@@ -338,5 +450,7 @@ export function viewLines(view: View, report: Report, columns: number, limits: L
     case 'cache': return cache(report)
     case 'tokens': return tokenCounts(report)
     case 'projects': return projects(report, columns)
+    // The pane draws the list itself, a button per session; this is what stands without one
+    case 'sessions': return list(report.clis).length === 0 ? none('No sessions in this period.') : []
   }
 }

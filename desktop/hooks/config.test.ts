@@ -1,6 +1,17 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULTS, expandHome, parseConfig } from './config'
+import { DEFAULTS, LOG_DIR, expandHome, parseConfig, parseLogDir } from './config'
+
+test('the log folder: CCUC_LOG_DIR, else log_dir of config.json, else the default of hooks/_config.py', () => {
+  expect(LOG_DIR).toBe('~/.cache/claude-usage-clock')
+  expect(parseLogDir(undefined, undefined)).toBe(LOG_DIR)
+  expect(parseLogDir('{ not json', undefined)).toBe(LOG_DIR)
+  expect(parseLogDir(JSON.stringify({ log_dir: 7 }), undefined)).toBe(LOG_DIR)
+  expect(parseLogDir(JSON.stringify({ log_dir: '' }), undefined)).toBe(LOG_DIR)
+  expect(parseLogDir(JSON.stringify({ log_dir: '~/logs' }), undefined)).toBe('~/logs')
+  expect(parseLogDir(JSON.stringify({ log_dir: '~/logs' }), '/tmp/x')).toBe('/tmp/x')
+  expect(parseLogDir(JSON.stringify({ log_dir: '~/logs' }), '')).toBe('~/logs')
+})
 
 test('no file or broken JSON: the defaults of hooks/_config.py', () => {
   expect(parseConfig(undefined)).toEqual(DEFAULTS)

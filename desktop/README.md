@@ -61,7 +61,8 @@ the terminal in front of it (`b: Agents`), the desktop app beside the label. The
 Claude Code has no tab element and a mod cannot bind the arrow keys: Tab walks the buttons and opens the view it lands
 on, Up and Down scroll a long view, a period is chosen by its key or with Enter (Tab does not read every period it
 passes). The share of the weekly limit and the highest 5h window are yellow or red from the `statusline` thresholds of
-the usage-clock `config.json`, as in the status line. Esc closes the pane.
+the usage-clock `config.json`, as in the status line. Esc closes the pane. Tab past the last button hands the keys back
+to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane again.
 
 | View | Shows |
 |---|---|
@@ -71,6 +72,7 @@ the usage-clock `config.json`, as in the status line. Esc closes the pane.
 | Cache/Thinking | Cache hit rate, cold starts, thinking tokens and their share of the output. |
 | Tokens | Input, cache write (5 minutes, 1 hour), cache read and output tokens. |
 | Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
+| Sessions | Every session of the period, highest cost first. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
 
 Every number is that of `usage_report.py --json`, and [`docs/report-format.md`](../docs/report-format.md) says what it
 means and whether it is measured or an estimate (`~`).
@@ -87,6 +89,17 @@ means and whether it is measured or an estimate (`~`).
   (`schema_version`) other than 1. In the first two cases nothing is started.
 - **The model sees nothing.** The command answers with no text and no context, so the pane is neither a line of the
   transcript nor input of the model. The report reads local files only and makes no model call.
+
+## It writes down what a context holds
+
+The transcripts keep only the sum of the tokens of each request, not what the context consisted of. So after the first
+answer of each session the plugin asks Claude Code once for the breakdown `/context` shows (`$.session.usage({
+breakdown: 'full' })`: one token count per tool and memory file, as `/context` does) and writes it to
+`<log_dir>/context-breakdown/<session id>.json`: the categories (system prompt, tools, MCP tools, memory files, skills,
+messages), every MCP tool by server, every memory file, skill and agent, each with its tokens. Names and numbers only,
+never content. `log_dir` is that of the hooks (`CCUC_LOG_DIR`, else `log_dir` of `config.json`, else
+`~/.cache/claude-usage-clock`). The Sessions view and `usage_report.py --session` show it. Sessions before plugin 0.4.0
+have none; subagents are not measured on their own.
 
 ## It writes the usage file, too
 

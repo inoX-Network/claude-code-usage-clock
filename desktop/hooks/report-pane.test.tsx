@@ -129,6 +129,7 @@ for (const surface of SURFACES) {
     expect(Object.fromEntries(buttons.map(button => [button.key, button.props.hotkey]))).toEqual({
       'period-day': '1', 'period-week': '2', 'period-month': '3', 'period-year': '4',
       'view-overview': 'a', 'view-agents': 'b', 'view-models': 'c', 'view-cache': 'd', 'view-tokens': 'e', 'view-projects': 'f',
+      'view-sessions': 'g',
       refresh: 'r',
     })
     await ui.unmount()
@@ -171,6 +172,42 @@ for (const surface of SURFACES) {
     expect(await look('period-week')).toEqual(dim)
     expect((await ui.find({ key: 'view-agents' }))?.props.autoFocus).toBe(true)
     expect((await ui.find({ key: 'view-overview' }))?.props.autoFocus).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`${surface}: Sessions lists the sessions; one opens its detail with the recorded context, q goes back`, async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await report($)
+    const ui = await mountPane($, surface)
+    await ui.press({ key: 'view-sessions' })
+    expect(await texts(ui)).toMatch(/session\s+started\s+USD\s+~week pts\s+requests/)
+    expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/webshop aaaaaaaa\s+\S+ 13 Oct \d\d:\d\d\s+60\s+20\.0\s+300/)
+    expect(await ui.find({ key: 'session-bbbbbbbb' })).toBeDefined()
+
+    await ui.press({ key: 'session-aaaaaaaa' })
+    const detail = await texts(ui)
+    for (const pattern of [
+      /webshop aaaaaaaa · .* · 60 USD · ~20\.0 week pts, ~8\.0 5h pts/,
+      /Context after the first answer: 63,000 tokens of 1,000,000 \(6 %\)/,
+      /MCP tools\s+12,400/,
+      /context7 \(2 tools\)\s+1,500/,
+      /playwright navigate\s+450/,
+      /\/home\/you\/\.claude\/CLAUDE\.md\s+2,200/,
+      /Skills: 5,600 tokens, 38 of 40 listed/,
+      /arbeiter-bauen\s+120/,
+    ]) expect(detail).toMatch(pattern)
+    expect(detail).not.toMatch(/Free space/)
+    expect(await ui.find({ key: 'back' })).toBeDefined()
+
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ key: 'session-bbbbbbbb' })).toBeDefined()
+    await ui.press({ key: 'session-bbbbbbbb' })
+    expect(await texts(ui)).toMatch(/No context recorded for this session/)
+
+    await ui.press({ key: 'period-month' })
+    expect(await ui.find({ key: 'back' })).toBeUndefined()
+    expect(seen.runs).toHaveLength(2)
     await ui.unmount()
   })
 

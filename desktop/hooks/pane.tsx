@@ -8,13 +8,13 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { ReportSlot, ReportState } from '../types/index'
 import { DEFAULTS } from './config'
-import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, viewLines } from './report'
+import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
 
-const INITIAL: ReportState = { period: 'week', view: 'overview', slots: {} }
+const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, slots: {} }
 const report = atom({ plugin: 'usage-clock-display', key: 'report' } as const, INITIAL)
 // The thresholds register.tsx reads at the session start; the engine wants each module's atoms written in that module
 const lineConfig = atom({ plugin: 'usage-clock-display', key: 'config' } as const, DEFAULTS)
@@ -74,7 +74,7 @@ export function registerReport(on: On): void {
   // The answer carries no text and no context: what the pane shows never becomes a transcript row or model input
   on('command.run', { command: 'report' }, async ($, e) => {
     const period = parsePeriod(e.args)
-    await update($, report, () => ({ period, view: 'overview', slots: {} }))
+    await update($, report, (): ReportState => ({ period, view: 'overview', session: null, slots: {} }))
     await $.ui.open({ id: PANE, title: 'Usage report', focus: true, closeOnEscape: true })
     await load($, period)
     return {}
@@ -84,7 +84,9 @@ export function registerReport(on: On): void {
   // chosen by its key or Enter: walking past Month and Year would read each of them
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
     const view = VIEWS.find(v => `view-${v.id}` === e.element)
-    if (view !== undefined) await update($, report, current => ({ ...current, view: view.id }))
+    if (view !== undefined) {
+      await update($, report, current => (current.view === view.id ? current : { ...current, view: view.id, session: null }))
+    }
     return next(e)
   })
 
@@ -98,16 +100,17 @@ export function registerReport(on: On): void {
       let isNew = false
       await update($, report, current => {
         isNew = current.slots[period] === undefined
-        return { ...current, period }
+        return { ...current, period, session: null }
       })
       if (isNew) await load($, period)
     }
     // A view chosen by its key takes the focus ring along, so the ring and the highlighted tab do not point apart. The
     // engine refuses the move while the pane does not hold the keys; the view is chosen all the same
     const chooseView = (view: View) => async () => {
-      await update($, report, current => ({ ...current, view }))
+      await update($, report, current => ({ ...current, view, session: null }))
       await $.ui.focus({ requestId: PANE, key: `view-${view}` }).catch(() => undefined)
     }
+    const chooseSession = (session: string | null) => () => update($, report, current => ({ ...current, session }))
     const refresh = async () => {
       let period: Period = 'week'
       await update($, report, current => {
@@ -158,6 +161,22 @@ export function registerReport(on: On): void {
       ]
     } else {
       body = viewLines(state.view, slot.report, e.props.bodyColumns, limits).map(row)
+      if (state.view === 'sessions' && state.session !== null) {
+        body = [
+          <Button key="back" hotkey="q" plain onPress={chooseSession(null)}><Text key="label-back" dimColor>Back to the list</Text></Button>,
+          <Text key="gap"> </Text>,
+          ...sessionDetail(slot.report, state.session, e.props.bodyColumns).map(row),
+        ]
+      } else if (state.view === 'sessions' && body.length === 0) {
+        // One button per session: Tab or Up and Down walk them, Enter opens one
+        const { head, rows } = sessionList(slot.report, e.props.bodyColumns)
+        body = [
+          row(head, 0),
+          ...rows.map(({ id, line }) => (
+            <Button key={`session-${id}`} plain onPress={chooseSession(id)}><Text key={`label-session-${id}`} mono>{line.text}</Text></Button>
+          )),
+        ]
+      }
     }
 
     // Like the tab row of /config: the views on the left, the period and Refresh on the right
