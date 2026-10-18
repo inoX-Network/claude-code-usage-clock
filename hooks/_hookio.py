@@ -128,11 +128,14 @@ def emit_deny(event: str, reason: str) -> None:
                                              'permissionDecisionReason': reason}}, ensure_ascii=False))
 
 
-def emit_ask(event: str, reason: str) -> None:
+def emit_ask(event: str, reason: str, updated_input: dict | None = None) -> None:
     """Claude Code shows its permission prompt with the reason to the user. No additionalContext: the model reads
-    it next to the tool result and took an approved start for a block."""
-    print(json.dumps({'hookSpecificOutput': {'hookEventName': event, 'permissionDecision': 'ask',
-                                             'permissionDecisionReason': reason}}, ensure_ascii=False))
+    it next to the tool result and took an approved start for a block. `updated_input` replaces the whole tool
+    input, and the prompt shows it."""
+    output = {'hookEventName': event, 'permissionDecision': 'ask', 'permissionDecisionReason': reason}
+    if updated_input is not None:
+        output['updatedInput'] = updated_input
+    print(json.dumps({'hookSpecificOutput': output}, ensure_ascii=False))
 
 
 def emit_context(event: str, text: str) -> None:

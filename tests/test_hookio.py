@@ -187,6 +187,16 @@ def test_deny_output_has_exactly_the_documented_keys(capsys):
                                           'permissionDecisionReason': 'no ümlaut escaping'}}
 
 
+def test_ask_output_has_exactly_the_documented_keys_and_the_updated_input_only_when_given(capsys):
+    _hookio.emit_ask('PreToolUse', 'WOCHE 92 % · x starten?')
+    assert json.loads(capsys.readouterr().out) == {'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse', 'permissionDecision': 'ask', 'permissionDecisionReason': 'WOCHE 92 % · x starten?'}}
+    _hookio.emit_ask('PreToolUse', 'q', {'prompt': 'p', 'description': 'WOCHE 92 % · d'})
+    assert json.loads(capsys.readouterr().out) == {'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse', 'permissionDecision': 'ask', 'permissionDecisionReason': 'q',
+        'updatedInput': {'prompt': 'p', 'description': 'WOCHE 92 % · d'}}}
+
+
 def test_context_output_has_exactly_the_documented_keys(capsys):
     _hookio.emit_context('UserPromptSubmit', 'Usage: 5h 40 %')
     raw = capsys.readouterr().out

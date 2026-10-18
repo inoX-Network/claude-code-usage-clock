@@ -881,9 +881,13 @@ def test_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
     out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
     assert out is not None and list(out) == ['hookSpecificOutput']
     # No additionalContext: the model reads it next to the tool result and took an approved start for a block
-    assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason'}
+    assert set(out['hookSpecificOutput']) == {'hookEventName', 'permissionDecision', 'permissionDecisionReason',
+                                              'updatedInput'}
     assert out['hookSpecificOutput']['permissionDecision'] == 'ask'
     assert reason(out) == 'WEEK 85 % · start full-def?'
+    # The phone app shows the description, not the question: the number goes there too, every other field unchanged
+    assert out['hookSpecificOutput']['updatedInput'] == {'prompt': 'secret task', 'description': 'WEEK 85 % · x',
+                                                         'subagent_type': 'full-def'}
     assert is_deny(run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce'))
     assert is_deny(run(agent('full-def'), env, '--mode=enforce'))                     # no mode in the input
     assert is_shadow_note(run(dict(agent('full-def'), permission_mode='default'), env, '--mode=shadow'),
@@ -902,9 +906,42 @@ def test_the_ask_dialog_speaks_the_language_of_claude_codes_settings(tmp_path, e
         json.dump({'language': 'German'}, f)
     out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
     assert out['hookSpecificOutput']['permissionDecision'] == 'ask' and reason(out) == 'WOCHE 85 % · full-def starten?'
+    assert out['hookSpecificOutput']['updatedInput']['description'] == 'WOCHE 85 % · x'
     # Only the question is translated: a denial goes to the model and stays English
     denied = run(dict(agent('full-def'), permission_mode='bypassPermissions'), env, '--mode=enforce')
     assert is_deny(denied) and reason(denied).startswith('7-day window at 85 %: the user has to approve')
+
+
+@pytest.mark.parametrize('description,expected', [
+    ('Check the logs', 'WOCHE 92 % · Check the logs'),
+    (None, 'WOCHE 92 %'),
+    ('', 'WOCHE 92 %'),
+    ('  ', 'WOCHE 92 %'),
+    (['list'], 'WOCHE 92 %'),
+])
+def test_dialog_input_puts_the_number_of_the_question_in_front_of_the_description(description, expected):
+    tool_input = {'prompt': 'p', 'subagent_type': 'arbeiter-bauen', 'run_in_background': True, 'model': 'sonnet'}
+    if description is not None:
+        tool_input['description'] = description
+    before = dict(tool_input)
+    question = 'WOCHE 92 % · arbeiter-bauen starten? "half-def" allowed as an exception.'
+    assert spawn_gate.dialog_input('Agent', tool_input, question) == dict(before, description=expected)
+    assert tool_input == before                                               # the input it got stays as it was
+
+
+@pytest.mark.parametrize('language', ['en', 'de'])
+def test_dialog_input_takes_the_number_from_either_question(language):
+    question = spawn_gate.QUESTIONS[language].format(week=85.4, what='x')
+    label = spawn_gate.WEEK_LABELS[language].format(week=85.4)
+    assert spawn_gate.dialog_input('Agent', {'description': 'd'}, question) == {'description': f'{label} · d'}
+
+
+@pytest.mark.parametrize('tool,tool_input', [
+    ('Skill', {'skill': 'review'}), ('Workflow', {'script': 'x'}), ('Agent', None), ('Agent', ['list']),
+])
+def test_dialog_input_leaves_skills_workflows_and_broken_inputs_alone(tool, tool_input):
+    # Skill and Workflow have no description to show; a broken input would be replaced by a lone description
+    assert spawn_gate.dialog_input(tool, tool_input, 'WEEK 85 % · start x?') is None
 
 
 @pytest.mark.parametrize('content,expected', [
