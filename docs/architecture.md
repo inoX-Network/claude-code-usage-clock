@@ -356,7 +356,9 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE
    → warn if `--week-ok-until` is today or later, else `week_action`: `warn`, `deny`, or `ask`
    (`permissionDecision: "ask"`, reason for the user, no `additionalContext`: the model took an approved start for a block;
    the reason is the short question `WEEK N % · start <what>?`, German when `language` in `~/.claude/settings.json` is
-   German, `<what>` cut to name characters because the model writes it). `ask` only where the
+   German, `<what>` cut to name characters because the model writes it). For an Agent start the ask also returns
+   `updatedInput`: the whole tool input as it came, with the question's number in front of `description`
+   (`dialog_input`), because Claude's phone app shows the description, not the reason. `ask` only where the
    prompt is shown for sure (`permission_mode` default, acceptEdits, plan); any other or a missing mode denies
    unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.

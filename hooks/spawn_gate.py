@@ -21,8 +21,9 @@ command in settings.json, where the model cannot set it if settings.json is prot
 denied in permission modes that may skip the prompt, see ASK_SHOWN) or deny.
 In shadow mode nothing is blocked: every decision is logged, and deny, ask and warn reach the model as a
 note of what enforce would have done (_hookio.shadow_note).
-The question of an ask is the only text a human reads: short, the number first, in the language of Claude Code's
-`language` setting (German or English). Reasons and notes for the model stay English.
+The question of an ask is the text a human reads: short, the number first, in the language of Claude Code's
+`language` setting (German or English). Claude's phone app shows the agent's description instead, so an ask puts
+the number in front of it too (dialog_input). Reasons and notes for the model stay English.
 """
 import json
 import os
@@ -36,10 +37,15 @@ EVENT = 'PreToolUse'
 # Permission modes in which Claude Code shows the prompt a hook asks for. Every other mode, and a missing one,
 # may answer the prompt without a human; there `ask` denies unless `thresholds.ask_verified_in_bypass` is set.
 ASK_SHOWN = ('default', 'acceptEdits', 'plan')
+# The number in front of every question; dialog_input puts it in front of the agent's description too
+WEEK_LABELS = {
+    'en': 'WEEK {week:.0f} %',
+    'de': 'WOCHE {week:.0f} %',
+}
 # The question of the ask dialog per language; every other language gets English
 QUESTIONS = {
-    'en': 'WEEK {week:.0f} % · start {what}?',
-    'de': 'WOCHE {week:.0f} % · {what} starten?',
+    'en': WEEK_LABELS['en'] + ' · start {what}?',
+    'de': WEEK_LABELS['de'] + ' · {what} starten?',
 }
 GERMAN = ('german', 'deutsch', 'de')
 
@@ -68,6 +74,18 @@ def start_label(tool: str, tool_input: dict) -> str:
         name, prefix = tool_input.get('name'), 'workflow '
     clean = re.sub(r'[^A-Za-z0-9_.:/-]', '', name)[:60] if isinstance(name, str) else ''
     return f'{prefix}{clean}'.strip() or tool.lower()
+
+
+def dialog_input(tool, tool_input, question: str) -> dict | None:
+    """The tool input an ask hands back (updatedInput), or None. Only for Agent: Claude's phone app shows the
+    description, not the question (seen 18 Oct 2026), so the number of the question (the part before the first
+    ' · ') goes in front of it. updatedInput replaces the whole input, so every other field stays as it came."""
+    if tool != 'Agent' or not isinstance(tool_input, dict):
+        return None
+    label = question.split(' · ', 1)[0]
+    description = tool_input.get('description')
+    marked = f'{label} · {description}' if isinstance(description, str) and description.strip() else label
+    return dict(tool_input, description=marked)
 
 
 def _mode(argv: list[str]) -> str:
@@ -210,7 +228,7 @@ def main() -> int:
     if decision == 'deny':
         _hookio.emit_deny(EVENT, reason)
     elif decision == 'ask':
-        _hookio.emit_ask(EVENT, reason)
+        _hookio.emit_ask(EVENT, reason, dialog_input(hook_input.get('tool_name'), hook_input.get('tool_input'), reason))
     elif decision == 'warn':
         _hookio.emit_context(EVENT, 'Spawn gate: ' + reason)
     return 0

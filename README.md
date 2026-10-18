@@ -274,7 +274,10 @@ switches it off.
   Claude Code's permission prompt, so you confirm each start yourself; only a person can answer it, the model
   cannot fake a yes. The question is short, number first: `WEEK 83 % · start arbeiter-bauen?`, in German
   (`WOCHE 83 % · arbeiter-bauen starten?`) when `language` in Claude Code's `~/.claude/settings.json` is German, in
-  English for every other language. Reasons and notes for the model stay English. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
+  English for every other language. Claude's phone app does not show that question, only the agent's description,
+  so for an Agent start the gate also puts the number in front of the description (`WOCHE 83 % · Check the logs`);
+  the started agent keeps that description. "Yes, and don't ask again" in the prompt does not switch the gate off:
+  the next start asks again (tested 18 Oct 2026). Reasons and notes for the model stay English. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
   no mode in the hook input) `ask` refuses instead, until you have seen the prompt appear in your setup and set
   `thresholds.ask_verified_in_bypass: true`.
 - Unknown or stale usage: a single agent may start (with a warning), a larger block may not.
