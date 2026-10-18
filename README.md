@@ -356,7 +356,7 @@ python3 tools/usage_report.py --month 2026-01
 python3 tools/usage_report.py --year 2026           # the days of the year (this year: up to today)
 python3 tools/usage_report.py --since 2026-01-05 --until 2026-01-11
 python3 tools/usage_report.py --week --project shop     # the details of one project (as in --full) and their sum
-python3 tools/usage_report.py --week --session 5f3a     # the details of one session: any start of its id
+python3 tools/usage_report.py --week --session 5f3a     # the details of one session (any start of its id), with the split of its context
 python3 tools/usage_report.py --week --full             # every figure
 python3 tools/usage_report.py --json                # the same figures for other tools, the overview included
 python3 tools/usage_report.py --archive             # see docs/usage-report.md
@@ -408,6 +408,50 @@ Details: --project 0016 · --session aaaaaaaa · --full
 What every part of the overview and of the full report (`--full`) means, the details switches and the day archive
 are in [`docs/usage-report.md`](docs/usage-report.md); every line and JSON field in
 [`docs/report-format.md`](docs/report-format.md).
+
+### What a session started with
+
+The transcripts hold only the sum of each request, not what the start of a session consisted of. The desktop plugin
+([`desktop/`](desktop/README.md)) therefore measures it: once per main session, after its first answer, it writes how the
+context was made up (the split `/context` shows: categories, every MCP tool, memory files, skills, agents) to
+`<log_dir>/context-breakdown/<session id>.json`, by default `~/.cache/claude-usage-clock/context-breakdown/`. Only names
+and token counts are written, never the text of a prompt, a file or a tool. It is recorded from the installation of the
+plugin on, not backwards: older sessions have no file, and subagents have none either.
+
+The report reads those files for the sessions of the period. `--session` prints the split as the block *Context after the
+first answer*, and `--json` has it as `clis[].context` (`null` without a file). A file that cannot be used is counted in
+`coverage.unreadable_context_files` and does not stop the report.
+
+```
+Context after the first answer (session 5f3a9c21, shop, measured 2026-01-14T08:02:31Z)
+  64,200 of 1,000,000 tokens (6.4 %), model claude-opus-5-5, detail full
+  Categories
+    System prompt: 3,200
+    System tools: 11,400
+    MCP tools: 9,000
+    Memory files: 2,200
+    Skills: 1,200
+    Custom agents: 750
+    Messages: 36,450
+    Free space: 935,800
+  MCP servers: 9,000 tokens in 2 servers
+    github: 8,600 tokens, 2 tools
+      list_issues: 4,700
+      create_issue: 3,900
+    docs: 400 tokens, 1 tool
+      query: 400
+  Memory files: 2,200 tokens in 2 files
+    ~/.claude/CLAUDE.md (user): 1,500
+    /home/u/Projekte/shop/CLAUDE.md (project): 700
+  Skills: 1,200 tokens, 2 of 3 included
+    api-design: 700
+    testing-tdd: 500
+  Agents: 750 tokens in 2 agents
+    reviewer (user): 450
+    architect (user): 300
+```
+
+The fields of the file and of `context` are explained in [`docs/report-format.md`](docs/report-format.md).
 
 ### Ask your agent about your usage
 

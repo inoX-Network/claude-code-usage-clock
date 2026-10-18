@@ -1582,14 +1582,15 @@ def test_the_json_has_a_fixed_set_of_sections(world):
     assert set(data['period']) == {'kind', 'label', 'start', 'end'} and data['period']['kind'] == 'day'
     assert set(data['coverage']) == {'transcript_files', 'archive_days', 'archive_days_without_agent_split',
                                      'unreadable_history_lines', 'unreadable_archive_lines',
-                                     'unreadable_transcript_lines'}
+                                     'unreadable_transcript_lines', 'unreadable_context_files'}
     assert set(data['total']) == {'requests', 'tokens', 'cost_usd', 'main', 'subagents', 'models', 'unpriced',
                                   'cache_hit_rate', 'cold_starts', 'thinking_tokens', 'thinking_share', 'web_searches',
                                   'web_fetches'}
     assert set(data['total']['subagents']) == {'requests', 'cost_usd', 'by_type'}
     assert set(data['clis'][0]) == {'id', 'label', 'start', 'requests', 'cost_usd', 'tokens', 'models', 'subagents',
                                     'cache_hit_rate', 'cold_starts', 'estimated_share', 'thinking_tokens', 'thinking_share',
-                                    'web_searches', 'web_fetches'}
+                                    'web_searches', 'web_fetches', 'context'}
+    assert data['clis'][0]['context'] is None
     assert set(data['calibration']) == {'five', 'week'}
     assert set(data['calibration']['five']) == {'status', 'sections', 'usd_per_point', 'per_day', 'per_model'}
 
