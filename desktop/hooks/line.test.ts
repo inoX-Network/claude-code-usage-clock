@@ -20,7 +20,7 @@ test('the whole line, as the status line writes it', () => {
   expect(parts(usage, DEFAULTS, NOW - 6 * 60_000, NOW, ZONE)).toEqual([
     { text: '5h 17% ↻12:50', color: undefined },
     { text: 'week 76% ↻Mon 15:00', color: 'error' },
-    { text: '<- weekly limit reached', color: 'error', attached: true },
+    { text: '<- week gate: agents warn', color: 'error', attached: true },
     { text: 'ctx 340k/1000k 34%', color: 'warning' },
     { text: 'cache ~54m', color: undefined },
     { text: '$3.50', color: undefined },
@@ -49,13 +49,21 @@ test('colours start exactly at the thresholds', () => {
   expect(at(75, 500_000)).toEqual(['error', 'error'])
 })
 
-test('the weekly reset and the stop marker only from their thresholds on', () => {
+test('the weekly reset and the gate marker only from their thresholds on', () => {
   const week = (percent: number) => parts(
     { startedAt: 0, context: { window: 1_000 }, rateLimits: [{ kind: 'seven_day', percentUsed: percent, resetsAt: '2026-10-19T13:00:00Z' }] },
     DEFAULTS, null, NOW, ZONE).map(p => p.text)
   expect(week(49)).toEqual(['week 49%', 'ctx –/1k'])
   expect(week(50)).toEqual(['week 50% ↻Mon 15:00', 'ctx –/1k'])
-  expect(week(75)).toEqual(['week 75% ↻Mon 15:00', '<- weekly limit reached', 'ctx –/1k'])
+  expect(week(75)).toEqual(['week 75% ↻Mon 15:00', '<- week gate: agents warn', 'ctx –/1k'])
+})
+
+test('the gate marker says what the spawn gate does (week_action)', () => {
+  const marker = (weekAction: 'warn' | 'ask' | 'deny') => parts(usage, { ...DEFAULTS, weekAction }, null, NOW, ZONE)
+    .find(p => p.attached === true)
+  expect(marker('warn')).toEqual({ text: '<- week gate: agents warn', color: 'error', attached: true })
+  expect(marker('ask')).toEqual({ text: '<- week gate: agents ask', color: 'error', attached: true })
+  expect(marker('deny')).toEqual({ text: '<- week gate: agents blocked', color: 'error', attached: true })
 })
 
 test('the context before the first answer, and without a usable window', () => {

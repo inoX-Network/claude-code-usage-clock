@@ -79,22 +79,40 @@ def test_non_finite_values_are_left_out():
     assert plain(statusline.render('M', float('nan'), float('inf'), CFG)) == 'M'
 
 
-def test_weekly_limit_marker_from_the_threshold():
-    assert 'weekly limit reached' not in statusline.render('M', 10, 74.4, CFG)
+def test_week_gate_marker_from_the_threshold():
+    assert 'week gate' not in statusline.render('M', 10, 74.4, CFG)
     line = statusline.render('M', 10, 75, CFG)
-    assert line.endswith(f' {RED}<- weekly limit reached{RESET}')
-    assert 'weekly limit reached' in statusline.render('M', None, 90, CFG)      # also without a five-hour value
-    assert 'weekly limit reached' not in statusline.render('M', 99, None, CFG)  # only the week counts
+    assert line.endswith(f' {RED}<- week gate: agents warn{RESET}')
+    assert 'week gate' in statusline.render('M', None, 90, CFG)      # also without a five-hour value
+    assert 'week gate' not in statusline.render('M', 99, None, CFG)  # only the week counts
 
 
-def test_weekly_limit_marker_can_be_switched_off_and_follows_the_threshold():
+def test_week_gate_marker_can_be_switched_off_and_follows_the_threshold():
     cfg = json.loads(json.dumps(CFG))
     cfg['statusline']['week_stop_marker'] = False
-    assert 'weekly limit' not in statusline.render('M', 10, 99, cfg)
+    assert 'week gate' not in statusline.render('M', 10, 99, cfg)
     cfg['statusline']['week_stop_marker'] = True
     cfg['thresholds']['start_block_week'] = 90
-    assert 'weekly limit' not in statusline.render('M', 10, 89, cfg)
-    assert 'weekly limit' in statusline.render('M', 10, 90, cfg)
+    assert 'week gate' not in statusline.render('M', 10, 89, cfg)
+    assert 'week gate' in statusline.render('M', 10, 90, cfg)
+
+
+@pytest.mark.parametrize('action,marker', [('warn', '<- week gate: agents warn'), ('ask', '<- week gate: agents ask'),
+                                           ('deny', '<- week gate: agents blocked')])
+def test_week_gate_marker_says_what_the_spawn_gate_does(action, marker):
+    cfg = json.loads(json.dumps(CFG))
+    cfg['thresholds']['week_action'] = action
+    assert statusline.render('M', 10, 80, cfg).endswith(f' {RED}{marker}{RESET}')
+
+
+@pytest.mark.parametrize('action,marker', [('ask', '<- week gate: agents ask'), ('later', '<- week gate: agents warn')])
+def test_week_gate_marker_follows_the_config_file_and_an_invalid_action_falls_back_to_warn(tmp_path, action, marker):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'thresholds': {'week_action': action}}), encoding='utf-8')
+    now = time.time()
+    r = run({'rate_limits': {'seven_day': b(80, now + 86400)}}, tmp_path,
+            {'CCUC_CONFIG': str(config), 'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
+    assert no_reset(plain(r.stdout)).strip() == f'Claude | week 80% {marker}'
 
 
 @pytest.mark.parametrize('status,expected', [({}, 'Claude'), ({'model': None}, 'Claude'), ({'model': 'x'}, 'Claude'),
@@ -138,7 +156,7 @@ def test_week_marker_appears_through_the_script(tmp_path):
     now = time.time()
     r = run({'model': {'display_name': 'M'}, 'rate_limits': {'five_hour': b(10, now + 3600),
                                                               'seven_day': b(80, now + 86400)}}, tmp_path)
-    assert no_reset(plain(r.stdout)).strip() == 'M | 5h 10% | week 80% <- weekly limit reached'
+    assert no_reset(plain(r.stdout)).strip() == 'M | 5h 10% | week 80% <- week gate: agents warn'
 
 
 def test_without_rate_limits_only_the_model_is_shown_and_nothing_is_written(tmp_path):
@@ -205,7 +223,7 @@ def test_config_file_controls_colors_and_marker(tmp_path):
     now = time.time()
     r = run({'rate_limits': {'five_hour': b(7, now + 3600), 'seven_day': b(30, now + 86400)}}, tmp_path,
             {'CCUC_CONFIG': str(config)})
-    assert f'{YELLOW}5h 7%' in r.stdout and f'{RED}week 30%' in r.stdout and 'weekly limit' not in r.stdout
+    assert f'{YELLOW}5h 7%' in r.stdout and f'{RED}week 30%' in r.stdout and 'week gate' not in r.stdout
 
 
 def test_broken_config_falls_back_to_defaults_without_logging(tmp_path):
@@ -255,7 +273,7 @@ def test_context_part_shows_tokens_window_and_percent_in_the_documented_order():
     line = statusline.render('Opus', 40, 61, CFG, window(231_000, percent=23.4), 0)
     assert plain(line) == 'Opus | 5h 40% | week 61% | ctx 231k/1000k 23%'
     assert plain(statusline.render('M', 10, 80, CFG, window(231_000), 0)) == (
-        'M | 5h 10% | week 80% <- weekly limit reached | ctx 231k/1000k 23%')
+        'M | 5h 10% | week 80% <- week gate: agents warn | ctx 231k/1000k 23%')
 
 
 def test_context_part_is_the_only_part_if_there_are_no_limits():
@@ -481,7 +499,7 @@ def test_the_weekly_reset_follows_the_configured_yellow_and_stands_before_the_ma
     reset = NOW + 86400
     assert f'week 25% ↻{day_hhmm(reset)}' in plain(statusline.render('M', None, 25, cfg, None, NOW, (None, reset)))
     line = plain(statusline.render('M', None, 80, CFG, None, NOW, (None, reset)))
-    assert line == f'M | week 80% ↻{day_hhmm(reset)} <- weekly limit reached'
+    assert line == f'M | week 80% ↻{day_hhmm(reset)} <- week gate: agents warn'
 
 
 @pytest.mark.parametrize('reset', [None, NOW, NOW - 60, True, 'tomorrow', float('nan'), float('inf'), 1e300, -1e300])
@@ -527,7 +545,7 @@ def test_config_file_switches_the_reset_times_off(tmp_path):
     now = time.time()
     r = run({'rate_limits': {'five_hour': b(7, now + 3600), 'seven_day': b(80, now + 86400)}}, tmp_path,
             {'CCUC_CONFIG': str(config), 'CCUC_USAGE_FILE': str(tmp_path / 'usage.json')})
-    assert plain(r.stdout).strip() == 'Claude | 5h 7% | week 80% <- weekly limit reached'
+    assert plain(r.stdout).strip() == 'Claude | 5h 7% | week 80% <- week gate: agents warn'
 
 
 # --- Measurement history: appended after a successful merge ------------------------------------------

@@ -14,7 +14,11 @@ export type LineConfig = {
   contextRedFromK: number
   cacheYellowBelowMin: number
   startBlockWeek: number
+  /** What the spawn gate does from startBlockWeek on (thresholds.week_action); the weekly marker names it. */
+  weekAction: WeekAction
 }
+
+export type WeekAction = 'warn' | 'ask' | 'deny'
 
 export type ReportPeriod = 'day' | 'week' | 'month' | 'year'
 export type ReportView = 'overview' | 'agents' | 'models' | 'cache' | 'tokens' | 'projects' | 'sessions'

@@ -21,9 +21,12 @@ command in settings.json, where the model cannot set it if settings.json is prot
 denied in permission modes that may skip the prompt, see ASK_SHOWN) or deny.
 In shadow mode nothing is blocked: every decision is logged, and deny, ask and warn reach the model as a
 note of what enforce would have done (_hookio.shadow_note).
+The question of an ask is the only text a human reads: short, the number first, in the language of Claude Code's
+`language` setting (German or English). Reasons and notes for the model stay English.
 """
 import json
 import os
+import re
 import sys
 from datetime import date
 
@@ -33,6 +36,38 @@ EVENT = 'PreToolUse'
 # Permission modes in which Claude Code shows the prompt a hook asks for. Every other mode, and a missing one,
 # may answer the prompt without a human; there `ask` denies unless `thresholds.ask_verified_in_bypass` is set.
 ASK_SHOWN = ('default', 'acceptEdits', 'plan')
+# The question of the ask dialog per language; every other language gets English
+QUESTIONS = {
+    'en': 'WEEK {week:.0f} % · start {what}?',
+    'de': 'WOCHE {week:.0f} % · {what} starten?',
+}
+GERMAN = ('german', 'deutsch', 'de')
+
+
+def ui_language(path: str | None = None) -> str:
+    """'de' when `language` in Claude Code's settings.json names German, else 'en': missing file or key,
+    unreadable file and any other language."""
+    path = path or os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            settings = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return 'en'
+    value = settings.get('language') if isinstance(settings, dict) else None
+    return 'de' if isinstance(value, str) and value.strip().lower() in GERMAN else 'en'
+
+
+def start_label(tool: str, tool_input: dict) -> str:
+    """What starts, for the dialog: the agent type, the skill or `workflow <name>`. The model writes these values,
+    so only name characters are kept, at most 60: the question cannot be made to say something else."""
+    if tool == 'Agent':
+        name, prefix = tool_input.get('subagent_type') or 'general-purpose', ''
+    elif tool == 'Skill':
+        name, prefix = tool_input.get('skill'), ''
+    else:
+        name, prefix = tool_input.get('name'), 'workflow '
+    clean = re.sub(r'[^A-Za-z0-9_.:/-]', '', name)[:60] if isinstance(name, str) else ''
+    return f'{prefix}{clean}'.strip() or tool.lower()
 
 
 def _mode(argv: list[str]) -> str:
@@ -51,8 +86,10 @@ def _deny_without_hookio(reason: str) -> None:
 
 
 def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until: date | None = None,
-                 today: date | None = None, permission_mode: str | None = None) -> tuple[str, str]:
-    """Usage part: ('allow' | 'warn' | 'ask' | 'deny', reason).
+                 today: date | None = None, permission_mode: str | None = None, what: str = 'agent',
+                 language: str = 'en') -> tuple[str, str]:
+    """Usage part: ('allow' | 'warn' | 'ask' | 'deny', reason). `what` and `language` only shape the question of
+    an ask (see QUESTIONS).
 
     agent_count: agents in the block (Agent tool and Skill fork = 1, Workflow = counted agent() calls,
     None = could not be counted). week_ok_until: approval for the 7-day window, valid up to and including
@@ -76,7 +113,7 @@ def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until
         elif action == 'warn':
             note = f'{week}: above the weekly threshold, start allowed (week_action warn); keep blocks small.'
         elif action == 'ask' and (permission_mode in ASK_SHOWN or thresholds['ask_verified_in_bypass']):
-            question = f'{week}: above the weekly threshold. Allow this start?'
+            question = QUESTIONS.get(language, QUESTIONS['en']).format(week=usage.week, what=what)
         elif action == 'ask':
             return 'deny', (f'{week}: the user has to approve this start, but in permission mode '
                             f'"{permission_mode or "unknown"}" the prompt may be answered without them '
@@ -133,7 +170,7 @@ def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today
     usage = _usage.read_usage(None, now, cfg['thresholds']['max_age_min'])
     mode = hook_input.get('permission_mode')
     action, text = decide_start(usage, check.agent_count, cfg['thresholds'], week_ok_until, today,
-                                mode if isinstance(mode, str) else None)
+                                mode if isinstance(mode, str) else None, start_label(tool, tool_input), ui_language())
     if action in ('deny', 'ask'):
         return action, ' '.join([text] + check.notes)
     notes = check.notes + ([text] if action == 'warn' else [])

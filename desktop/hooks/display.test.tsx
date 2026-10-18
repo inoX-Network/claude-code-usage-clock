@@ -32,7 +32,7 @@ async function line($: Parameters<Parameters<typeof test>[1]>[0], surface: 'term
     own: await ui.find({ type: 'Text', text: /bypass/ }),
     week: await ui.find({ type: 'Text', text: /week 72%/ }),
     ctx: await ui.find({ type: 'Text', text: /ctx 340k\/1000k 34%/ }),
-    marker: await ui.find({ type: 'Text', text: /weekly limit reached/ }),
+    marker: await ui.find({ type: 'Text', text: /week gate/ }),
   }
   await ui.unmount()
   return found
@@ -52,12 +52,12 @@ test('the desktop app gets the line, coloured by the usage-clock config', async 
   expect(found.marker).toBeUndefined()                // 72 % is below start_block_week 90
 })
 
-test('the weekly stop marker follows the week with a space, like the status line', async ($, on) => {
-  world(on, { 'C:/Users/you/.claude/hooks/usage-clock/config.json': JSON.stringify({ thresholds: { start_block_week: 72 } }) }, [])
+test('the weekly gate marker follows the week with a space and names week_action, like the status line', async ($, on) => {
+  world(on, { 'C:/Users/you/.claude/hooks/usage-clock/config.json': JSON.stringify({ thresholds: { start_block_week: 72, week_action: 'ask' } }) }, [])
   await $.session.start({ cwd: 'C:/proj' })
   await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
   const found = await line($, 'desktop')
-  expect(found.marker?.text).toBe(' <- weekly limit reached')
+  expect(found.marker?.text).toBe(' <- week gate: agents ask')
   expect(found.ctx?.text).toBe(' | ctx 340k/1000k 34%')
 })
 
