@@ -526,3 +526,15 @@ def test_a_file_with_a_byte_that_is_no_utf8_is_counted_not_repaired(world):
     path.write_bytes(path.read_bytes().replace(b'System prompt', b'System \xff prompt'))
     report = world.report('--day', DAY)
     assert report['clis'][0]['context'] is None and report['coverage']['unreadable_context_files'] == 1
+
+
+def test_skills_may_be_null_when_the_engine_gives_no_breakdown(world):
+    one_session(world)
+    data = context_data()
+    data['skills'] = None
+    put_context(world, data)
+    report = world.report('--day', DAY)
+    assert report['clis'][0]['context']['skills'] is None and report['coverage']['unreadable_context_files'] == 0
+    lines = [line.strip() for line in block_of(world.overview('--day', DAY, '--session', 'aaaaaaaa'))]
+    assert 'Skills: no skill breakdown' in lines
+    assert not any(line.startswith('Skills: ') and 'tokens' in line for line in lines)

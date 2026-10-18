@@ -606,8 +606,8 @@ def parse_context(data, session: str) -> dict:
     if (not isinstance(data, dict) or type(data.get('schema_version')) is not int
             or data['schema_version'] != CONTEXT_VERSION or data.get('session_id') != session):
         raise ValueError('shape')
-    skills = data.get('skills')
-    if not isinstance(skills, dict):
+    skills = data.get('skills')      # null: the engine gave no split of the skills
+    if 'skills' not in data or not (skills is None or isinstance(skills, dict)):
         raise ValueError('skills')
     return {'schema_version': CONTEXT_VERSION, 'at': _context_value(data.get('at'), 'text'),
             'cwd': _context_value(data.get('cwd'), 'label'), 'model': _context_value(data.get('model'), 'label'),
@@ -617,10 +617,11 @@ def parse_context(data, session: str) -> dict:
             'categories': _context_rows(data.get('categories'), CATEGORY_FIELDS),
             'memory_files': _context_rows(data.get('memory_files'), MEMORY_FIELDS),
             'mcp_tools': _context_rows(data.get('mcp_tools'), TOOL_FIELDS),
-            'skills': {'tokens': _context_value(skills.get('tokens'), 'count'),
-                       'included': _context_value(skills.get('included'), 'count'),
-                       'total': _context_value(skills.get('total'), 'count'),
-                       'items': _context_rows(skills.get('items'), SKILL_FIELDS)},
+            'skills': None if skills is None else {
+                'tokens': _context_value(skills.get('tokens'), 'count'),
+                'included': _context_value(skills.get('included'), 'count'),
+                'total': _context_value(skills.get('total'), 'count'),
+                'items': _context_rows(skills.get('items'), SKILL_FIELDS)},
             'agents': _context_rows(data.get('agents'), AGENT_FIELDS)}
 
 
@@ -1689,8 +1690,11 @@ def _context_lines(cli: dict) -> list[str]:
     lines += _top_lines([(_home_short(f['path']) + (f' ({f["type"]})' if f['type'] else ''), f['tokens'])
                          for f in memory], '    ')
     skills = context['skills']
-    lines.append(f'  Skills: {skills["tokens"]:,} tokens, {skills["included"]} of {skills["total"]} included')
-    lines += _top_lines([(item['name'], item['tokens']) for item in skills['items']], '    ')
+    if skills is None:
+        lines.append('  Skills: no skill breakdown')
+    else:
+        lines.append(f'  Skills: {skills["tokens"]:,} tokens, {skills["included"]} of {skills["total"]} included')
+        lines += _top_lines([(item['name'], item['tokens']) for item in skills['items']], '    ')
     agents = context['agents']
     lines.append(f'  Agents: {sum(a["tokens"] for a in agents):,} tokens in {_plural(len(agents), "agent")}'
                  if agents else '  Agents: none')

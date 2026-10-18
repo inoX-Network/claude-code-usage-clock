@@ -302,7 +302,7 @@ The fields of the file (`schema_version` 1), all token counts whole numbers:
 | `categories` | The parts `/context` names, in its order: `name`, `tokens` and `kind` (the kind the plugin reports, may be `null`). |
 | `memory_files` | CLAUDE.md and memory files: `path` (as written; the text report shortens the home folder to `~`), `type` (may be `null`) and `tokens`. |
 | `mcp_tools` | Each MCP tool: `server`, `name`, `tokens` and `loaded` (whether the tool was loaded into the context, as reported; may be `null`). |
-| `skills` | `tokens` (all skills), `included` (how many were in the context), `total` (how many exist) and `items`: `name` and `tokens` of each one. |
+| `skills` | `null` if the engine gave no split of the skills (the key must still be there). Else `tokens` (all skills), `included` (how many were in the context), `total` (how many exist) and `items`: `name` and `tokens` of each one. |
 | `agents` | Each agent definition: `type`, `source` (where it comes from, may be `null`) and `tokens`. |
 
 `schema_version` of the **report** stays 1: `context` and `unreadable_context_files` are new fields, and a new field does
@@ -310,7 +310,7 @@ not change it (see the table above).
 
 With `--session` the text report shows the same data as the block *Context after the first answer*: the total and the
 window with the percentage, the categories, the MCP servers (tokens of all their tools, number of tools and their ten
-dearest tools), the memory files, the skills (tokens, how many were included of how many exist, the ten dearest) and the
+dearest tools), the memory files, the skills (tokens, how many were included of how many exist, the ten dearest; `Skills: no skill breakdown` if the file has none) and the
 agents (the ten dearest); every list has the dearest row first and ends with `… N more` if rows were left out. Without a
 file the block is the one line `No context recorded for this session.`; an unreadable file is named in `Sources:` as
 `N unreadable context file(s) skipped`. `--project` alone and the overview do not show the block.
