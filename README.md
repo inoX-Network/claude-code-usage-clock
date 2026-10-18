@@ -101,7 +101,7 @@ the installer did. What stays, and how to remove it:
 | What stays | How to remove it |
 |---|---|
 | The `--target` folder (default `~/.claude/hooks/usage-clock/`) with the scripts and your `config.json` | `rm -r ~/.claude/hooks/usage-clock` (or the folder you gave with `--target`) |
-| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters, the per-session context files, the measurement history (`usage-history.jsonl` and `usage-history.jsonl.1`), the report archive (`usage-days.jsonl`) and the lock of the usage file (`rate-limit.json.lock`) | `rm -r ~/.cache/claude-usage-clock` |
+| The log folder (`log_dir`, default `~/.cache/claude-usage-clock/`): `log.jsonl`, the per-agent counters, the per-session context files (`context/`), the context split the desktop plugin writes after the first answer (`context-breakdown/`), the measurement history (`usage-history.jsonl` and `usage-history.jsonl.1`), the report archive (`usage-days.jsonl`) and the lock of the usage file (`rate-limit.json.lock`) | `rm -r ~/.cache/claude-usage-clock` |
 | The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
@@ -213,7 +213,9 @@ Later the same evening: the five-hour window has passed 75 % and turns red. With
 spawn gate now starts no new agent blocks until the window resets at 22:40.
 
 - `5h` and `week` come from `rate_limits` (yellow from 50 %, red from 75 %); at the weekly threshold
-  `<- weekly limit reached` follows.
+  (`start_block_week`) a marker names what the spawn gate now does, by `thresholds.week_action`:
+  `<- week gate: agents warn`, `<- week gate: agents ask` or `<- week gate: agents blocked`. The weekly limit itself
+  is still ahead then.
 - `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday and appears only
   from yellow on; below that it is days away. A missing or past reset time is left out
   (`statusline.show_reset`).
@@ -270,7 +272,9 @@ switches it off.
 - Weekly usage at or above `start_block_week` (75 %): `thresholds.week_action` decides, unless `--week-ok-until`
   covers today (then it only warns). `warn` (default) starts with a warning, `deny` refuses, and `ask` shows
   Claude Code's permission prompt, so you confirm each start yourself; only a person can answer it, the model
-  cannot fake a yes. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
+  cannot fake a yes. The question is short, number first: `WEEK 83 % · start arbeiter-bauen?`, in German
+  (`WOCHE 83 % · arbeiter-bauen starten?`) when `language` in Claude Code's `~/.claude/settings.json` is German, in
+  English for every other language. Reasons and notes for the model stay English. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
   no mode in the hook input) `ask` refuses instead, until you have seen the prompt appear in your setup and set
   `thresholds.ask_verified_in_bypass: true`.
 - Unknown or stale usage: a single agent may start (with a warning), a larger block may not.
@@ -479,7 +483,7 @@ that key and writes one line to the log.
 | `log_dir` | `~/.cache/claude-usage-clock` | Log, per-agent counters, per-session context files, the measurement history and the report archive. |
 | `display.show_usage` / `show_time` | `true` / `true` | Parts of the prompt line. |
 | `statusline.yellow_from` / `red_from` | `50` / `75` | Colours. |
-| `statusline.week_stop_marker` | `true` | Show `<- weekly limit reached` at the weekly threshold. |
+| `statusline.week_stop_marker` | `true` | Show the week gate marker (`<- week gate: agents warn`, `ask` or `blocked`, by `week_action`) at the weekly threshold. |
 | `statusline.show_reset` | `true` | Show when the windows reset (`↻14:00`; the weekly one from yellow on). |
 | `statusline.context_yellow_from_k` / `context_red_from_k` | `300` / `500` | Colour of the `ctx` part by absolute tokens in thousands, not by percentage. |
 | `statusline.cache_yellow_below_min` | `5` | The `cache` clock turns yellow below this many minutes. |
@@ -585,7 +589,7 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
 | `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
 | `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
-| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, measurement history, report archive, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
+| `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, the context split of each session, measurement history, report archive, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
 
 List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
 nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is

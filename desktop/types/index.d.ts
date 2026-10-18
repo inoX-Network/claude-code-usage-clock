@@ -35,6 +35,8 @@ export type ReportState = {
   view: ReportView
   /** The session of `clis` the Sessions view shows in detail; null shows the list. */
   session: string | null
+  /** The session the pane was opened from, marked in the Sessions view; null when it could not be read. */
+  own: string | null
   slots: { [period in ReportPeriod]?: ReportSlot }
 }
 

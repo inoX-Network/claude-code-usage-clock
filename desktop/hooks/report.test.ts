@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { REPORT } from './report-fixture'
-import { VIEWS, parsePeriod, parseReport, reportArgv, viewLines } from './report'
+import { VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { View } from './report'
 
 const LINUX = 'python3 /home/you/.claude/hooks/usage-clock/statusline.py'
@@ -227,5 +227,62 @@ describe('colours', () => {
     const parsed = parseReport(JSON.stringify(REPORT))
     if ('error' in parsed) throw new Error(parsed.error)
     expect(viewLines('overview', parsed.report, 100)).toEqual(viewLines('overview', parsed.report, 100, { yellowFrom: 50, redFrom: 75 }))
+  })
+})
+
+describe('Sessions', () => {
+  test('the own session is marked, the other rows move along so the columns stay aligned', () => {
+    const { head, rows } = sessionList(REPORT, 100, 'bbbbbbbb')
+    expect(head.text).toMatch(/^  session\s+started/)
+    const [first, second] = rows
+    expect(first?.id).toBe('aaaaaaaa')
+    expect(first?.line.text).toMatch(/^  webshop aaaaaaaa/)
+    expect(first?.line.parts).toBeUndefined()
+    expect(second?.line.text).toMatch(/^▶ blog bbbbbbbb/)
+    expect(second?.line.parts?.[0]).toEqual({ text: '▶ ', tone: 'claude' })
+    expect(second?.line.parts?.map(part => part.text).join('')).toBe(second?.line.text)
+    expect(first?.line.text.indexOf(' Oct ')).toBe(second?.line.text.indexOf(' Oct '))
+  })
+
+  test('without an own session, or one that is not in the list, nothing moves', () => {
+    for (const own of [null, 'cccccccc']) {
+      const { head, rows } = sessionList(REPORT, 100, own)
+      expect(head.text).toMatch(/^session\s+started/)
+      expect(rows.map(row => row.line.text.slice(0, 7))).toEqual(['webshop', 'blog bb'])
+      expect(rows.every(row => row.line.parts === undefined)).toBe(true)
+    }
+    expect(sessionList(REPORT, 100)).toEqual(sessionList(REPORT, 100, null))
+  })
+
+  test('the detail of the own session says so in its head', () => {
+    expect(sessionDetail(REPORT, 'aaaaaaaa', 100, 'aaaaaaaa')[0]?.text).toMatch(/^webshop aaaaaaaa · this session · /)
+    expect(sessionDetail(REPORT, 'aaaaaaaa', 100, 'bbbbbbbb')[0]?.text).toMatch(/^webshop aaaaaaaa · \S+ 13 Oct/)
+    expect(sessionDetail(REPORT, 'aaaaaaaa', 100)[0]?.text).not.toMatch(/this session/)
+  })
+
+  test('deferred categories and MCP tools are marked: their tokens are not in the context', () => {
+    const report = JSON.parse(JSON.stringify(REPORT)) as typeof REPORT
+    const context = report.clis[0]?.context as unknown as Record<string, unknown>
+    context.categories = [
+      { name: 'System tools', tokens: 16000, kind: 'used' },
+      { name: 'MCP tools (deferred)', tokens: 29000, kind: 'deferred' },
+      { name: 'Free space', tokens: 900000, kind: 'free' },
+    ]
+    context.mcp_tools = [
+      { server: 'blender', name: 'look', tokens: 1000, loaded: false },
+      { server: 'blender', name: 'run', tokens: 300, loaded: false },
+      { server: 'docs', name: 'query', tokens: 400, loaded: true },
+      { server: 'docs', name: 'other', tokens: 100, loaded: false },
+      { server: 'mail', name: 'send', tokens: 50, loaded: null },
+    ]
+    const text = sessionDetail(report, 'aaaaaaaa', 100).map(line => line.text)
+    const at = (title: RegExp) => text.findIndex(line => title.test(line))
+    expect(at(/^category\s+tokens/)).toBeLessThan(at(/^System tools\s+16,000/))
+    expect(at(/^deferred, not in the context\s+tokens/)).toBeGreaterThan(at(/^System tools/))
+    expect(at(/^MCP tools \(deferred\)\s+29,000/)).toBe(at(/^deferred, not in the context/) + 1)
+    expect(text).toContainEqual(expect.stringMatching(/^blender \(2 tools, deferred\)\s+1,300/))
+    expect(text).toContainEqual(expect.stringMatching(/^docs \(2 tools, 1 deferred\)\s+500/))
+    expect(text).toContainEqual(expect.stringMatching(/^mail \(1 tool\)\s+50/))
+    expect(text.join('\n')).not.toMatch(/Free space/)
   })
 })

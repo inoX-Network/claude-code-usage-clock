@@ -5,7 +5,7 @@ a hooks module) that draws the usage-clock line under the prompt instead, and th
 usage report ([below](#the-usage-report-report)):
 
 ```
-5h 17% ↻12:50 | week 76% ↻Mon 15:00 <- weekly limit reached | ctx 340k/1000k 34% | cache ~54m | $3.50
+5h 17% ↻12:50 | week 76% ↻Mon 15:00 <- week gate: agents warn | ctx 340k/1000k 34% | cache ~54m | $3.50
 ```
 
 ![The line under the prompt of the desktop app, cut off after the week](../docs/images/desktop-footer.png)
@@ -72,7 +72,7 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 | Cache/Thinking | Cache hit rate, cold starts, thinking tokens and their share of the output. |
 | Tokens | Input, cache write (5 minutes, 1 hour), cache read and output tokens. |
 | Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
-| Sessions | Every session of the period, highest cost first. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
+| Sessions | Every session of the period, highest cost first; `▶` marks the session you opened `/report` from. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
 
 Every number is that of `usage_report.py --json`, and [`docs/report-format.md`](../docs/report-format.md) says what it
 means and whether it is measured or an estimate (`~`).
@@ -98,8 +98,10 @@ breakdown: 'full' })`: one token count per tool and memory file, as `/context` d
 `<log_dir>/context-breakdown/<session id>.json`: the categories (system prompt, tools, MCP tools, memory files, skills,
 messages), every MCP tool by server, every memory file, skill and agent, each with its tokens. Names and numbers only,
 never content. `log_dir` is that of the hooks (`CCUC_LOG_DIR`, else `log_dir` of `config.json`, else
-`~/.cache/claude-usage-clock`). The Sessions view and `usage_report.py --session` show it. Sessions before plugin 0.4.0
-have none; subagents are not measured on their own.
+`~/.cache/claude-usage-clock`). The Sessions view and `usage_report.py --session` show it. Deferred categories and MCP
+tools (listed with their size, loaded only when used) are marked `deferred`: their tokens are not part of the total.
+Sessions before plugin 0.4.0 have none; subagents are not measured on their own. The plugin cannot set file modes: the
+file is as private as the log folder, which the hooks create with mode `0700`.
 
 ## It writes the usage file, too
 
@@ -124,7 +126,8 @@ side.
 
 The colours follow the `statusline` section of the usage-clock `config.json` (`yellow_from`, `red_from`,
 `week_stop_marker`, `show_reset`, `context_yellow_from_k`, `context_red_from_k`, `cache_yellow_below_min`) and
-`thresholds.start_block_week` for `<- weekly limit reached`. The file is read once per session start. A missing
+`thresholds.start_block_week` and `thresholds.week_action` for the week gate marker (`<- week gate: agents warn`, `ask`
+or `blocked`). The file is read once per session start. A missing
 file or a key with the wrong type means the default, as for the hooks.
 
 The plugin option `config_file` names the file (default `~/.claude/hooks/usage-clock/config.json`, where

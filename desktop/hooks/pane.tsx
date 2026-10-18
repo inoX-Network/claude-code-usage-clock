@@ -14,7 +14,7 @@ import type { Line, Period, View } from './report'
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
 
-const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, slots: {} }
+const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, own: null, slots: {} }
 const report = atom({ plugin: 'usage-clock-display', key: 'report' } as const, INITIAL)
 // The thresholds register.tsx reads at the session start; the engine wants each module's atoms written in that module
 const lineConfig = atom({ plugin: 'usage-clock-display', key: 'config' } as const, DEFAULTS)
@@ -74,7 +74,8 @@ export function registerReport(on: On): void {
   // The answer carries no text and no context: what the pane shows never becomes a transcript row or model input
   on('command.run', { command: 'report' }, async ($, e) => {
     const period = parsePeriod(e.args)
-    await update($, report, (): ReportState => ({ period, view: 'overview', session: null, slots: {} }))
+    const own = await $.session.id().catch(() => null)
+    await update($, report, (): ReportState => ({ period, view: 'overview', session: null, own, slots: {} }))
     await $.ui.open({ id: PANE, title: 'Usage report', focus: true, closeOnEscape: true })
     await load($, period)
     return {}
@@ -165,15 +166,19 @@ export function registerReport(on: On): void {
         body = [
           <Button key="back" hotkey="q" plain onPress={chooseSession(null)}><Text key="label-back" dimColor>Back to the list</Text></Button>,
           <Text key="gap"> </Text>,
-          ...sessionDetail(slot.report, state.session, e.props.bodyColumns).map(row),
+          ...sessionDetail(slot.report, state.session, e.props.bodyColumns, state.own).map(row),
         ]
       } else if (state.view === 'sessions' && body.length === 0) {
         // One button per session: Tab or Up and Down walk them, Enter opens one
-        const { head, rows } = sessionList(slot.report, e.props.bodyColumns)
+        const { head, rows } = sessionList(slot.report, e.props.bodyColumns, state.own)
         body = [
           row(head, 0),
           ...rows.map(({ id, line }) => (
-            <Button key={`session-${id}`} plain onPress={chooseSession(id)}><Text key={`label-session-${id}`} mono>{line.text}</Text></Button>
+            <Button key={`session-${id}`} plain onPress={chooseSession(id)}>
+              <Text key={`label-session-${id}`} mono>
+                {(line.parts ?? [{ text: line.text }]).map((part, j) => (part.tone === undefined ? part.text : <Text key={`p${j}`} color={part.tone}>{part.text}</Text>))}
+              </Text>
+            </Button>
           )),
         ]
       }

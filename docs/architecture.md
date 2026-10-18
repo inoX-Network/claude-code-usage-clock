@@ -74,7 +74,7 @@ decisions.
 
 ## Status line
 
-`statusline.py` prints one line: `<model> | 5h 40% ↻14:00 | week 61% [↻Mon 09:00] [<- weekly limit reached] |
+`statusline.py` prints one line: `<model> | 5h 40% ↻14:00 | week 61% [↻Mon 09:00] [<- week gate: agents warn|ask|blocked] |
 ctx 231k/1000k 23% | cache 54m`. Every part is left out if its input is missing or invalid (bool, string, NaN, negative): silent
 rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in `ctx –/1000k`).
 
@@ -354,7 +354,9 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE
 
 1. Usage: 5h at or above `start_block_5h` → deny new agents/workflows. Week at or above `start_block_week`
    → warn if `--week-ok-until` is today or later, else `week_action`: `warn`, `deny`, or `ask`
-   (`permissionDecision: "ask"`, reason for the user, no `additionalContext`: the model took an approved start for a block). `ask` only where the
+   (`permissionDecision: "ask"`, reason for the user, no `additionalContext`: the model took an approved start for a block;
+   the reason is the short question `WEEK N % · start <what>?`, German when `language` in `~/.claude/settings.json` is
+   German, `<what>` cut to name characters because the model writes it). `ask` only where the
    prompt is shown for sure (`permission_mode` default, acceptEdits, plan); any other or a missing mode denies
    unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.
