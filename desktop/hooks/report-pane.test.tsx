@@ -40,6 +40,8 @@ function world(on: On, options: {
     seen.registered.push(e)
     return { value: { command: e.name } }
   })
+  // The engine's move of the focus ring, beneath the plugin's ui.focus hook
+  on('ui.focus', () => ({}))
   on('ui.open', ($, e) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
@@ -73,6 +75,12 @@ async function mountPane($: Engine, surface: Surface) {
 }
 
 type Pane = Awaited<ReturnType<typeof mountPane>>
+
+/** The props of the Text a tab Button holds as its label: the highlight lives there, not on the Button. */
+async function labelOf(ui: Pane, key: string): Promise<Record<string, unknown>> {
+  const label = (await ui.find({ key }))?.children.find(child => typeof child === 'object' && child !== null)
+  return (label as { props?: Record<string, unknown> } | undefined)?.props ?? {}
+}
 
 async function texts(ui: Pane): Promise<string> {
   return (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
@@ -126,38 +134,58 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`${surface}: the labels carry the key where the surface does not draw it`, async ($, on) => {
+  test(`${surface}: the labels are the names alone, the surface shows the key`, async ($, on) => {
     world(on)
     await start($)
     await report($)
     const ui = await mountPane($, surface)
-    // The terminal draws a plain Button as `2: Week` itself; the desktop shows the label alone
-    const keyed = surface === 'desktop'
-    expect((await ui.find({ key: 'period-week' }))?.text).toBe(keyed ? '2 Week' : 'Week')
-    expect((await ui.find({ key: 'view-cache' }))?.text).toBe(keyed ? 'd Cache/Thinking' : 'Cache/Thinking')
-    expect((await ui.find({ key: 'refresh' }))?.text).toBe(keyed ? 'r Refresh' : 'Refresh')
+    // Every surface shows a plain Button's hotkey itself: the terminal as `d: `, the desktop beside the label
+    expect((await ui.find({ key: 'period-week' }))?.text.trim()).toBe('Week')
+    expect((await ui.find({ key: 'view-cache' }))?.text.trim()).toBe('Cache/Thinking')
+    expect((await ui.find({ key: 'refresh' }))?.text.trim()).toBe('Refresh')
     await ui.unmount()
   })
 
-  test(`${surface}: the active period and view are highlighted, the others dim`, async ($, on) => {
+  test(`${surface}: the open view is a highlighted tab, the period in the accent colour, the others plain or dim`, async ($, on) => {
     world(on)
     await start($)
     await report($)
     const ui = await mountPane($, surface)
     const look = async (key: string) => {
-      const props = (await ui.find({ key }))?.props
-      return { isDim: props?.dimColor === true, variant: props?.variant }
+      const props = await labelOf(ui, key)
+      return { background: props.backgroundColor, color: props.color, isDim: props.dimColor === true }
     }
-    expect(await look('period-week')).toEqual({ isDim: false, variant: 'primary' })
-    expect(await look('period-day')).toEqual({ isDim: true, variant: 'secondary' })
-    expect(await look('view-overview')).toEqual({ isDim: false, variant: 'primary' })
-    expect(await look('view-agents')).toEqual({ isDim: true, variant: 'secondary' })
+    const tab = { background: 'claude', color: 'inverseText', isDim: false }
+    const plain = { background: undefined, color: undefined, isDim: false }
+    const period = { background: undefined, color: 'claude', isDim: false }
+    const dim = { background: undefined, color: undefined, isDim: true }
+    expect(await look('view-overview')).toEqual(tab)
+    expect(await look('view-agents')).toEqual(plain)
+    expect(await look('period-week')).toEqual(period)
+    expect(await look('period-day')).toEqual(dim)
     await ui.press({ key: 'view-agents' })
     await ui.press({ key: 'period-year' })
-    expect(await look('view-agents')).toEqual({ isDim: false, variant: 'primary' })
-    expect(await look('view-overview')).toEqual({ isDim: true, variant: 'secondary' })
-    expect(await look('period-year')).toEqual({ isDim: false, variant: 'primary' })
-    expect(await look('period-week')).toEqual({ isDim: true, variant: 'secondary' })
+    expect(await look('view-agents')).toEqual(tab)
+    expect(await look('view-overview')).toEqual(plain)
+    expect(await look('period-year')).toEqual(period)
+    expect(await look('period-week')).toEqual(dim)
+    expect((await ui.find({ key: 'view-agents' }))?.props.autoFocus).toBe(true)
+    expect((await ui.find({ key: 'view-overview' }))?.props.autoFocus).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`${surface}: Tab landing on a view opens it; landing on a period reads nothing`, async ($, on) => {
+    const seen = world(on)
+    await start($)
+    await report($)
+    const ui = await mountPane($, surface)
+    const tab = (element: string) =>
+      $.ui.focus({ component: 'Pane', requestId: 'usage-report', element, origin: { kind: 'person' } })
+    await tab('view-agents')
+    expect(await texts(ui)).toMatch(/agent\s+USD\s+requests/)
+    await tab('period-year')
+    expect(await texts(ui)).toMatch(/agent\s+USD\s+requests/)
+    expect(seen.runs).toHaveLength(1)
     await ui.unmount()
   })
 
@@ -305,6 +333,7 @@ test('/report again starts fresh: it reads again and shows the overview', async 
   await ui.press({ key: 'view-agents' })
   await report($, 'week')
   expect(seen.runs).toHaveLength(2)
-  expect((await ui.find({ key: 'view-overview' }))?.props.variant).toBe('primary')
+  expect((await labelOf(ui, 'view-overview')).backgroundColor).toBe('claude')
+  expect((await labelOf(ui, 'view-agents')).backgroundColor).toBeUndefined()
   await ui.unmount()
 })

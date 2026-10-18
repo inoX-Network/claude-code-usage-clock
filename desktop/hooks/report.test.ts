@@ -203,3 +203,29 @@ describe('the views', () => {
     }
   })
 })
+
+describe('colours', () => {
+  // The fixture: the week at 39 %, the highest 5h window at 82 %
+  function tones(yellowFrom: number, redFrom: number): (string | undefined)[] {
+    const parsed = parseReport(JSON.stringify(REPORT))
+    if ('error' in parsed) throw new Error(parsed.error)
+    const [heading, five] = viewLines('overview', parsed.report, 100, { yellowFrom, redFrom })
+    const toned = (line: typeof heading) => line?.parts?.find(part => part.text.endsWith('%'))?.tone
+    expect(heading?.parts?.map(part => part.text).join('')).toBe(heading?.text)
+    expect(five?.parts?.map(part => part.text).join('')).toBe(five?.text)
+    return [toned(heading), toned(five)]
+  }
+
+  test('the week and the highest 5h window colour at the thresholds of the status line, from the value on', async () => {
+    expect(tones(50, 75)).toEqual([undefined, 'error'])
+    expect(tones(39, 82)).toEqual(['warning', 'error'])
+    expect(tones(40, 83)).toEqual([undefined, 'warning'])
+    expect(tones(10, 39)).toEqual(['error', 'error'])
+  })
+
+  test('without thresholds the defaults of the status line hold (yellow from 50, red from 75)', async () => {
+    const parsed = parseReport(JSON.stringify(REPORT))
+    if ('error' in parsed) throw new Error(parsed.error)
+    expect(viewLines('overview', parsed.report, 100)).toEqual(viewLines('overview', parsed.report, 100, { yellowFrom: 50, redFrom: 75 }))
+  })
+})

@@ -27,8 +27,24 @@ export type Period = ReportPeriod
 export type View = ReportView
 export type Report = Record<string, unknown>
 
-/** One row of a view: plain text for a monospaced Text, in a style. */
-export type Line = { text: string; style?: 'heading' | 'dim' }
+export type Tone = 'warning' | 'error'
+/** A piece of a row with a colour of its own: a percentage of a limit past a threshold. */
+export type Part = { text: string; tone?: Tone }
+/** One row of a view: plain text for a monospaced Text, in a style; `parts`, when there, are the same text in pieces. */
+export type Line = { text: string; style?: 'heading' | 'dim'; parts?: Part[] }
+/** The thresholds of the status line (statusline.yellow_from, red_from), so the pane colours at the same numbers. */
+export type Limits = { yellowFrom: number; redFrom: number }
+
+const LIMITS: Limits = { yellowFrom: 50, redFrom: 75 }
+
+function tone(percent: number, limits: Limits): Tone | undefined {
+  return percent >= limits.redFrom ? 'error' : percent >= limits.yellowFrom ? 'warning' : undefined
+}
+
+/** A row from pieces; the text is theirs joined. */
+function pieces(parts: Part[], style?: Line['style']): Line {
+  return { text: parts.map(part => part.text).join(''), parts, ...(style === undefined ? {} : { style }) }
+}
 
 /** The period `/report <argument>` asks for; no argument or an unknown one means the week. */
 export function parsePeriod(args: string): Period {
@@ -143,32 +159,38 @@ function projectRow(name: string, entry: Record<string, unknown>): string[] {
   return [name, usd(num(entry.cost_usd)), pct(num(entry.share)), pts(num(entry.week_points)), whole(num(entry.sessions))]
 }
 
-function overview(report: Report, columns: number): Line[] {
+function overview(report: Report, columns: number, limits: Limits): Line[] {
   const o = rec(report.overview)
   const out: Line[] = []
 
   const week = o.week === null || o.week === undefined ? null : rec(o.week)
   const used = week === null ? null : num(week.used_percent)
   const rise = week === null ? null : num(week.rise_points)
-  let weekPart = 'no weekly measurement'
+  let weekParts: Part[] = [{ text: 'no weekly measurement' }]
   if (used !== null && rise !== null) {
     const windows = num(week?.windows) ?? 1
-    weekPart = windows > 1
-      ? `weekly limit at ${Math.round(used)} % now · +${plain(rise)} points over ${windows} weekly windows`
-      : `${Math.round(used)} % of the weekly limit used (+${plain(rise)} points)`
+    const level = tone(used, limits)
+    weekParts = windows > 1
+      ? [{ text: 'weekly limit at ' }, { text: `${Math.round(used)} %`, tone: level },
+          { text: ` now · +${plain(rise)} points over ${windows} weekly windows` }]
+      : [{ text: `${Math.round(used)} %`, tone: level }, { text: ` of the weekly limit used (+${plain(rise)} points)` }]
   }
   const cost = num(o.cost_usd)
   const title = str(o.title) ?? str(rec(report.period).label) ?? 'Report'
-  out.push({ text: [title, weekPart, cost === null ? null : `${usd(cost)} USD at API prices`].filter(Boolean).join(' · '), style: 'heading' })
+  out.push(pieces([
+    { text: `${title} · ` }, ...weekParts, ...(cost === null ? [] : [{ text: ` · ${usd(cost)} USD at API prices` }]),
+  ], 'heading'))
 
   const five = rec(o.five_hour)
   const peak = num(five.highest_percent)
   const at = str(five.highest_at)
-  out.push({
-    text: (num(five.windows) ?? 0) > 0 && peak !== null
-      ? `5h windows: ${num(five.windows)}, highest ${Math.round(peak)} %${at === null ? '' : ` (${localTime(at)})`}`
-      : '5h windows: none measured',
-  })
+  out.push((num(five.windows) ?? 0) > 0 && peak !== null
+    ? pieces([
+        { text: `5h windows: ${num(five.windows)}, highest ` },
+        { text: `${Math.round(peak)} %`, tone: tone(peak, limits) },
+        { text: at === null ? '' : ` (${localTime(at)})` },
+      ])
+    : { text: '5h windows: none measured' })
 
   const projects = list(o.projects).map(rec)
   if (projects.length > 0) {
@@ -306,10 +328,10 @@ function projects(report: Report, columns: number): Line[] {
   ]
 }
 
-/** The rows of one view, for a body `columns` cells wide. */
-export function viewLines(view: View, report: Report, columns: number): Line[] {
+/** The rows of one view, for a body `columns` cells wide; percentages of a limit coloured at `limits`. */
+export function viewLines(view: View, report: Report, columns: number, limits: Limits = LIMITS): Line[] {
   switch (view) {
-    case 'overview': return overview(report, columns)
+    case 'overview': return overview(report, columns, limits)
     case 'agents': return agents(report, columns)
     case 'models': return models(report, columns)
     case 'cache': return cache(report)

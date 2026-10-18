@@ -45,9 +45,8 @@ went into. `/report month` opens it on that period (`day`, `week`, `month` or `y
 another word, it is the week).
 
 ```
-Day  Week  Month  Year                       <- keys 1 2 3 4: the period
-Overview  Agents  Models  Cache/Thinking  Tokens  Projects  Refresh
-                                             <- keys a b c d e f: the view, r: read again
+[Overview] Agents  Models  Cache/Thinking  Tokens  Projects     Day  Week  Month  Year  Refresh
+ <- keys a b c d e f: the view                                  <- keys 1 2 3 4: the period, r: read again
 
 Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
 5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
@@ -57,9 +56,12 @@ webshop                    60   60 %       20.0         1
 ...
 ```
 
-The terminal draws the key beside each button (`1: Day`); the desktop app draws buttons with the key in front of the
-label (`1 Day`). The tabs are rows of buttons, because Claude Code has no tab element, and the keys are how you use
-them: Tab and the arrow keys only move the focus inside the pane. Esc closes the pane.
+The open view is a highlighted tab, the period is in the accent colour. Each surface shows the key of a button itself:
+the terminal in front of it (`b: Agents`), the desktop app beside the label. The tabs are a row of buttons, because
+Claude Code has no tab element and a mod cannot bind the arrow keys: Tab walks the buttons and opens the view it lands
+on, Up and Down scroll a long view, a period is chosen by its key or with Enter (Tab does not read every period it
+passes). The share of the weekly limit and the highest 5h window are yellow or red from the `statusline` thresholds of
+the usage-clock `config.json`, as in the status line. Esc closes the pane.
 
 | View | Shows |
 |---|---|

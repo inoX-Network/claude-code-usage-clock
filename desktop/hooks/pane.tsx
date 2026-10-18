@@ -1,19 +1,23 @@
-// /report: a pane with the usage report. Two rows of buttons are its tabs (the period, the view), each with a hotkey:
-// Claude Code has no tab element, and Tab or the arrow keys only move the focus in a pane. The body below is one
-// view of the report that tools/usage_report.py prints with --json. The command and the pane tell the model nothing.
+// /report: a pane with the usage report. One row of buttons is its tabs: the views on the left, the periods on the
+// right, each with a hotkey. Claude Code has no tab element and a mod cannot bind the arrow keys, so Tab, which walks
+// the buttons, opens the view it lands on. The body below is one view of the report that tools/usage_report.py prints
+// with --json. The command and the pane tell the model nothing.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { ReportSlot, ReportState } from '../types/index'
+import { DEFAULTS } from './config'
 import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, viewLines } from './report'
-import type { Period, View } from './report'
+import type { Line, Period, View } from './report'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
 
 const INITIAL: ReportState = { period: 'week', view: 'overview', slots: {} }
 const report = atom({ plugin: 'usage-clock-display', key: 'report' } as const, INITIAL)
+// The thresholds register.tsx reads at the session start; the engine wants each module's atoms written in that module
+const lineConfig = atom({ plugin: 'usage-clock-display', key: 'config' } as const, DEFAULTS)
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
@@ -76,12 +80,19 @@ export function registerReport(on: On): void {
     return {}
   })
 
+  // Tab walks the buttons of the pane; landing on a view's tab opens that view, as a tab row does. A period is only
+  // chosen by its key or Enter: walking past Month and Year would read each of them
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const view = VIEWS.find(v => `view-${v.id}` === e.element)
+    if (view !== undefined) await update($, report, current => ({ ...current, view: view.id }))
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const state = await read($, report)
+    const limits = await read($, lineConfig)
     const slot = state.slots[state.period]
-    // The terminal draws a plain Button as `2: Week`; the desktop draws the label alone, so the key goes into it
-    const named = (hotkey: string, label: string) => (e.surface === 'desktop' ? `${hotkey} ${label}` : label)
 
     const choosePeriod = (period: Period) => async () => {
       let isNew = false
@@ -101,11 +112,36 @@ export function registerReport(on: On): void {
       await load($, period)
     }
 
-    const tab = (key: string, hotkey: string, label: string, isActive: boolean, onPress: () => unknown) => (
-      <Button key={key} hotkey={hotkey} plain dimColor={!isActive} variant={isActive ? 'primary' : 'secondary'} onPress={onPress}>
-        {named(hotkey, label)}
-      </Button>
-    )
+    // Every surface shows a plain Button's hotkey itself (the terminal as `b: `, the desktop beside the label)
+    const viewTab = (id: View, hotkey: string, label: string) => {
+      const isActive = id === state.view
+      return (
+        <Button key={`view-${id}`} hotkey={hotkey} plain onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
+          {isActive
+            ? <Text key={`label-view-${id}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${label} `}</Text>
+            : <Text key={`label-view-${id}`}>{` ${label} `}</Text>}
+        </Button>
+      )
+    }
+    const periodTab = (id: Period, hotkey: string, label: string) => {
+      const isActive = id === state.period
+      return (
+        <Button key={`period-${id}`} hotkey={hotkey} plain onPress={choosePeriod(id)}>
+          {isActive
+            ? <Text key={`label-period-${id}`} color="claude" weight="bold">{label}</Text>
+            : <Text key={`label-period-${id}`} dimColor>{label}</Text>}
+        </Button>
+      )
+    }
+    const row = (line: Line, i: number) => {
+      const look = line.style === 'heading' ? { color: 'claude', weight: 'bold' as const } : line.style === 'dim' ? { dimColor: true } : {}
+      const parts = line.parts ?? [{ text: line.text === '' ? ' ' : line.text }]
+      return (
+        <Text key={`l${i}`} mono {...look}>
+          {parts.map((part, j) => (part.tone === undefined ? part.text : <Text key={`p${j}`} color={part.tone}>{part.text}</Text>))}
+        </Text>
+      )
+    }
 
     let body
     if (slot === undefined || slot.status === 'loading') {
@@ -116,21 +152,20 @@ export function registerReport(on: On): void {
         <Text key="retry" dimColor>Press r to try again.</Text>,
       ]
     } else {
-      body = viewLines(state.view, slot.report, e.props.bodyColumns).map((line, i) =>
-        line.style === 'heading'
-          ? <Text key={`l${i}`} mono weight="bold">{line.text}</Text>
-          : <Text key={`l${i}`} mono dimColor={line.style === 'dim'}>{line.text === '' ? ' ' : line.text}</Text>,
-      )
+      body = viewLines(state.view, slot.report, e.props.bodyColumns, limits).map(row)
     }
 
+    // Like the tab row of /config: the views on the left, the period and Refresh on the right
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-          {PERIODS.map(p => tab(`period-${p.id}`, p.hotkey, p.label, p.id === state.period, choosePeriod(p.id)))}
-        </Box>
-        <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-          {VIEWS.map(v => tab(`view-${v.id}`, v.hotkey, v.label, v.id === state.view, chooseView(v.id)))}
-          <Button key="refresh" hotkey="r" plain onPress={refresh}>{named('r', 'Refresh')}</Button>
+        <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+            {VIEWS.map(v => viewTab(v.id, v.hotkey, v.label))}
+          </Box>
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {PERIODS.map(p => periodTab(p.id, p.hotkey, p.label))}
+            <Button key="refresh" hotkey="r" plain onPress={refresh}><Text key="label-refresh" dimColor>Refresh</Text></Button>
+          </Box>
         </Box>
         <Text> </Text>
         {body}
