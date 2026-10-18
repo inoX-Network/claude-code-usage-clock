@@ -35,8 +35,10 @@ export function contextRecord(breakdown: SessionContextBreakdown, sessionId: str
 }
 
 /** Measures the context as /context does (one token count per tool and memory file) and writes the session's file.
- *  A session without a breakdown writes nothing. */
+ *  A session without a breakdown writes nothing, and nor does a folder still under `~` (no home known): it would land
+ *  in a folder of that name below the working directory. */
 export async function recordContext($: EngineInterface, logDir: string): Promise<void> {
+  if (logDir === '~' || logDir.startsWith('~/') || logDir.startsWith('~\\')) return
   const breakdown = (await $.session.usage({ breakdown: 'full' })).context.breakdown
   if (breakdown === undefined) return
   const sessionId = await $.session.id()

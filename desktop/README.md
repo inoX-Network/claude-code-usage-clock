@@ -100,8 +100,11 @@ messages), every MCP tool by server, every memory file, skill and agent, each wi
 never content. `log_dir` is that of the hooks (`CCUC_LOG_DIR`, else `log_dir` of `config.json`, else
 `~/.cache/claude-usage-clock`). The Sessions view and `usage_report.py --session` show it. Deferred categories and MCP
 tools (listed with their size, loaded only when used) are marked `deferred`: their tokens are not part of the total.
-Sessions before plugin 0.4.0 have none; subagents are not measured on their own. The plugin cannot set file modes: the
-file is as private as the log folder, which the hooks create with mode `0700`.
+Sessions before plugin 0.4.0 have none; subagents are not measured on their own. After `/clear` Claude Code starts the
+new session without `session.start`, so the first answer reads `config.json` and the log folder itself (before 0.5.2
+the file went to a folder named `~` below the working directory). With no home directory known (`HOME`,
+`USERPROFILE`) nothing is written. The plugin cannot set file modes: the file is as private as the log folder, which
+the hooks create with mode `0700`.
 
 ## It writes the usage file, too
 

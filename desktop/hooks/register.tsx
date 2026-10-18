@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import { DEFAULTS, LOG_DIR, expandHome, parseConfig, parseLogDir } from './config'
 import { recordContext } from './context'
@@ -15,18 +15,28 @@ const tick = atom({ plugin: 'usage-clock-display', key: 'tick' } as const, 0)
 // Where the hooks log, and whether this session's context is written down yet
 const logDir = atom({ plugin: 'usage-clock-display', key: 'logDir' } as const, LOG_DIR)
 const isContextRecorded = atom({ plugin: 'usage-clock-display', key: 'isContextRecorded' } as const, false)
+// Whether config.json and the log folder are read: /clear starts a session without session.start, its atoms at their
+// initials, so the first answer reads them then
+const isSettled = atom({ plugin: 'usage-clock-display', key: 'isSettled' } as const, false)
+
+// The engine follows $ only into functions declared at the top of the file, so the config path comes as an argument
+async function settle($: EngineInterface, configFile: string) {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  const path = expandHome(configFile, home)
+  // A missing or unreadable config.json means the defaults, as for the hooks
+  const text = path === '' ? undefined : await $.fs.read(path).catch(() => undefined)
+  await update($, config, () => parseConfig(text))
+  const logEnv = await $.env.get('CCUC_LOG_DIR')
+  await update($, logDir, () => expandHome(parseLogDir(text, logEnv), home))
+  await update($, isSettled, () => true)
+}
 
 export const register: Register = (on, options) => {
   registerReport(on)
+  const configFile = String(options.config_file ?? '')
 
   on('session.start', async ($, e, next) => {
-    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
-    const path = expandHome(String(options.config_file ?? ''), home)
-    // A missing or unreadable config.json means the defaults, as for the hooks
-    const text = path === '' ? undefined : await $.fs.read(path).catch(() => undefined)
-    await update($, config, () => parseConfig(text))
-    const logEnv = await $.env.get('CCUC_LOG_DIR')
-    await update($, logDir, () => expandHome(parseLogDir(text, logEnv), home))
+    await settle($, configFile)
     await update($, isContextRecorded, () => false)
     await update($, usage, () => null)
     const now = await $.session.usage()
@@ -64,6 +74,7 @@ export const register: Register = (on, options) => {
       // asks once per tool and memory file and must not hold up the next turn; a failure writes nothing
       if (!(await read($, isContextRecorded))) {
         await update($, isContextRecorded, () => true)
+        if (!(await read($, isSettled))) await settle($, configFile)
         void recordContext($, await read($, logDir)).catch(() => undefined)
       }
     }
