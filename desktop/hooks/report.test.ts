@@ -98,9 +98,9 @@ describe('parseReport', () => {
 })
 
 describe('the views', () => {
-  test('there are six, with the keys a to f', async () => {
-    expect(VIEWS.map(view => view.hotkey)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
-    expect(VIEWS.map(view => view.label)).toEqual(['Overview', 'Agents', 'Models', 'Cache/Thinking', 'Tokens', 'Projects'])
+  test('there are seven, with the keys a to g', async () => {
+    expect(VIEWS.map(view => view.hotkey)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
+    expect(VIEWS.map(view => view.label)).toEqual(['Overview', 'Agents', 'Models', 'Cache/Thinking', 'Tokens', 'Projects', 'Sessions'])
   })
 
   test('overview: the numbers of the text overview', async () => {

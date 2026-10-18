@@ -54,6 +54,23 @@ export function parseConfig(text: string | undefined): LineConfig {
   return result
 }
 
+export const LOG_DIR = '~/.cache/claude-usage-clock'
+
+/** The log folder of the hooks, as hooks/_config.py settles it: CCUC_LOG_DIR, else `log_dir` of config.json, else the
+ *  default. Not yet expanded. */
+export function parseLogDir(text: string | undefined, env: string | undefined): string {
+  if (env !== undefined && env !== '') return env
+  if (text === undefined) return LOG_DIR
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return LOG_DIR
+  }
+  const given = section(data).log_dir
+  return typeof given === 'string' && given !== '' ? given : LOG_DIR
+}
+
 /** `~/…` against the home directory; anything else as written. */
 export function expandHome(path: string, home: string | undefined): string {
   if (home === undefined || !(path === '~' || path.startsWith('~/'))) return path

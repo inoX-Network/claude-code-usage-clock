@@ -17,7 +17,7 @@ export type LineConfig = {
 }
 
 export type ReportPeriod = 'day' | 'week' | 'month' | 'year'
-export type ReportView = 'overview' | 'agents' | 'models' | 'cache' | 'tokens' | 'projects'
+export type ReportView = 'overview' | 'agents' | 'models' | 'cache' | 'tokens' | 'projects' | 'sessions'
 
 /** What the pane holds for one period: being read, the reason it failed, or the parsed `usage_report.py --json`. */
 export type ReportSlot =
@@ -29,6 +29,8 @@ export type ReportSlot =
 export type ReportState = {
   period: ReportPeriod
   view: ReportView
+  /** The session of `clis` the Sessions view shows in detail; null shows the list. */
+  session: string | null
   slots: { [period in ReportPeriod]?: ReportSlot }
 }
 
@@ -40,6 +42,8 @@ declare module 'claude-code' {
       lastAnswer: number | null
       tick: number
       report: ReportState
+      logDir: string
+      isContextRecorded: boolean
     }
   }
 }

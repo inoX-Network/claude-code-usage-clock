@@ -58,4 +58,36 @@ export const REPORT = {
     web_searches: null,
     web_fetches: null,
   },
+  // Two sessions: one with the context its plugin wrote down after the first answer, one from before the plugin
+  clis: [
+    {
+      id: 'aaaaaaaa', label: 'webshop', start: '2026-10-13T08:00:00Z', requests: 300, cost_usd: 60, tokens,
+      models: { 'Opus 5.5': 55, 'Sonnet 5.x': 5 }, subagents: { 'stripe-meister': { requests: 40, cost_usd: 20 } },
+      cache_hit_rate: 0.9, cold_starts: 1, thinking_tokens: 90000, thinking_share: 0.3, web_searches: null,
+      web_fetches: null, estimated_share: { five: 8, week: 20 },
+      context: {
+        schema_version: 1, at: '2026-10-13T08:01:00Z', cwd: '/home/you/webshop', model: 'claude-opus-5-5', detail: 'full',
+        total_tokens: 63000, max_tokens: 1000000,
+        categories: [
+          { name: 'System prompt', tokens: 3100, kind: 'used' },
+          { name: 'MCP tools', tokens: 12400, kind: 'used' },
+          { name: 'Memory files', tokens: 2200, kind: 'used' },
+          { name: 'Free space', tokens: 900000, kind: 'free' },
+        ],
+        memory_files: [{ path: '/home/you/.claude/CLAUDE.md', type: 'User', tokens: 2200 }],
+        mcp_tools: [
+          { server: 'context7', name: 'query-docs', tokens: 800, loaded: true },
+          { server: 'context7', name: 'resolve-library-id', tokens: 700, loaded: true },
+          { server: 'playwright', name: 'navigate', tokens: 450, loaded: false },
+        ],
+        skills: { tokens: 5600, included: 38, total: 40, items: [{ name: 'spec-graph', tokens: 310 }] },
+        agents: [{ type: 'arbeiter-bauen', source: 'userSettings', tokens: 120 }],
+      },
+    },
+    {
+      id: 'bbbbbbbb', label: 'blog', start: '2026-10-14T19:30:00Z', requests: 40, cost_usd: 9, tokens,
+      models: { 'Sonnet 5.x': 9 }, subagents: {}, cache_hit_rate: 0.95, cold_starts: 0, thinking_tokens: null,
+      thinking_share: null, web_searches: null, web_fetches: null, estimated_share: { five: 1, week: 3 }, context: null,
+    },
+  ],
 }

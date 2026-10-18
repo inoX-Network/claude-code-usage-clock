@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import { DEFAULTS, expandHome, parseConfig } from './config'
+import { DEFAULTS, LOG_DIR, expandHome, parseConfig, parseLogDir } from './config'
+import { recordContext } from './context'
 import { parts } from './line'
 import { registerReport, registerReportCommand } from './pane'
 import { statusInput, statuslineArgv } from './record'
@@ -11,6 +12,9 @@ const config = atom({ plugin: 'usage-clock-display', key: 'config' } as const, D
 const lastAnswer = atom({ plugin: 'usage-clock-display', key: 'lastAnswer' } as const, null)
 // Counts up every minute, so the cache clock moves on without a new answer
 const tick = atom({ plugin: 'usage-clock-display', key: 'tick' } as const, 0)
+// Where the hooks log, and whether this session's context is written down yet
+const logDir = atom({ plugin: 'usage-clock-display', key: 'logDir' } as const, LOG_DIR)
+const isContextRecorded = atom({ plugin: 'usage-clock-display', key: 'isContextRecorded' } as const, false)
 
 export const register: Register = (on, options) => {
   registerReport(on)
@@ -21,6 +25,9 @@ export const register: Register = (on, options) => {
     // A missing or unreadable config.json means the defaults, as for the hooks
     const text = path === '' ? undefined : await $.fs.read(path).catch(() => undefined)
     await update($, config, () => parseConfig(text))
+    const logEnv = await $.env.get('CCUC_LOG_DIR')
+    await update($, logDir, () => expandHome(parseLogDir(text, logEnv), home))
+    await update($, isContextRecorded, () => false)
     await update($, usage, () => null)
     const now = await $.session.usage()
     await update($, usage, () => now)
@@ -53,6 +60,12 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       const now = await $.clock.now()
       await update($, lastAnswer, () => now)
+      // Once per session, after its first answer: what its context holds, for the report. Not awaited: a full count
+      // asks once per tool and memory file and must not hold up the next turn; a failure writes nothing
+      if (!(await read($, isContextRecorded))) {
+        await update($, isContextRecorded, () => true)
+        void recordContext($, await read($, logDir)).catch(() => undefined)
+      }
     }
     return next(e)
   })
