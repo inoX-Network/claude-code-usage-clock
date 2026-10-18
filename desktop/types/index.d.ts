@@ -50,6 +50,7 @@ declare module 'claude-code' {
       report: ReportState
       logDir: string
       isContextRecorded: boolean
+      isSettled: boolean
     }
   }
 }

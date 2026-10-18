@@ -53,9 +53,9 @@ type Write = { path: string; text: string }
 
 function world(on: On, writes: Write[], asked: unknown[],
                { breakdown = BREAKDOWN as SessionContextBreakdown | undefined, config = undefined as string | undefined,
-                 logEnv = undefined as string | undefined, failsWrite = false } = {}) {
+                 logEnv = undefined as string | undefined, failsWrite = false, home = '/home/you' as string | undefined } = {}) {
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
-  mock.env(on, { HOME: '/home/you', ...(logEnv === undefined ? {} : { CCUC_LOG_DIR: logEnv }) })
+  mock.env(on, { ...(home === undefined ? {} : { HOME: home }), ...(logEnv === undefined ? {} : { CCUC_LOG_DIR: logEnv }) })
   on('session.usage', ($, e) => {
     asked.push(e)
     const context = { tokens: 63_000, window: 1_000_000, percent: 6 }
@@ -138,5 +138,44 @@ test('a refused write leaves the turn alone', async ($, on) => {
   world(on, writes, [], { failsWrite: true })
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
   expect(await turn($)).toBeDefined()
+  expect(writes).toEqual([])
+})
+
+// /clear starts a session without session.start, its atoms at their initials: the first answer reads the folder itself
+test('after /clear (no session.start) the first answer writes to the settled folder, not to a ~ below the cwd', async ($, on) => {
+  const writes: Write[] = []
+  world(on, writes, [])
+  await twoTurns($)
+  expect(writes).toHaveLength(1)
+  expect(writes[0]?.path).toBe('/home/you/.cache/claude-usage-clock/context-breakdown/desk-1.json')
+})
+
+test('after /clear the folder is still that of the hooks: log_dir of config.json, CCUC_LOG_DIR before it', async ($, on) => {
+  const writes: Write[] = []
+  world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }) })
+  await twoTurns($)
+  expect(writes[0]?.path).toBe('/home/you/logs/usage/context-breakdown/desk-1.json')
+})
+
+test('after /clear CCUC_LOG_DIR wins over config.json', async ($, on) => {
+  const writes: Write[] = []
+  world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }), logEnv: '/var/tmp/ccuc' })
+  await twoTurns($)
+  expect(writes[0]?.path).toBe('/var/tmp/ccuc/context-breakdown/desk-1.json')
+})
+
+test('no home known: nothing written, the turn goes on', async ($, on) => {
+  const writes: Write[] = []
+  world(on, writes, [], { home: undefined })
+  await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
+  expect(await turn($)).toBeDefined()
+  await turn($)
+  expect(writes).toEqual([])
+})
+
+test('no home known after /clear either: nothing written', async ($, on) => {
+  const writes: Write[] = []
+  world(on, writes, [], { home: undefined })
+  await twoTurns($)
   expect(writes).toEqual([])
 })
