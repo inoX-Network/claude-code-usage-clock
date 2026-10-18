@@ -102,7 +102,12 @@ export function registerReport(on: On): void {
       })
       if (isNew) await load($, period)
     }
-    const chooseView = (view: View) => () => update($, report, current => ({ ...current, view }))
+    // A view chosen by its key takes the focus ring along, so the ring and the highlighted tab do not point apart. The
+    // engine refuses the move while the pane does not hold the keys; the view is chosen all the same
+    const chooseView = (view: View) => async () => {
+      await update($, report, current => ({ ...current, view }))
+      await $.ui.focus({ requestId: PANE, key: `view-${view}` }).catch(() => undefined)
+    }
     const refresh = async () => {
       let period: Period = 'week'
       await update($, report, current => {

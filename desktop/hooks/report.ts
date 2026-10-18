@@ -301,8 +301,9 @@ function cache(report: Report): Line[] {
       ['Thinking share', thinking === null ? 'n/a' : `${pct(thinking)} of output`],
     ], 'left'),
     BLANK,
-    ...none('Cache hit rate: cache reads divided by all input. Cold start: a request of a main session, after its first,'),
-    ...none('that wrote at least 50,000 tokens to the cache. Thinking is part of the output tokens.'),
+    // One row, so the surface wraps it at the width of the pane
+    ...none('Cache hit rate: cache reads divided by all input. Cold start: a request of a main session, after its first, '
+      + 'that wrote at least 50,000 tokens to the cache. Thinking is part of the output tokens.'),
   ]
 }
 
