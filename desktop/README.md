@@ -74,6 +74,16 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 | Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
 | Sessions | Every session of the period, highest cost first; `▶` marks the session you opened `/report` from. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
 
+**In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
+figures (the weekly limit as a half circle with a mark where red starts, the highest 5h window with a column per
+window, the cost split into main and subagents, the cache hit rate), then the projects, the models, main and the agents
+as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`). Sessions shows one card per session; the
+session `/report` was opened from comes first, under "This session", its card toned and framed in the accent colour and
+marked `LIVE`. The other views stand in a tile as text. The tiles carry a dark ground of their own, so they read the
+same in a light and a dark app, and the pane can be dragged wider or narrower: one tile per row below 44 columns, two
+up to 95, four from 96 on. A Button of the desktop holds text only, so a session opens by its name, not by a click on
+the whole card.
+
 Every number is that of `usage_report.py --json`, and [`docs/report-format.md`](../docs/report-format.md) says what it
 means and whether it is measured or an estimate (`~`).
 

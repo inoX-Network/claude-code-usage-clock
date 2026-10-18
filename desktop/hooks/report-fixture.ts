@@ -31,6 +31,13 @@ export const REPORT = {
     notable: [{ rule: 'five_hour_window', text: 'one 5h window reached 82 % (Tue 13 Oct)' }],
     details: { project: 'webshop', session: 'aaaaaaaa' },
   },
+  subscription: {
+    week_segments: [],
+    five_windows: [
+      { resets: 1792170000, first_seen: '2026-10-13T09:00:00Z', peak: 82, peak_at: '2026-10-13T12:30:00Z' },
+      { resets: 1792188000, first_seen: '2026-10-13T14:00:00Z', peak: 20, peak_at: '2026-10-13T16:00:00Z' },
+    ],
+  },
   total: {
     requests: 500,
     tokens,
