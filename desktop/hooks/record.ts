@@ -6,7 +6,7 @@
 
 import type { SessionUsage } from 'claude-code'
 
-const SCRIPT = 'statusline.py'
+export const SCRIPT = 'statusline.py'
 const LIMITS = ['five_hour', 'seven_day']
 
 type Block = { used_percentage: number; resets_at: number }

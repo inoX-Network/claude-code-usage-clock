@@ -3,6 +3,7 @@ import type { Register } from 'claude-code'
 
 import { DEFAULTS, expandHome, parseConfig } from './config'
 import { parts } from './line'
+import { registerReport, registerReportCommand } from './pane'
 import { statusInput, statuslineArgv } from './record'
 
 const usage = atom({ plugin: 'usage-clock-display', key: 'usage' } as const, null)
@@ -12,6 +13,8 @@ const lastAnswer = atom({ plugin: 'usage-clock-display', key: 'lastAnswer' } as 
 const tick = atom({ plugin: 'usage-clock-display', key: 'tick' } as const, 0)
 
 export const register: Register = (on, options) => {
+  registerReport(on)
+
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
     const path = expandHome(String(options.config_file ?? ''), home)
@@ -22,6 +25,8 @@ export const register: Register = (on, options) => {
     const now = await $.session.usage()
     await update($, usage, () => now)
     $.clock.every(60_000, () => update($, tick, n => n + 1))
+    // A refused /report (a built-in of that name, say) only means no report pane; the status line stays
+    await registerReportCommand($).catch(() => undefined)
     return next(e)
   })
 

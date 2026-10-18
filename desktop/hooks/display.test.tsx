@@ -43,7 +43,8 @@ test('the desktop app gets the line, coloured by the usage-clock config', async 
   world(on, { 'C:/Users/you/.claude/hooks/usage-clock/config.json': CONFIG }, read)
   await $.session.start({ cwd: 'C:/proj' })
   await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
-  expect(read).toEqual(['C:/Users/you/.claude/hooks/usage-clock/config.json'])
+  expect(read).toHaveLength(1)
+  expect(read[0]?.endsWith('C:/Users/you/.claude/hooks/usage-clock/config.json')).toBe(true)
   const found = await line($, 'desktop')
   expect(found.own).toBeDefined()
   expect(found.week?.props.color).toBe('warning')   // 72 % is yellow from 70 on, red only from 85

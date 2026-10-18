@@ -1,7 +1,8 @@
 # usage-clock in the Claude desktop app
 
 The desktop app does not show the `statusLine` from `settings.json`. This folder is a Claude Code plugin (a mod with
-a hooks module) that draws the usage-clock line under the prompt instead:
+a hooks module) that draws the usage-clock line under the prompt instead, and that adds `/report`, a pane with the
+usage report ([below](#the-usage-report-report)):
 
 ```
 5h 17% ↻12:50 | week 76% ↻Mon 15:00 <- weekly limit reached | ctx 340k/1000k 34% | cache ~54m | $3.50
@@ -35,7 +36,55 @@ The parts, texts and colours of the [status line](../README.md#what-the-status-l
 
 The numbers come from Claude Code itself (`$.session.usage()`), not from `rate-limit.json`.
 
-In the terminal the plugin draws nothing: the status line shows the same there.
+In the terminal the plugin draws no line: the status line shows the same there. `/report` works in both.
+
+## The usage report: /report
+
+`/report` opens a pane with the numbers of `tools/usage_report.py`: what a day, a week, a month or a year of usage
+went into. `/report month` opens it on that period (`day`, `week`, `month` or `year`; without an argument, or with
+another word, it is the week).
+
+```
+Day  Week  Month  Year                       <- keys 1 2 3 4: the period
+Overview  Agents  Models  Cache/Thinking  Tokens  Projects  Refresh
+                                             <- keys a b c d e f: the view, r: read again
+
+Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
+5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
+
+project                   USD  share  ~week pts  sessions
+webshop                    60   60 %       20.0         1
+...
+```
+
+The terminal draws the key beside each button (`1: Day`); the desktop app draws buttons with the key in front of the
+label (`1 Day`). The tabs are rows of buttons, because Claude Code has no tab element, and the keys are how you use
+them: Tab and the arrow keys only move the focus inside the pane. Esc closes the pane.
+
+| View | Shows |
+|---|---|
+| Overview | The text overview of the report: period, share of the weekly limit, 5h windows, the projects with the highest cost, main and subagents, the models, the start, what is notable. |
+| Agents | `main` and each agent type: USD, requests and the estimated points of the weekly and of the 5h limit. |
+| Models | Each model: USD, requests, share of thinking in the output, cache hits; a model without a price has no USD. |
+| Cache/Thinking | Cache hit rate, cold starts, thinking tokens and their share of the output. |
+| Tokens | Input, cache write (5 minutes, 1 hour), cache read and output tokens. |
+| Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
+
+Every number is that of `usage_report.py --json`, and [`docs/report-format.md`](../docs/report-format.md) says what it
+means and whether it is measured or an estimate (`~`).
+
+- **Where the report comes from.** The plugin starts `usage_report.py --<period> --json` once per period and keeps the
+  answer while the pane is open. Switching the period or the view does not read again; `r` does, for the period shown.
+  A new `/report` starts from the beginning. While the report is read the pane says `loading…`.
+- **Which Python.** The one that runs your status line: the plugin takes the interpreter and its options from the
+  `statusLine` command in `settings.json`, as it does for the usage file, and looks for `usage_report.py` in the folder
+  of `statusline.py`. `tools/install.py` puts both there. The command runs only if it starts an interpreter with
+  exactly one `statusline.py` and contains no shell syntax.
+- **When it fails.** The pane shows one line with the reason: no usage-clock status line in `settings.json`, the report
+  not installed (run `tools/install.py`), a report that exited with an error or printed no JSON, a format number
+  (`schema_version`) other than 1. In the first two cases nothing is started.
+- **The model sees nothing.** The command answers with no text and no context, so the pane is neither a line of the
+  transcript nor input of the model. The report reads local files only and makes no model call.
 
 ## It writes the usage file, too
 
@@ -73,6 +122,9 @@ The plugin option `config_file` names the file (default `~/.claude/hooks/usage-c
 claude plugin validate desktop
 claude plugin test desktop
 ```
+
+The tests of the pane run on the terminal and on the desktop surface, against a fixed example of
+`usage_report.py --json` (`hooks/report-fixture.ts`) and with no process started.
 
 `tsconfig.json` extends the types Claude Code writes beside the manifest (`.claude-plugin/types/`) the first time
 it loads the plugin from a folder; until then an editor shows the `claude-code` imports as unresolved.
