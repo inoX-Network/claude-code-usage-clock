@@ -53,9 +53,9 @@ type Write = { path: string; text: string }
 
 function world(on: On, writes: Write[], asked: unknown[],
                { breakdown = BREAKDOWN as SessionContextBreakdown | undefined, config = undefined as string | undefined,
-                 logEnv = undefined as string | undefined, failsWrite = false, home = '/home/you' as string | undefined } = {}) {
+                 logEnv = undefined as string | undefined, failsWrite = false, home = '/home/you' as string | null } = {}) {
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
-  mock.env(on, { ...(home === undefined ? {} : { HOME: home }), ...(logEnv === undefined ? {} : { CCUC_LOG_DIR: logEnv }) })
+  mock.env(on, { ...(home === null ? {} : { HOME: home }), ...(logEnv === undefined ? {} : { CCUC_LOG_DIR: logEnv }) })
   on('session.usage', ($, e) => {
     asked.push(e)
     const context = { tokens: 63_000, window: 1_000_000, percent: 6 }
@@ -166,7 +166,7 @@ test('after /clear CCUC_LOG_DIR wins over config.json', async ($, on) => {
 
 test('no home known: nothing written, the turn goes on', async ($, on) => {
   const writes: Write[] = []
-  world(on, writes, [], { home: undefined })
+  world(on, writes, [], { home: null })
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
   expect(await turn($)).toBeDefined()
   await turn($)
@@ -175,7 +175,7 @@ test('no home known: nothing written, the turn goes on', async ($, on) => {
 
 test('no home known after /clear either: nothing written', async ($, on) => {
   const writes: Write[] = []
-  world(on, writes, [], { home: undefined })
+  world(on, writes, [], { home: null })
   await twoTurns($)
   expect(writes).toEqual([])
 })
