@@ -178,7 +178,8 @@ def test_a_file_with_a_wrong_shape_is_counted_and_gives_null(world, name):
     assert report['clis'][0]['context'] is None and report['coverage']['unreadable_context_files'] == 1
 
 
-@pytest.mark.parametrize('content', ['', '{broken', '[]', '"text"', '7', 'null', '[' * 100_000, '{"a": NaN}'])
+@pytest.mark.parametrize('content', ['', '{broken', '[]', '"text"', '7', 'null', pytest.param('[' * 100_000, id='nested'),
+                                     '{"a": NaN}'])      # an id of its own: the text would be the test name, 100 000 characters
 def test_a_file_that_is_no_json_object_is_counted_and_the_exit_code_stays(world, content):
     one_session(world)
     path = put_context(world, context_data())
