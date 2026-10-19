@@ -1,0 +1,18 @@
+Day 2026-10-13 · 42 % of the weekly limit used (+22 points) · 7.1 USD at API prices
+5h windows: 2, highest 56 % (Tue 13 Oct 13:50)
+
+Where it went            USD   share  ~week pts  sessions
+  proj-a                 5.2    74 %        5.2         1
+  proj-b                 1.9    26 %        1.8         2
+
+Main 5.3 USD · subagents 1.8 USD (top: unknown 0.83 USD, <1 week pts)
+Opus 6.6 USD · Sonnet 0.42 USD · Haiku 0.06 USD · 1 request(s) without a price · thinking 20 % of output · cache hits 72 %
+Start: main 80k tokens (median), subagents 20k-25k (median per type)
+
+Notable
+  spawn gate denied 1 agent start (week at N %: 1)
+  cache hits under 90 %: proj-a 67 %, proj-b 82 %
+  proj-a made 74 % of the cost (5.2 USD)
+  unexplained rise (no request with a price in between): week 14.0 points, 5h 38.0 points
+
+Details: --project proj-a · --session aaaaaaaa · --full
