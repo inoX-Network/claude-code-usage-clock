@@ -241,9 +241,12 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
 - **The pull** before a report is a fast forward with `sync.pull_timeout_s` (default 5 s), at most once in 5 minutes:
   the `/report` pane reads four periods and waits once. `--sync` first pushes this machine as `sync.py push --now`
   does (past the wait and the backoff, never after the repository was found public), then pulls without the
-  5 minutes. If another sync run holds the lock, the report reads the clone as it is. A pull that fails, or a sync
-  history that differs (no fast forward: nothing is merged), never fails the report: it uses the last pulled state
-  and says so in `Notable` and in `Sources:`.
+  5 minutes. The pull brings the clone onto the repository as the push does: a fast forward, or, if this machine has
+  commits the repository does not have yet (shadow mode, a failed push) and nothing else changed in the clone, those
+  commits put on top of it. It never merges. If another sync run holds the lock, the report reads the clone as it is.
+  A pull that fails, or a sync history that cannot be brought together (the own commits do not fit, or the clone has
+  changes that are not committed yet: nothing is merged), never fails the report: it uses the last pulled state and
+  says so in `Notable` and in `Sources:`.
 - **Counted once:** a request counts once by its key, wherever it lies: in the local transcripts (also those a file
   sync of `~/.claude` put there), in the folder of another machine, or in the own folder of the clone. Of two lines
   of one request the one with more output counts, and of equal ones the local one. Measurements of several machines
@@ -256,7 +259,10 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   the usage of each machine's line is added, but the subscription (percentages, windows, the sharing of the rise) comes
   from one line only, the own one first: a day line shares the rise only among the sessions of its own machine. A
   machine keeps its requests in the repository for `sync.keep_request_months` (default 3) full months; this machine's
-  requests are also read from its own folder there, so a day stays whole after Claude Code deleted the transcripts.
+  requests are also read from its own folder there (only `requests/`: its measurements, gate decisions and day lines
+  come from the local files), so a day stays whole after Claude Code deleted the transcripts. With
+  `sync.project_labels` `alias` or `hash` such older days of this machine show the project labels of the repository
+  instead of the folder names.
 - **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine. Their points are their
   share of each rise among the requests of all machines, so the subscription and its `allocation` stay those of the
   account and the points of the machine add up to less than the rise.
