@@ -2814,6 +2814,20 @@ def test_an_archive_line_without_reasons_still_merges_and_says_so(world):
         'soft stop denied 3 subagent tool calls (reason not recorded: 2, checkpoint due: 1)')
 
 
+def test_an_ask_question_archived_by_version_1_4_0_counts_as_the_weekly_threshold(world):
+    readme_world(world)
+    assert report_module.main(world.args('--archive'), now=NOW) == 0
+    path = world.log / ARCHIVE
+    lines = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+    for line in lines:
+        line['stats']['guard_reasons']['spawn_gate'] = {'enforce': {'ask': {
+            'wOCHE N % ? arbeiter-mechanisch starten?': 9, 'wEEK N % ? start x?': 1, '7-day window at N %': 5,
+            'week N % ? start x?': 2}}}
+    path.write_text('\n'.join(json.dumps(line) for line in lines) + '\n', encoding='utf-8')
+    reasons = world.report('--day', DAY)['guard_reasons']['spawn_gate']['enforce']['ask']
+    assert reasons == {'7-day window at N %': 15, 'week N % ? start x?': 2}
+
+
 def test_gate_entries_from_the_future_or_other_hooks_carry_no_reasons(world):
     gates_world(world, [gate('2026-10-13T08:00:00Z', 'config', 'enforce', 'deny', 'x: y'),
                         gate('2026-10-13T08:00:00Z', 'soft_stop', 'enforce', 'allow', 'x: y'),

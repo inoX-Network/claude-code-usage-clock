@@ -110,6 +110,9 @@ QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # name
 REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
 # The question of the spawn gate's ask dialog (spawn_gate.QUESTIONS): `WEEK 92 % · start x?`, `WOCHE 92 % · x starten?`
 WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % · ')
+# The kind version 1.4.0 archived for that question before reason_kind knew it: `wOCHE N % ? x starten?`
+ARCHIVED_QUESTION = re.compile(r'w(?:EEK|OCHE) N % \? ')
+WEEK_KIND = '7-day window at N %'
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
 CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
@@ -528,7 +531,7 @@ def reason_kind(reason) -> str:
     harmless, at most REASON_LENGTH characters, starting in lower case. The question of the ask dialog has no colon and
     names the agent: it is the kind of the other reasons of the weekly threshold."""
     if isinstance(reason, str) and WEEK_QUESTION.match(reason):
-        return '7-day window at N %'
+        return WEEK_KIND
     prefix = reason.split(':', 1)[0] if isinstance(reason, str) else ''
     prefix = NUMBER.sub('N', PERCENT.sub('N %', QUOTED.sub('…', prefix)))
     prefix = REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]
@@ -548,7 +551,20 @@ def parse_archive_line(raw: str) -> tuple[str, dict]:
         merge_stats(new_stats(), stats)       # figures in another format (or damaged) do not merge: not an archive line
     except (TypeError, ValueError, KeyError, AttributeError) as error:
         raise ValueError('figures') from error
+    _merge_archived_questions(stats)
     return day, stats
+
+
+def _merge_archived_questions(stats: dict) -> None:
+    """Counts the ask questions a day of version 1.4.0 archived as kinds of their own under WEEK_KIND."""
+    for modes in stats.get('guard_reasons', {}).values():
+        for decisions in modes.values():
+            for decision, kinds in decisions.items():
+                merged: dict = {}
+                for kind, count in kinds.items():
+                    key = WEEK_KIND if ARCHIVED_QUESTION.match(kind) else kind
+                    merged[key] = merged.get(key, 0) + count
+                decisions[decision] = merged
 
 
 def read_archive(log_dir: str) -> tuple[dict[str, dict], int]:
