@@ -2,7 +2,7 @@
 
 This guide is for you if you use Claude Code and have never installed anything like this before. You need no
 programming knowledge. Every step says what to type and what you should see afterwards. The
-[README](../README.md) has all the details, but you do not need it to get started.
+[documentation](README.md) has all the details, but you do not need it to get started.
 
 ## What it does
 
@@ -246,7 +246,7 @@ python3 tools/install.py --mode enforce
 ```
 
 (On Windows: `python tools\install.py --mode enforce`.) To go back, run it with `--mode shadow`. The README explains
-what to look for in the log: [From shadow to enforce](../README.md#from-shadow-to-enforce).
+what to look for in the log: [From shadow to enforce](gates.md#from-shadow-to-enforce).
 
 ## Uninstall
 
@@ -269,7 +269,7 @@ The files stay on your disk. To remove them as well, delete these three folders 
 | The downloaded folder | `rm -r ~/claude-code-usage-clock` | `Remove-Item -Recurse -Force "$env:USERPROFILE\claude-code-usage-clock"` (`-Force`: Git marks some of its files read-only) |
 
 (`~` is your home folder.) If you had a status line of your own before and replaced it, the README says how to get
-it back: [Uninstall completely](../README.md#uninstall-completely).
+it back: [Uninstall completely](install.md#uninstall-completely).
 
 ## Common problems
 
@@ -307,7 +307,7 @@ Send a message, and after the answer the numbers are fresh again.
 
 ## Next steps
 
-- The [README](../README.md) explains every part and every setting.
+- The [documentation](README.md) explains every part and every setting.
 - [`docs/usage-report.md`](usage-report.md) shows how to see what your usage went into, per day, week, month or year;
   the [desktop plugin](../desktop/README.md#the-usage-report-report) shows the same in Claude Code with `/report`.
 - On Windows, [`windows/README.md`](../windows/README.md) lists what is different there.
