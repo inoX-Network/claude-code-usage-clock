@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import copy
 import json
 import math
 import os
@@ -48,9 +49,12 @@ sys.path.insert(0, HERE)
 import _config  # noqa: E402
 import _plat  # noqa: E402
 import _spawn_check  # noqa: E402
+import _sync_core  # noqa: E402
 import _transcripts  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
+import sync as sync_command  # noqa: E402
+import sync_format  # noqa: E402
 
 PRICES_FILE = os.path.join(HERE, 'prices.json')
 PROJECTS_DIR = '~/.claude/projects'
@@ -265,6 +269,12 @@ class Data:
         self.start_indices: list[int] = []        # the first request of every transcript, in time order
         self.start_times: list[float] = []
         self.price_cache: dict[str, dict | None] = {}
+        self.machine: dict[str, str] = {}         # with the sync: CLI id -> the machine it ran on
+        self.only: str | None = None              # --machine: only the requests and starts of this machine count
+
+    def counted(self, ident: str) -> bool:
+        """Whether the CLI `ident` (the first 8 characters of a session id) counts: always without --machine."""
+        return self.only is None or self.machine.get(ident) == self.only
 
     def set_requests(self, requests: list[_transcripts.Request]) -> None:
         self.requests = sorted(requests, key=lambda r: r.ts)
@@ -278,7 +288,8 @@ class Data:
                     self.label[request.session] = folder
             if not request.sub:
                 self.first_main.setdefault(request.session, index)
-        self.start_indices = _transcripts.start_indices(self.requests)
+        self.start_indices = [index for index in _transcripts.start_indices(self.requests)
+                              if self.requests[index].source != NO_START]
         self.start_times = [self.times[index] for index in self.start_indices]
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
@@ -717,6 +728,8 @@ def _starts_between(data: Data, prices: list[dict], start: float, end: float) ->
     starts = []
     for index in data.start_indices[lo:hi]:
         request = data.requests[index]
+        if not data.counted(request.session[:8]):
+            continue
         starts.append({'t': request.ts, 'session': request.session[:8], 'type': request.agent_type,
                        'model': _model_name(_price_of(data, prices, request.model), request.model),
                        'input': request.tokens[0], 'cache_write': request.tokens[1] + request.tokens[2],
@@ -743,8 +756,8 @@ def _delta(first: Measurement, second: Measurement, metric: str) -> tuple[str | 
 
 
 def _section_costs(data: Data, prices: list[dict], first: float, second: float) -> tuple[dict, dict, set, bool]:
-    """(cost by CLI, cost by agent (None = the main sessions, else the type of the subagents), model names, whether a
-    request has no price) of the requests after `first` up to `second`."""
+    """(cost by CLI, cost by agent (None = the main sessions, else the type of the subagents; with --machine only of
+    the CLIs that count), model names, whether a request has no price) of the requests after `first` up to `second`."""
     costs: dict[str, float] = {}
     agents: dict[str | None, float] = {}
     models: set = set()
@@ -755,7 +768,8 @@ def _section_costs(data: Data, prices: list[dict], first: float, second: float) 
         ident = request.session[:8]
         cost = request_cost(entry, request.tokens) if entry else 0.0
         costs[ident] = costs.get(ident, 0.0) + cost
-        agents[request.agent_type] = agents.get(request.agent_type, 0.0) + cost
+        if data.counted(ident):
+            agents[request.agent_type] = agents.get(request.agent_type, 0.0) + cost
         if entry:
             models.add(entry['name'])
         else:
@@ -786,6 +800,8 @@ def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, e
                 continue
             alloc['attributed'] += rise
             for ident, cost in costs.items():
+                if not data.counted(ident):
+                    continue        # --machine: the share of a CLI of another machine
                 cli = _cli(stats, data, data.session_of[ident])
                 cli[metric + '_pts'] += rise * cost / total
                 cli[metric + '_cov'] += cost         # the cost that lay in a counted section: its points are measured
@@ -872,7 +888,8 @@ def compute_stats(data: Data, prices: list[dict], intervals: list[tuple[float, f
     stats = new_stats()
     for start, end in intervals:
         for index in range(bisect.bisect_left(data.times, start), bisect.bisect_left(data.times, end)):
-            _count_request(stats, data, prices, index)
+            if data.counted(data.requests[index].session[:8]):
+                _count_request(stats, data, prices, index)
         _count_sections(stats, data, prices, start, end)
         stats['starts'] += _starts_between(data, prices, start, end)
         _merge_abo(stats['abo'], _subscription(data, start, end))
@@ -1069,8 +1086,9 @@ def _project_row(name: str, clis: list[dict], total: float) -> dict:
             'cache_hit_rate': _hit_rate(tokens), 'session_ids': [cli['id'] for cli in clis]}
 
 
-def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
-    """The overview from the other sections of the report; the text overview is made of this object alone."""
+def build_overview(period: dict, report: dict, start_block_5h: float, notes: list[dict] | None = None) -> dict:
+    """The overview from the other sections of the report; the text overview is made of this object alone. `notes` are
+    the notable lines of the sync, last."""
     total, abo = report['total'], report['subscription']
     by_project: dict[str, list[dict]] = {}
     for cli in report['clis']:
@@ -1098,8 +1116,9 @@ def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
         families[name.split()[0]] = families.get(name.split()[0], 0.0) + model['cost_usd']
     top_type = next(iter(total['subagents']['by_type'].items()), None)
     notable = (_gate_notes(report) + _window_note(windows, start_block_5h) + _cache_note(projects)
-               + _dominant_note(projects) + _unexplained_note(report['allocation']))
-    return {'title': _title(period), 'cost_usd': total['cost_usd'], 'week': week,
+               + _dominant_note(projects) + _unexplained_note(report['allocation']) + (notes or []))
+    machine = report['coverage'].get('sync', {}).get('machine')
+    return {'title': _title(period) + ('' if machine is None else f' · machine {machine}'), 'cost_usd': total['cost_usd'], 'week': week,
             'five_hour': {'windows': len(windows), 'highest_percent': top['peak'] if top else None,
                           'highest_at': top['peak_at'] if top else None},
             'projects': projects, 'max_projects': MAX_PROJECTS, 'more': more,
@@ -1161,10 +1180,10 @@ def _overview_startup(startup: dict) -> dict | None:
 
 
 def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: float, estimate: dict | None = None,
-                 contexts: dict | None = None) -> dict:
+                 contexts: dict | None = None, machines: dict | None = None, notes: list[dict] | None = None) -> dict:
     """`start_block_5h` (percent) is the threshold of the configuration from which a 5h window is notable; `estimate`
     the estimate of the fixed start (see `estimate_start`), if one was made; `contexts` the context split by CLI id
-    (see `read_contexts`)."""
+    (see `read_contexts`); with the sync `machines` the name of the machine by CLI id and `notes` its notable lines."""
     abo = stats['abo']
     contexts = contexts or {}
     windows = [{'resets': w['resets'], 'first_seen': iso(w['first']), 'peak': w['peak'], 'peak_at': iso(w['peak_at'])}
@@ -1186,13 +1205,15 @@ def build_report(stats: dict, period: dict, coverage: dict, start_block_5h: floa
                   'unpriced': _models_report(stats['unpriced'], False), 'cache_hit_rate': _hit_rate(stats['tokens']),
                   'cold_starts': stats['cold_starts'], **_details_report(stats['extra'])},
         'startup': _start_report(stats['starts'], estimate),
-        'clis': [{**_cli_report(ident, cli), 'context': contexts.get(ident)} for ident, cli in _by_cost(stats['clis'])],
+        'clis': [{**_cli_report(ident, cli), 'context': contexts.get(ident),
+                  **({} if machines is None else {'machine': machines.get(ident)})}
+                 for ident, cli in _by_cost(stats['clis'])],
         'allocation': {metric: _allocation(alloc) for metric, alloc in stats['alloc'].items()},
         'calibration': {metric: _calibration(cal) for metric, cal in stats['cal'].items()},
         'guards': stats['guards'],
         'guard_reasons': stats['guard_reasons'],
     }
-    report['overview'] = build_overview(period, report, start_block_5h)
+    report['overview'] = build_overview(period, report, start_block_5h, notes)
     return report
 
 
@@ -1322,7 +1343,8 @@ def _cli_lines(clis: list[dict]) -> list[str]:
     lines = ['By CLI (main session and its subagents, most expensive first; ~ = estimate)']
     for cli in clis:
         started = clock(_transcripts.parse_ts(cli['start']), True)
-        lines += _cli_block(f'{cli["label"]}  {cli["id"]}  started {started}', cli)
+        machine = f'  on {cli["machine"]}' if cli.get('machine') else ''
+        lines += _cli_block(f'{cli["label"]}  {cli["id"]}  started {started}{machine}', cli)
     return lines
 
 
@@ -1639,6 +1661,15 @@ def render(report: dict, selection: dict | None = None) -> str:
             sources.append(f'{coverage[key]} unreadable {name} line(s) skipped')
     if coverage['unreadable_context_files']:
         sources.append(f'{coverage["unreadable_context_files"]} unreadable context file(s) skipped')
+    sync = coverage.get('sync')
+    if sync is not None:
+        sources.append(sync['text'])
+        skipped = [f'{count} {name.replace("_", " ")}' for name, count in sync['skipped'].items() if count]
+        if skipped:
+            sources.append(f'{sum(sync["skipped"].values())} item(s) of the sync repository skipped '
+                           f'({", ".join(skipped)})')
+        if sync['unreadable_day_lines']:
+            sources.append(f'{sync["unreadable_day_lines"]} unreadable day line(s) of other machines skipped')
     title = f'Usage report {period["label"]} (local time, UTC{offset[:3]}:{offset[3:]})'
     head = [title + (f' - {selection["description"]}' if selection else ''), 'Sources: ' + '; '.join(sources)]
     if selection:
@@ -1880,6 +1911,323 @@ def write_archive(log_dir: str, new_days: dict[str, dict]) -> None:
             archive.write((b'\n' if content and not content.endswith(b'\n') else b'') + text.encode('utf-8'))
 
 
+# --- Other machines: the sync -------------------------------------------------------------------------------------
+# With sync.mode shadow or on the report adds the folders of the other machines in the local clone of the sync
+# repository (hooks/sync_format.py reads them as foreign data). This machine comes from its local files; of its own
+# folder in the clone only the requests are read, which the local ones replace by `k` (the transcripts Claude Code
+# deleted after 30 days are still there). Requests count once by `k`, measurements of several machines once, a day
+# line only for a day without requests on any machine.
+
+PULL_GAP_S = 300            # a report pulls again only after this long since the last successful pull
+SAME_MEASUREMENT_S = 120    # equal measurements (both values, both reset times) within this time are one
+STALE_PUSH_S = 24 * 3600    # a machine without a successful push for longer is notable
+NO_START = 'sync:'          # the source of a request of the clone that is not the first of its transcript
+SUBSCRIPTION_KEYS = ('abo', 'alloc', 'cal', 'points')      # the parts of a day line that only one line may give
+
+
+def machine_name(text: str) -> str:
+    """A name of a machine as the report prints it: control characters as `?`, at most 64 characters. Names come from
+    foreign data; sync_format already allows only a small set of characters."""
+    return CONTROL_CHARS.sub('?', text)[:64] or '?'
+
+
+class Machines:
+    """The machines of the sync: this one (key `own`, from its local files) and the others (their folders in the
+    clone), and what was read of the clone: request lines, measurements, gate decisions and day lines by machine."""
+
+    def __init__(self, own: str, name: str, last_success: float | None):
+        self.own = own                    # the machine id, or '' if this machine never synced
+        self.names = {own: name}
+        self.platforms = {own: sync_format.platform_name()}
+        self.last_success: dict[str, float | None] = {own: last_success}
+        self.requests: list[dict] = []
+        self.history: list[Measurement] = []
+        self.guards: dict[str, list[tuple]] = {}
+        self.days: dict[str, dict[str, dict]] = {}
+        self.skipped = dict.fromkeys(sync_format.COUNTERS, 0)
+        self.broken_days = 0
+
+    def add(self, key: str, machine: sync_format.Machine) -> None:
+        """The folder of another machine. Of lines without `k` a copy (a push cut off and repeated) counts once: a
+        measurement per time, a gate decision per line, a day line per day (the first, as in the local archive)."""
+        info, status = machine.machine or {}, machine.status or {}
+        self.names[key] = machine_name(info.get('name') or sync_format.display_name(key, ''))
+        self.platforms[key] = info.get('platform')
+        self.last_success[key] = sync_format.parse_time(status['last_success']) if status else None
+        self.requests += [{**row, '_machine': key} for row in machine.requests]
+        times: set[float] = set()
+        for row in machine.history:
+            ts = sync_format.parse_time(row['t'])
+            if ts not in times:
+                times.add(ts)
+                self.history.append(Measurement(ts, row['five'], row['week'], row['five_resets'], row['week_resets']))
+        guards = []
+        for t, hook, decision, mode, reason in dict.fromkeys(
+                (row['t'], row['hook'], row['decision'], row['mode'], row['reason']) for row in machine.gates):
+            guards.append((sync_format.parse_time(t), hook, mode, decision,
+                           reason_kind(reason) if decision in REASONED else None))
+        self.guards[key] = guards
+        days: dict[str, dict] = {}
+        for row in machine.days:
+            try:
+                day, stats = parse_archive_line(json.dumps(row))
+            except (ValueError, TypeError, KeyError, RecursionError):
+                self.broken_days += 1
+                continue
+            days.setdefault(day, stats)
+        self.days[key] = days
+
+    def merge_requests(self, local: list[_transcripts.Request]) -> tuple[list[_transcripts.Request], dict, dict]:
+        """(requests, machine by session, project label by session of the clone). The local requests and those of
+        the clone count once by `k`, by the reading rule of the format; of equal lines the local one (read last)."""
+        rows, keyless = list(self.requests), []
+        for request in local:
+            if request.ids is None:
+                keyless.append(request)      # no message id: no `k` the export could have made the same
+                continue
+            rows.append({'t': sync_format.iso_time(request.ts), 'sid': request.session, 'out': request.tokens[4],
+                         'k': sync_format.request_key(request.ids[0], request.ids[1] or ''), '_request': request,
+                         '_machine': self.own})
+        winners = [(row.get('_request') or _clone_request(row), row) for row in sync_format.latest_by_key(rows).values()]
+        winners += [(request, {'_machine': self.own}) for request in keyless]
+        machine_of: dict[str, str] = {}
+        labels: dict[str, str] = {}
+        for request, row in sorted(winners, key=lambda pair: pair[0].ts):     # a session runs on the machine it began on
+            machine_of.setdefault(request.session, row['_machine'])
+            if 'proj' in row:
+                labels.setdefault(request.session, row['proj'])
+        return [request for request, _row in winners], machine_of, labels
+
+    def combine_day(self, lines: list[tuple[str, dict]], machine_of: dict[str, str]) -> dict:
+        """The figures of a day without requests from its day lines: the usage of every machine added, the
+        subscription (abo, allocation, calibration, points) of the first line only. A line that does not add up with
+        the others is counted and left out. The CLIs are noted with their machine."""
+        combined = new_stats()
+        first = lines[0][1]
+        for index, (key, stats) in enumerate(lines):
+            trial = copy.deepcopy(combined)
+            try:
+                merge_stats(trial, stats if index == 0 else _usage_only(stats))
+            except (TypeError, ValueError, KeyError, AttributeError):
+                self.broken_days += 1
+                continue
+            combined = trial
+            for ident in stats.get('clis', {}):
+                machine_of.setdefault(ident, key)
+        for key in ('starts', 'points'):
+            if key not in first:
+                del combined[key]       # archived by an earlier version: the main loop knows what to do
+        return combined
+
+
+def _clone_request(row: dict) -> _transcripts.Request:
+    """A request line of the clone as a request of the report. Only the first request of a transcript is a start."""
+    source = f'{NO_START}{row["_machine"]}:{row["k"]}' if row['first'] else NO_START
+    return _transcripts.Request(sync_format.parse_time(row['t']), row['sid'], row['sub'] is not None, row['sub'],
+                                row['model'], (row['in'], row['cw5'], row['cw1h'], row['cr'], row['out']), None,
+                                row['think'], row['ws'], row['wf'], source=source)
+
+
+def merge_measurements(measurements: list[Measurement]) -> list[Measurement]:
+    """The measurements of all machines in time order; equal ones (both values and both reset times) within
+    SAME_MEASUREMENT_S of one that is kept are one measurement: every machine measures the same subscription."""
+    kept, last = [], {}
+    for m in sorted(measurements, key=lambda m: m.t):
+        values = m[1:]
+        if values in last and m.t - last[values] <= SAME_MEASUREMENT_S:
+            continue
+        last[values] = m.t
+        kept.append(m)
+    return kept
+
+
+def read_clone(root: str | None, machines: Machines) -> None:
+    """Adds the folders of the other machines in the clone at `root`, and the requests of the own folder."""
+    if root is None:
+        return
+    repo = sync_format.read_repo(root, skip=machines.own or None)
+    machines.skipped = repo.skipped
+    for key, machine in sorted(repo.machines.items()):
+        machines.add(key, machine)
+    if machines.own and os.path.isdir(os.path.join(root, sync_format.MACHINES, machines.own)):
+        own = sync_format.read_machine(root, machines.own, machines.skipped)
+        machines.requests += [{**row, '_machine': machines.own} for row in own.requests]
+
+
+def _state(log_dir: str) -> _sync_core.State:
+    try:
+        return _sync_core.read_state(os.path.join(log_dir, _sync_core.SYNC_DIR))
+    except _sync_core.BrokenState:
+        return _sync_core.State()
+
+
+def sync_push(log_dir: str, cfg: dict, now: float) -> dict:
+    """`--sync`: the push of this machine past the wait and the backoff (`sync.py push --now`), never past the block
+    after `visibility` and never past the lock. Its status: `ok`, `failed` (with the category), `blocked`, `locked`."""
+    before = _state(log_dir)
+    try:
+        code = _sync_core.push(log_dir, cfg, sync_command.git_push, forced=True, clock=lambda: now)
+    except OSError:
+        return {'status': 'failed', 'category': 'internal'}
+    after = _state(log_dir)
+    if after == before:      # nothing ran: blocked after `visibility`, or another run holds the lock
+        return {'status': 'blocked', 'category': 'visibility'} if before.blocked else {'status': 'locked',
+                                                                                       'category': None}
+    return {'status': 'ok', 'category': None} if code == 0 else {'status': 'failed', 'category': after.last_error}
+
+
+def sync_pull(log_dir: str, cfg: dict, now: float, wanted: bool, forced: bool) -> dict:
+    """The pull before a report: none with --no-pull (`skipped`), none within PULL_GAP_S of the last successful one
+    unless `forced` (`recent`), else a fast forward with sync.pull_timeout_s: `ok`, `locked` (another run holds the
+    lock: the clone as it is), `diverged` (no fast forward possible: nothing merged) or `failed` with its category."""
+    if not wanted:
+        return {'status': 'skipped', 'category': None}
+    last = _state(log_dir).last_pull
+    if not forced and last is not None and 0 <= now - last < PULL_GAP_S:
+        return {'status': 'recent', 'category': None}
+    try:
+        outcome = _sync_core.pull_outcome(log_dir, cfg, sync_command.git_pull, background=False, clock=lambda: now)
+    except OSError:
+        return {'status': 'failed', 'category': 'internal'}
+    if outcome.status == 'failed':
+        return {'status': 'diverged' if outcome.category == 'conflict' else 'failed', 'category': outcome.category}
+    return {'status': outcome.status, 'category': None}
+
+
+def age_text(seconds: float) -> str:
+    if seconds < 60:
+        return 'just now'
+    if seconds < 3600:
+        return f'{seconds // 60:.0f} min ago'
+    return f'{seconds // 3600:.0f} h ago' if seconds < 48 * 3600 else f'{seconds // 86400:.0f} d ago'
+
+
+def _when(moment: float | None, now: float, never: str = 'never') -> str:
+    return never if moment is None else age_text(now - moment)
+
+
+PULL_TEXTS = {'ok': 'pull ok', 'skipped': 'no pull (--no-pull)', 'locked': 'no pull, another sync run holds the lock',
+              'failed': 'pull failed ({category}), last pull {last}',
+              'diverged': 'no fast forward, the sync history differs: nothing merged, last pull {last}',
+              'recent': 'last pull {last}'}
+PUSH_TEXTS = {'ok': 'push ok', 'failed': 'push failed ({category})', 'locked': 'no push, another sync run holds the lock',
+              'blocked': 'no push: the sync repository is public (visibility)'}
+
+
+def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _sync_core.State, cfg: dict,
+                  chosen: str | None, now: float) -> dict:
+    """`coverage.sync`: the machines with the time of their last successful push, the pull, the push of --sync, the
+    backoff of this machine and what was skipped in the clone; `text` is the line `Sources:` prints."""
+    keys = [machines.own] + sorted((key for key in machines.names if key != machines.own),
+                                   key=lambda key: (machines.names[key], key))
+    last_pull = state.last_pull
+    pull = {**pull, 'last_pull': None if last_pull is None else iso(last_pull)}
+    parts = [f'Sync: {_plural(len(keys), "device")}']
+    parts += [f'{machines.names[key]} {_when(machines.last_success[key], now, "never pushed")}' for key in keys]
+    if push is not None:
+        parts.append(PUSH_TEXTS[push['status']].format(category=push['category']))
+    parts.append(PULL_TEXTS[pull['status']].format(category=pull['category'], last=_when(last_pull, now)))
+    if chosen is not None:
+        parts.append(f'only {machines.names[chosen]}')
+    return {'mode': cfg['sync']['mode'], 'text': ' · '.join(parts),
+            'machine': None if chosen is None else machines.names[chosen],
+            'machines': [{'id': key or None, 'name': machines.names[key], 'platform': machines.platforms[key],
+                          'own': key == machines.own,
+                          'last_success': None if machines.last_success[key] is None else iso(machines.last_success[key])}
+                         for key in keys],
+            'pull': pull, 'push': push,
+            'backoff': {'level': state.backoff_level, 'last_error': state.last_error,
+                        'next_due': None if state.next_due is None else iso(state.next_due)},
+            'skipped': dict(machines.skipped), 'unreadable_day_lines': machines.broken_days}
+
+
+def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
+    """The notable lines of the sync: machines without a push for over 24 hours, this machine blocked or backing off,
+    a pull that failed or found no fast forward."""
+    notes = []
+    stale = [machine for machine in sync['machines'] if machine['last_success'] is None
+             or now - _transcripts.parse_ts(machine['last_success']) > STALE_PUSH_S]
+    if stale:
+        listing = ', '.join(f'{m["name"]} ' + ('never' if m['last_success'] is None else
+                                               age_text(now - _transcripts.parse_ts(m['last_success'])))
+                            for m in stale)
+        notes.append({'rule': 'sync_stale', 'machines': [{'name': m['name'], 'last_success': m['last_success']}
+                                                         for m in stale],
+                      'text': f'no push for over 24 h: {listing}'})
+    if state.blocked:
+        notes.append({'rule': 'sync_backoff', 'category': 'visibility', 'next_due': None,
+                      'text': 'sync of this machine blocked: the sync repository is public (visibility); '
+                              'run tools/install.py with --sync-repo again'})
+    elif state.in_backoff(now):
+        notes.append({'rule': 'sync_backoff', 'category': state.last_error, 'next_due': iso(state.next_due),
+                      'text': f'sync of this machine backs off after an error ({state.last_error}), next push '
+                              f'{clock(state.next_due, True)}'})
+    pull = sync['pull']
+    if pull['status'] in ('failed', 'diverged'):
+        last = 'not pulled yet' if pull['last_pull'] is None else \
+            f'as of {age_text(now - _transcripts.parse_ts(pull["last_pull"]))}'
+        cause = (f'pull failed ({pull["category"]})' if pull['status'] == 'failed'
+                 else 'no fast forward, the sync history differs, nothing was merged')
+        notes.append({'rule': 'sync_pull', 'status': pull['status'], 'category': pull['category'],
+                      'text': f'{cause}: the other machines {last}'})
+    return notes
+
+
+def choose_machine(parser, machines: Machines, name: str) -> str:
+    """The key of the machine `--machine` names (its name, or the start of it); exit 2 if none or several fit."""
+    if not name:
+        parser.error('--machine must not be empty')
+    names = machines.names
+    found = [key for key in names if names[key] == name] or [key for key in names if names[key].startswith(name)]
+    if len(found) != 1:
+        listing = ', '.join(sorted(names.values()))
+        parser.error(f"--machine '{name}' matches {'no machine' if not found else f'{len(found)} machines'} "
+                     f'(machines: {listing})')
+    return found[0]
+
+
+def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Machines, str | None, dict, list[dict]]:
+    """(machines, the key of --machine, coverage.sync, the notable lines of the sync): the push of --sync, the pull,
+    then the clone as it is now. A machine id that cannot be used (a link, not a UUID4) leaves the clone unread: its
+    own folder could not be told from the others. Nothing here fails the report."""
+    push = sync_push(log_dir, cfg, now) if args.sync else None
+    pull = sync_pull(log_dir, cfg, now, wanted=not args.no_pull, forced=args.sync)
+    state = _state(log_dir)
+    try:
+        own, usable = sync_format.load_machine_id(log_dir, create=False) or '', True
+    except sync_format.FormatError:
+        own, usable = '', False
+    configured = cfg['sync']['machine_name']
+    name = sync_format.display_name(own, configured) if own else configured or 'this machine'
+    machines = Machines(own, machine_name(name), state.last_success)
+    if usable:
+        read_clone(sync_command.clone_dir(log_dir, cfg), machines)
+    chosen = None if args.machine is None else choose_machine(parser, machines, args.machine)
+    sync = sync_coverage(machines, pull, push, state, cfg, chosen, now)
+    return machines, chosen, sync, sync_notes(sync, state, now)
+
+
+def day_lines(machines: Machines, archive: dict[str, dict], chosen: str | None) -> dict[str, list[tuple[str, dict]]]:
+    """The day lines by day, as (machine, figures): this machine's archive first, then the others by id; with
+    --machine only that one's."""
+    lines: dict[str, list[tuple[str, dict]]] = {}
+    sources = [(machines.own, archive)] + sorted(machines.days.items())
+    for key, days in sources:
+        if chosen is None or key == chosen:
+            for day, stats in days.items():
+                lines.setdefault(day, []).append((key, stats))
+    return lines
+
+
+def _usage_only(stats: dict) -> dict:
+    """A day line without its subscription figures, which another line of the day gives: the usage counts, the CLIs
+    without points (a day line shares the whole rise among the CLIs of its own machine)."""
+    figures = {key: value for key, value in stats.items() if key not in SUBSCRIPTION_KEYS}
+    figures['clis'] = {ident: {**cli, 'five_pts': 0, 'week_pts': 0, 'five_cov': 0, 'week_cov': 0}
+                       for ident, cli in stats.get('clis', {}).items()}
+    return figures
+
+
 def _archive_days(content: str):
     """The days of the lines the archive accepts, the same lines `read_archive` takes."""
     for raw in content.splitlines():
@@ -1912,6 +2260,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--claude-dir', metavar='DIR', help=f'the user folder of Claude Code for the estimate of the '
                         f'start (default: {CLAUDE_DIR})')
     parser.add_argument('--config', metavar='PATH', help='config.json to take log_dir from (as for log_summary.py)')
+    parser.add_argument('--local', action='store_true', help='with the sync: this machine only, no pull')
+    parser.add_argument('--machine', metavar='NAME', help='with the sync: the requests and sessions of one machine')
+    parser.add_argument('--no-pull', action='store_true', help='with the sync: the clone as it is, no pull')
+    parser.add_argument('--sync', action='store_true', help='push this machine and pull before the report')
     return parser
 
 
@@ -2012,9 +2364,10 @@ def _whole_days(start: float, end: float) -> list[date]:
 
 
 def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
-              anchor: float | None = None) -> Data:
+              anchor: float | None = None, machines: Machines | None = None, chosen: str | None = None) -> Data:
     """Requests from the transcripts; for the time before the history began, the usage lines in the transcripts stand in
-    for it."""
+    for it. With the sync (`machines`) the requests and gate decisions of the other machines join them; `chosen` is the
+    machine of --machine."""
     data = Data()
     data.week_anchor = anchor
     first_history = min((m.t for m in history), default=math.inf)
@@ -2022,10 +2375,20 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
     if os.path.isdir(projects_dir):
         requests, fresh, data.files, data.unreadable_requests = _transcripts.read_transcripts(
             projects_dir, modified_since, want_usage_lines=start < first_history)
+    if machines is not None:
+        requests, machine_of, labels = machines.merge_requests(requests)
     data.set_requests(requests)
     older = [Measurement(ts, five, week, None, None) for ts, (five, week) in fresh.items() if ts < first_history]
     data.set_measurements(history + older)
     data.guards = read_guard_log(log_dir)
+    if machines is not None:
+        for session, label in labels.items():
+            data.label.setdefault(session, label)
+        for session, key in machine_of.items():
+            data.machine.setdefault(session[:8], key)
+        data.only = chosen
+        data.guards = (data.guards if chosen in (None, machines.own) else []) + [
+            guard for key, guards in sorted(machines.guards.items()) if chosen in (None, key) for guard in guards]
     return data
 
 
@@ -2046,9 +2409,20 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     if args.json and (args.full or selecting):
         parser.error('--json prints all projects and sessions already (each CLI has its project): '
                      '--full, --project and --session are for the text report')
+    syncing = args.machine is not None or args.no_pull or args.sync
+    if args.archive and (syncing or args.local):
+        parser.error('--archive writes the archive of this machine: no --local, --machine, --no-pull or --sync')
+    if args.local and syncing:
+        parser.error('--local reads this machine only, without a pull: no --machine, --no-pull or --sync')
+    if args.sync and args.no_pull:
+        parser.error('--sync pulls: not with --no-pull')
     config = os.path.expanduser(args.config) if args.config else None
     if config is not None and not os.path.isfile(config):
         parser.error(f'--config: not a file: {args.config}')
+    settings = load_config(config)
+    synced = settings['sync']['mode'] != 'off' and not args.local and not args.archive
+    if not synced and (args.machine is not None or args.sync):
+        parser.error('--machine and --sync need the sync: sync.mode shadow or on in config.json')
     log_dir = log_summary.resolve_log_dir(config)
     projects_dir = os.path.expanduser(args.projects_dir or PROJECTS_DIR)
     try:
@@ -2059,6 +2433,11 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     today = local_day(now)
     history, broken_history = read_history(log_dir)
     archive, broken_archive = read_archive(log_dir)
+    machines = chosen = sync = None
+    notes: list[dict] = []
+    if synced:
+        machines, chosen, sync, notes = gather_sync(parser, args, log_dir, settings, now)
+        history = merge_measurements(history + machines.history)
     anchor = week_anchor(history, resolve_usage_file(config))
     if args.archive:
         period = {'kind': 'archive', 'start': 0.0, 'end': math.inf}
@@ -2068,11 +2447,19 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print(period['error'])
         return 1
     start, end = period['start'], period['end']
-    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start, anchor)
+    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start, anchor, machines, chosen)
     if args.archive:
         return archive_finished_days(data, prices, archive, log_dir, projects_dir, today)
 
-    archived = [d for d in _whole_days(start, end) if d < today and d.isoformat() in archive]
+    if machines is None:
+        lines = archive
+        archived = [d for d in _whole_days(start, end) if d < today and d.isoformat() in archive]
+    else:       # a day line counts only for a day without requests on any machine: never added to them
+        busy = {local_day(ts) for ts in data.times}
+        by_day = day_lines(machines, archive, chosen)
+        archived = [d for d in _whole_days(start, end) if d < today and d not in busy and d.isoformat() in by_day]
+        lines = {d.isoformat(): machines.combine_day(by_day[d.isoformat()], data.machine) for d in archived}
+        sync['unreadable_day_lines'] = machines.broken_days      # with the lines that did not add up
     if not data.files and not archived and not os.path.isdir(projects_dir):
         print(f'No transcripts found at {projects_dir} - pass --projects-dir.')
         return 1
@@ -2081,13 +2468,13 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         used, unsplit, unfit = [], [], None
         for day in archived:
             try:
-                merge_stats(stats, archive[day.isoformat()])
+                merge_stats(stats, lines[day.isoformat()])
             except (TypeError, ValueError, KeyError, AttributeError):
                 unfit = day       # does not fit the live figures: all is computed again with this day from the transcripts
                 break
-            if 'starts' not in archive[day.isoformat()]:      # archived by an earlier version: from the transcripts
+            if 'starts' not in lines[day.isoformat()]:      # archived by an earlier version: from the transcripts
                 stats['starts'] += _starts_between(data, prices, *day_bounds(day))
-            if 'points' not in archive[day.isoformat()] and not _split_from_transcripts(stats, data, prices, day, archive):
+            if 'points' not in lines[day.isoformat()] and not _split_from_transcripts(stats, data, prices, day, lines):
                 unsplit.append(day.isoformat())
             used.append(day.isoformat())
         if unfit is None:
@@ -2099,13 +2486,16 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
                 'unreadable_history_lines': broken_history,
                 'unreadable_archive_lines': broken_archive, 'unreadable_transcript_lines': data.unreadable_requests,
                 'unreadable_context_files': broken_contexts}
+    if sync is not None:
+        coverage['sync'] = sync
     shown = {'kind': period['kind'], 'label': period['label'], 'start': iso(start), 'end': iso(end)}
-    settings = load_config(config)
     folder = estimate_folder(data, start, end) if args.json or args.full else None
     estimate = None if folder is None else estimate_start(
         folder[0], folder[1], os.path.expanduser(args.claude_dir or CLAUDE_DIR), projects_dir,
         settings['start_estimate']['chars_per_token'], sorted({s['type'] for s in stats['starts'] if s['type']}))
-    report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate, contexts)
+    names = None if machines is None else {ident: machines.names[key] for ident, key in data.machine.items()}
+    report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate, contexts, names,
+                          notes)
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

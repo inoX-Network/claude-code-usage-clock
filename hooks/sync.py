@@ -39,6 +39,11 @@ def git_pull(run: _sync_core.Run) -> None:
     raise _sync_core.SyncError('internal', 'pull is not built yet')
 
 
+def clone_dir(log_dir: str, cfg: dict) -> str | None:
+    """The local clone of the sync repository (0034-SYNC-PUSH); None while there is none. Not built yet."""
+    return None
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='sync.py', description='Sync the usage data across machines.')
     commands = parser.add_subparsers(dest='command', required=True)

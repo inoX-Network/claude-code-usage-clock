@@ -68,6 +68,7 @@ class Request(NamedTuple):
     searches: int | None = None
     fetches: int | None = None
     source: str = ''               # the transcript the request stands in (never shown): its first request is a start
+    ids: tuple | None = None       # (message id, request id) that tell it apart; None for a line without a message id
 
 
 def _count(value) -> int:
@@ -215,9 +216,11 @@ def read_transcripts(projects_dir: str, modified_since: float,
                         continue
                     if parsed is not None:
                         message_id, request_id, ts, tokens, model, cwd, details = parsed
-                        key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
+                        ids = (message_id, request_id) if isinstance(message_id, str) and message_id else None
+                        key = ids or (path, number)
                         if replaces(best.get(key), tokens[4], path):
-                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path)
+                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path,
+                                              ids=ids)
                             best[key] = (tokens[4], path, request)
                 if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
                     parsed = parse_usage_line(raw)
