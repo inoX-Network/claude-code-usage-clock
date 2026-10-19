@@ -867,16 +867,20 @@ def logged(tmp_path):
     return path.read_text(encoding='utf-8') if path.exists() else ''
 
 
+FORMAT_KEYS = ('machine_name', 'project_labels', 'project_aliases', 'label_salt', 'keep_request_months')
+
+
 def test_the_sync_defaults(tmp_path, monkeypatch):
-    assert _config.load()['sync'] == {'machine_name': '', 'project_labels': 'plain', 'project_aliases': {},
-                                      'label_salt': '', 'keep_request_months': 3}
+    assert {key: _config.load()['sync'][key] for key in FORMAT_KEYS} == {
+        'machine_name': '', 'project_labels': 'plain', 'project_aliases': {}, 'label_salt': '',
+        'keep_request_months': 3}
 
 
 def test_valid_sync_values_are_taken_over(tmp_path, monkeypatch):
     sync = {'machine_name': 'Büro-PC 2', 'project_labels': 'alias', 'project_aliases': {'webshop': 'shop'},
             'label_salt': 'pepper', 'keep_request_months': 6.0}
     cfg = load_config(tmp_path, monkeypatch, sync)
-    assert cfg['sync'] == dict(sync, keep_request_months=6)
+    assert {key: cfg['sync'][key] for key in FORMAT_KEYS} == dict(sync, keep_request_months=6)
     assert isinstance(cfg['sync']['keep_request_months'], int) and logged(tmp_path) == ''
 
 

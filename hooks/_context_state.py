@@ -42,9 +42,9 @@ def _prune(directory: str, now: float, keep: str) -> None:
 
 
 def write_private(directory: str, name: str, content: str) -> bool:
-    """Writes `<directory>/<name>` atomically (temporary file + os.replace, never through a link, mode 0600; the
-    folder and its parent, the log folder, are created with 0700). False, and nothing written, if the folder is a
-    link. Raises OSError if the file cannot be written. The caller has validated `name`."""
+    """Writes `<directory>/<name>` atomically (temporary file + os.replace, never through a link, mode 0600 whatever
+    the umask; the folder and its parent, the log folder, are created with 0700). False, and nothing written, if the
+    folder is a link. Raises OSError if the file cannot be written. The caller has validated `name`."""
     if os.path.islink(directory):
         return False      # a planted link as the folder: never write through it
     # makedirs gives its mode only to the last folder; the log folder above it is created first, also private
@@ -59,6 +59,8 @@ def write_private(directory: str, name: str, content: str) -> bool:
             pass
         descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _usage.NO_FOLLOW, 0o600)
         with os.fdopen(descriptor, 'w', encoding='utf-8') as f:
+            if os.name != 'nt':      # 0600 whatever the umask took away; Windows has no file modes
+                os.fchmod(descriptor, 0o600)
             f.write(content)
         _usage.replace(tmp, path)
     except OSError:

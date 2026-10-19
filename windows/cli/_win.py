@@ -13,6 +13,9 @@ What differs from Linux and macOS, and what is done about it:
   that runs now (the `python3` of Windows is a Microsoft Store placeholder), and `find_git_bash()` finds Git Bash
   the way Claude Code does (variable CLAUDE_CODE_GIT_BASH_PATH, else git.exe on the PATH).
 - `pread()`: Windows has no os.pread.
+- Child processes of the sync: there are no sessions and no process groups to signal. `start_detached()` starts
+  with DETACHED_FLAGS (no console window, not ended with the parent), `kill_tree()` ends a child and everything it
+  started with taskkill /T.
 
 Only the standard library. Importable on every system (msvcrt is loaded when the lock is taken), so its pure
 functions can be looked at anywhere; only the lock needs Windows.
@@ -38,6 +41,16 @@ REPLACE_DELAY_S = 0.025
 GIT_BASH_ENV = 'CLAUDE_CODE_GIT_BASH_PATH'
 # What Claude Code accepts as the file name of a bash given in the variable (docs, "Environment variables")
 BASH_NAMES = ('bash.exe', 'sh.exe', 'bash', 'sh')
+# Process creation flags of the Win32 API. subprocess has these names on Windows only; as numbers they can be checked
+# on every system.
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
+# A start that outlives its parent (the status line) and never flashes a console window
+DETACHED_FLAGS = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+# A child whose whole tree can be ended after a timeout, without a console window
+GROUP_FLAGS = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+KILL_TREE_TIMEOUT_S = 10
 
 
 # --- Lock and replace ---------------------------------------------------------------------------------------------
@@ -54,12 +67,13 @@ def _locking(descriptor: int, mode: int) -> None:
 
 
 @contextlib.contextmanager
-def locked(file):
+def locked(file, wait: bool = True):
     """Holds an exclusive lock on the open file for the block and waits for it as long as it takes.
 
-    Only "somebody else holds it" is waited for; every other error is raised. What was written to `file` is
-    flushed before the lock goes, so the next holder reads it (flock lets go only when the file is closed, which
-    flushes first). A lock of a process that dies is released by the system.
+    Only "somebody else holds it" is waited for; every other error is raised. With wait=False that case raises
+    BlockingIOError at once, like flock with LOCK_NB. What was written to `file` is flushed before the lock goes, so
+    the next holder reads it (flock lets go only when the file is closed, which flushes first). A lock of a process
+    that dies is released by the system.
     """
     import msvcrt
     descriptor = file.fileno()
@@ -70,6 +84,8 @@ def locked(file):
         except OSError as error:
             if error.errno not in (errno.EACCES, errno.EDEADLOCK):
                 raise
+            if not wait:
+                raise BlockingIOError(errno.EWOULDBLOCK, 'the lock is held by another process') from error
             time.sleep(LOCK_POLL_S)
     try:
         yield
@@ -173,3 +189,30 @@ def find_git_bash(env=None, settings_env=None) -> str | None:
             return candidate
         folder = os.path.dirname(folder)
     return None
+
+
+# --- Child processes ----------------------------------------------------------------------------------------------
+
+def start_detached(argv: list[str], popen=None):
+    """Starts `argv` so that it outlives its parent and never shows a console window: stdin, stdout and stderr on
+    the null device, DETACHED_FLAGS. Returns the Popen object. `popen` replaces subprocess.Popen (tests)."""
+    import subprocess
+    return (popen or subprocess.Popen)(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, close_fds=True, creationflags=DETACHED_FLAGS)
+
+
+def kill_tree(process) -> None:
+    """Ends the process and every process it started (git starts ssh or git-remote-https): taskkill /T from
+    System32, not from the PATH; process.kill() afterwards, in case taskkill could not run."""
+    import subprocess
+    taskkill = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32', 'taskkill.exe')
+    try:
+        subprocess.run([taskkill, '/F', '/T', '/PID', str(process.pid)], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW,
+                       timeout=KILL_TREE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        process.kill()
+    except OSError:
+        pass

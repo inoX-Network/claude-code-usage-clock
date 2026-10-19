@@ -40,13 +40,15 @@ MIN_AGE_MIN = -1.0  # a timestamp from the future counts as stale, not as perman
 
 
 @contextlib.contextmanager
-def locked(file):
-    """An exclusive lock on the open file for the block: flock, on Windows msvcrt (which waits like flock does)."""
+def locked(file, wait: bool = True):
+    """An exclusive lock on the open file for the block: flock, on Windows msvcrt (which waits like flock does).
+
+    With wait=False a lock held elsewhere raises BlockingIOError at once instead of waiting (the sync core)."""
     if os.name == 'nt':
-        with _plat.locked(file):
+        with _plat.locked(file, wait):
             yield
         return
-    fcntl.flock(file, fcntl.LOCK_EX)
+    fcntl.flock(file, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         yield
     finally:

@@ -18,6 +18,12 @@ copies them with `_config.py`, so they import this file on Windows only and do t
 - `quote_path(path)`: the path as one word for that shell.
 - `hook_shell(settings_env)`: the shell that runs hook commands, for the installer's smoke test: `/bin/sh`; on
   Windows the bash.exe of Git Bash, None if there is none (`settings_env` is the "env" of settings.json).
+- `start_detached(argv)`: starts a process that outlives the caller and returns at once, stdin, stdout and stderr on
+  the null device (the sync core). POSIX: a session of its own; Windows: DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP
+  and CREATE_NO_WINDOW, so no console window flashes. Returns the Popen object.
+- `GROUP_OPTIONS`: the Popen arguments for a child whose whole tree `kill_tree(process)` can end after a timeout
+  (git starts ssh or git-remote-https). POSIX: a session of its own and SIGKILL to its process group; Windows: a
+  process group without a window and taskkill /T.
 - Open flags: `NO_FOLLOW` (no symlink as the last part of the path; Windows has no such flag, 0 there),
   `O_NONBLOCK` (a named pipe must not block the open; 0 on Windows) and `O_BINARY` (Windows opens in text mode
   otherwise: line breaks are translated and Ctrl-Z ends the file; 0 elsewhere).
@@ -39,6 +45,9 @@ if os.name == 'nt':
 
     locked = _win.locked
     pread = _win.pread
+    start_detached = _win.start_detached
+    kill_tree = _win.kill_tree
+    GROUP_OPTIONS = {'creationflags': _win.GROUP_FLAGS}
     normalize_path = _win.normalize_path
     script_command = _win.interpreter_command
 
@@ -59,6 +68,7 @@ if os.name == 'nt':
 else:
     pread = os.pread
     quote_path = shlex.quote
+    GROUP_OPTIONS = {'start_new_session': True}
 
     def replace(source, destination):
         os.replace(source, destination)
@@ -77,3 +87,15 @@ else:
 
     def script_command(script, *arguments):
         return ' '.join(['python3', shlex.quote(script), *arguments])
+
+    def start_detached(argv):
+        import subprocess      # here: the status line imports this module and must stay fast when nothing is due
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                close_fds=True, start_new_session=True)
+
+    def kill_tree(process):
+        import signal
+        try:
+            os.killpg(process.pid, signal.SIGKILL)      # the child leads its own group (GROUP_OPTIONS)
+        except OSError:      # the whole group is gone already
+            pass

@@ -149,3 +149,41 @@ def test_the_lock_is_released_when_the_block_raises(tmp_path):
 def test_hooks_directory_is_importable_next_to_the_windows_module():
     """The tests rely on both folders being on the path; a changed layout shows up here first."""
     assert os.path.isfile(os.path.join(HOOKS, '_usage.py')) and os.path.isfile(os.path.join(WINDOWS_CLI, '_win.py'))
+
+
+def test_without_waiting_a_held_lock_raises_blocking_io_error_at_once(tmp_path):
+    path = tmp_path / 'file.lock'
+    path.write_bytes(b'')
+    with open(path, 'r+b') as first, open(path, 'r+b') as second:
+        with _win.locked(first, wait=False):
+            begin = time.monotonic()
+            with pytest.raises(BlockingIOError):
+                with _win.locked(second, wait=False):
+                    pass
+            assert time.monotonic() - begin < 1
+        with _win.locked(second, wait=False):      # free again after the with block
+            pass
+
+
+def test_the_process_flags_are_those_of_the_win32_api():
+    assert (_win.DETACHED_PROCESS, _win.CREATE_NEW_PROCESS_GROUP, _win.CREATE_NO_WINDOW) == (
+        subprocess.DETACHED_PROCESS, subprocess.CREATE_NEW_PROCESS_GROUP, subprocess.CREATE_NO_WINDOW)
+
+
+def test_kill_tree_ends_a_child_and_its_grandchild(tmp_path):
+    marker = tmp_path / 'grandchild.pid'
+    child = subprocess.Popen([sys.executable, '-c', textwrap.dedent(f'''
+        import subprocess, sys, time
+        grandchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        open({str(marker)!r}, 'w').write(str(grandchild.pid))
+        time.sleep(60)
+    ''')], creationflags=_win.GROUP_FLAGS)
+    deadline = time.monotonic() + 30
+    while not marker.exists() or not marker.read_text():
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    grandchild = int(marker.read_text())
+    _win.kill_tree(child)
+    assert child.wait(timeout=30) is not None
+    listed = subprocess.run(['tasklist', '/FI', f'PID eq {grandchild}', '/NH'], capture_output=True, text=True)
+    assert str(grandchild) not in listed.stdout

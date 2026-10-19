@@ -11,6 +11,9 @@ share that file; the merge makes sure an idle session cannot overwrite fresh val
 line shows the merged values, so every session shows the same. Each merge also appends to the measurement
 history while the lock is held (see _history.py).
 
+With `sync.mode` not off, the status line is also trigger T1 of the sync core: after the line it starts a due push
+detached (see _sync_core.py); no network, no lock, no waiting.
+
 If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent instead of claiming 0 %: a
 missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
 fails, the session's own values are shown and nothing is written, not even to the history. The exit code is always 0.
@@ -197,6 +200,18 @@ def _save_context(status_input: dict, now: float) -> None:
         pass
 
 
+def _start_sync_if_due(cfg: dict, now: float) -> None:
+    """T1 of the sync core: starts a due push detached, after the line is out. With `sync.mode` off (the default)
+    the core is not even imported; any error is ignored."""
+    if cfg['sync']['mode'] == 'off':
+        return
+    try:
+        import _sync_core
+        _sync_core.statusline_tick(_hookio.log_dir(), cfg, now)
+    except Exception:
+        pass
+
+
 def main() -> int:
     try:
         now = time.time()
@@ -224,6 +239,7 @@ def main() -> int:
         # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
         sys.stdout.reconfigure(encoding='utf-8')
         print(line)
+        _start_sync_if_due(cfg, now)
     except Exception:
         pass
     return 0

@@ -41,7 +41,9 @@ that key and writes one line to the log.
 | `spawn_rules.apply_to_main_session` | `true` | `false`: calls of the main session are not checked at all. |
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
+| `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
 | `sync.machine_name` | `""` | Name of this machine in the sync repository (letters, digits, spaces, `. + @ = - _`, at most 64). Empty: `machine-` and the first 6 characters of its id; the host name is never used. |
+| `sync.interval_min` / `backoff_max_h` / `pull_timeout_s` | `30` / `6` / `5` | Minutes between two pushes (at least 10); the longest wait after failed pushes, in hours; seconds the pull before a report may take. |
 | `sync.project_labels` | `plain` | How projects are named in the sync repository, in request and day lines: `plain` (the folder name, as in the report), `alias` (from `sync.project_aliases`) or `hash` (needs `sync.label_salt`). |
 | `sync.project_aliases` | `{}` | Folder name to the name used for `alias`. A folder without an entry becomes `unbenannt-` and 8 hex characters. |
 | `sync.label_salt` | `""` | Required for `hash`, the same on every machine. Without it the export stops. |
