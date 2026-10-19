@@ -14,14 +14,17 @@ detached gc would outlive the lock), no submodules.
 A push (`push`, the runner of `sync.py push`), after the core took the lock and wrote `last_attempt`:
 
 2. **Remote** (`open_clone`): `sync.repo` set and of the form owner/name, the clone a real folder with a `.git`
-   folder and a branch checked out, and `git remote get-url --all origin` as well as `--push --all` (insteadOf and
-   pushInsteadOf applied) give exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Else `internal`.
+   folder, and `git remote get-url --all origin` as well as `--push --all` (insteadOf and pushInsteadOf applied) give
+   exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Then left-over git locks and an interrupted
+   rebase of an ended run are cleared (`_heal`), and the branch checked out must be the default branch of the remote,
+   the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree).
 3. **Visibility** (`check_visibility`), unless a result `private` for this repository is younger than 24 h
    (`<log_dir>/sync/visibility.json`): `git ls-remote` of `https://github.com/<owner>/<name>.git` without any git
    config of the user or the system, without credential helper, prompt or askpass, HOME in the sync folder (no
-   .netrc), messages in C, 15 s. VISIBILITY_TABLE tells exit code and error text apart: readable is public
-   (`visibility`: the core blocks every push until the installer runs again), a request for a user name is private
-   (cached), anything else is unclear (`network`, no push).
+   .netrc), GIT_DIR on the null device (no repository put into the sync folder is read), messages in C, 15 s.
+   VISIBILITY_TABLE tells exit code and error text apart: readable is public (`visibility`: the core blocks every
+   push until the installer runs again), a request for a user name is private (cached), anything else is unclear
+   (`network`, no push).
 4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
    went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
    onto it if the work tree is clean, else after the commit (step 7b).
@@ -36,10 +39,10 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
 7. `status.json`, then the commit `sync: <name> <time UTC>`. 7b: a history that went apart is rebased onto the remote
    (never merged); a conflict aborts the rebase (`conflict`), the own commits stay.
 8. **Shadow:** no push; one log line `shadow` with the lines and bytes of this export.
-9. **Push:** every outgoing path passes the same guard again; refused because another machine was faster (porcelain
-   `[rejected] (fetch first)` / `(non-fast-forward)`): fetch, rebase, push once more, then `rejected`. Refused by the
-   repository: `rejected`. Credentials missing or refused: `auth` (AUTH_TEXTS); any other failure to reach it:
-   `network`.
+9. **Push:** every outgoing commit, one by one, passes the same guard again (no merge commit); refused because
+   another machine was faster (porcelain `[rejected] (fetch first)` / `(non-fast-forward)`): fetch, rebase, push once
+   more, then `rejected`. Refused by the repository: `rejected`. Credentials missing or refused: `auth` (AUTH_TEXTS);
+   any other failure to reach it: `network`.
 
 Nothing exported is ever thrown away: no reset, checkout, clean or stash, also not after `conflict` or a failed guard
 (the export cursor has moved on). Errors carry a fixed text, never output of git.
@@ -53,6 +56,7 @@ import posixpath
 import re
 import stat
 import subprocess
+import time
 from collections.abc import Callable
 
 import _config
@@ -74,16 +78,23 @@ URLS = {'https': 'https://github.com/{}.git', 'ssh': 'git@github.com:{}.git'}
 PROBE_URL = 'https://github.com/{}.git'
 NULL_CONFIG = '/dev/null'       # no global config; Git for Windows reads this name as NUL
 REGULAR = '100644'              # the only mode of a file the sync commits
+DEFAULT_BRANCH = 'main'         # the branch pushed to if the clone does not know the default branch of the remote
+EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'      # SHA-1 of the empty tree: attributes from nowhere
+STALE_LOCK_S = _sync_core.running_window_s()  # a git lock in the clone older than any run of the sync is left over
 IDENTITY = {'GIT_AUTHOR_NAME': 'usage-clock', 'GIT_AUTHOR_EMAIL': 'usage-clock@sync.invalid',
             'GIT_COMMITTER_NAME': 'usage-clock', 'GIT_COMMITTER_EMAIL': 'usage-clock@sync.invalid'}
-# Variables of the caller that would point git at another repository, index or time, or start an editor
+# Variables of the caller that would point git at another repository, index, attribute source or time, or start an
+# editor
 FOREIGN_ENV = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
                'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES', 'GIT_AUTHOR_DATE', 'GIT_COMMITTER_DATE',
-               'GIT_SEQUENCE_EDITOR')
+               'GIT_SEQUENCE_EDITOR', 'GIT_ATTR_SOURCE')
+# attr.tree and core.attributesFile: no .gitattributes of another machine (nor a global one) decides how the own files
+# are stored or checked out (filters such as git-lfs, working-tree-encoding, eol).
 SETTINGS = ('core.fsmonitor=false', 'commit.gpgSign=false', 'push.gpgSign=false', 'gc.auto=0',
             'maintenance.auto=false', 'submodule.recurse=false', 'fetch.recurseSubmodules=false',
             'push.recurseSubmodules=no', 'rebase.autoStash=false', 'rebase.updateRefs=false',
-            'merge.verifySignatures=false', 'push.followTags=false')
+            'merge.verifySignatures=false', 'push.followTags=false', f'attr.tree={EMPTY_TREE}',
+            'core.attributesFile=', 'color.ui=false', 'log.showRoot=true')
 BRANCH = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,99}')
 REQUEST_FILE = re.compile(r'requests/(?P<month>[0-9]{4}-[0-9]{2})/[A-Za-z0-9_-]{1,128}\.jsonl')
 
@@ -166,7 +177,8 @@ def _clone_env(path: str, deadline: _sync_core.Deadline) -> dict[str, str]:
     base = {name: value for name, value in os.environ.items() if name not in FOREIGN_ENV}
     base.update(GIT_DIR=os.path.join(path, '.git'), GIT_WORK_TREE=path)
     env = _sync_core.git_env(base, deadline)      # with GIT_DIR it reads the core.sshCommand of the clone
-    env.update(IDENTITY, LC_ALL='C', LANGUAGE='C', GIT_EDITOR=':')     # `:` is git's editor that does nothing
+    env.update(IDENTITY, LC_ALL='C', LANGUAGE='C', GIT_EDITOR=':',     # `:` is git's editor that does nothing
+               GIT_ATTR_NOSYSTEM='1')
     return env
 
 
@@ -186,27 +198,64 @@ def open_clone(run: _sync_core.Run) -> Clone:
     options = tuple(arg for setting in (f'core.hooksPath={_empty_hooks(run.directory)}', *SETTINGS)
                     for arg in ('-c', setting))
     clone = Clone(path, '', run.deadline, _clone_env(path, run.deadline), options)
-    done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
-    branch = done.stdout.strip()
-    if done.returncode != 0 or not BRANCH.fullmatch(branch):
-        raise _fail('internal', 'the sync clone has no branch checked out')
     expected = [remote_url(repo, run.cfg['sync']['transport'])]
     for which in ((), ('--push',)):
         done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
         if done.returncode != 0 or done.stdout.splitlines() != expected:
             raise _fail('internal', 'the remote of the sync clone is not sync.repo')
+    _heal(clone)
+    done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
+    branch = done.stdout.strip()
+    if done.returncode != 0 or not BRANCH.fullmatch(branch):
+        raise _fail('internal', 'the sync clone has no branch checked out')
+    if branch != _default_branch(clone):
+        raise _fail('internal', 'the sync clone has another branch checked out than the default branch of the remote')
     return dataclasses.replace(clone, branch=branch)
+
+
+def _default_branch(clone: Clone) -> str:
+    """The branch `origin/HEAD` names (set by the clone of the installer), else DEFAULT_BRANCH: the only one pushed."""
+    done = clone.git('symbolic-ref', '--quiet', '--short', f'refs/remotes/{REMOTE}/HEAD')
+    name = done.stdout.strip()
+    return name[len(REMOTE) + 1:] if done.returncode == 0 and name.startswith(REMOTE + '/') else DEFAULT_BRANCH
+
+
+def _stale_locks(git_dir: str) -> list[str]:
+    """The lock files of git below `git_dir` (index, refs, packed-refs, HEAD, config …), objects left out."""
+    found = []
+    for folder, dirs, names in os.walk(git_dir):
+        if folder == git_dir and 'objects' in dirs:
+            dirs.remove('objects')
+        found += [os.path.join(folder, name) for name in names if name.endswith('.lock')]
+    return sorted(found)
+
+
+def _heal(clone: Clone) -> None:
+    """What a run the watchdog or a shutdown ended left in the clone. The caller holds the sync lock, so no other run
+    works in it: a git lock older than STALE_LOCK_S is left over and removed; a younger one belongs to a git someone
+    else started (`internal`, try later). An interrupted rebase is aborted: the branch is back on its own commits."""
+    git_dir = os.path.join(clone.path, '.git')
+    try:
+        for lock in _stale_locks(git_dir):
+            if time.time() - os.lstat(lock).st_mtime < STALE_LOCK_S:       # from the future: young, too
+                raise _fail('internal', 'the sync clone is in use by another git process (a young lock file)')
+            os.unlink(lock)
+    except OSError as error:
+        raise _fail('internal', f'a lock file of the sync clone cannot be removed ({type(error).__name__})') from error
+    if _rebasing(clone) and clone.git('rebase', '--abort').returncode != 0:
+        raise _fail('internal', 'an interrupted rebase in the sync clone could not be aborted')
 
 
 # --- Visibility -------------------------------------------------------------------------------------------------------
 
 def probe_env(directory: str) -> dict[str, str]:
     """The environment of the anonymous probe: no GIT_* of the caller, no global or system config, no prompt or
-    askpass, HOME in `directory` (no .netrc, no ~/.gitconfig), messages in C, no repository above `directory`."""
+    askpass, HOME in `directory` (no .netrc, no ~/.gitconfig), messages in C, and no repository at all: GIT_DIR is
+    the null device, so a `.git` put into `directory` or above it (its config could rewrite the URL) is never read."""
     env = {name: value for name, value in os.environ.items()
            if not name.startswith('GIT_') and name != 'XDG_CONFIG_HOME'}
     env.update(GIT_CONFIG_GLOBAL=NULL_CONFIG, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='',
-               GCM_INTERACTIVE='never', LC_ALL='C', LANGUAGE='C', HOME=directory,
+               GCM_INTERACTIVE='never', LC_ALL='C', LANGUAGE='C', HOME=directory, GIT_DIR=os.devnull,
                GIT_CEILING_DIRECTORIES=os.path.dirname(os.path.abspath(directory)))
     return env
 
@@ -339,12 +388,16 @@ def update_clone(run: _sync_core.Run, clone: Clone) -> str:
     return REBASED
 
 
+def _rebasing(clone: Clone) -> bool:
+    return any(os.path.isdir(os.path.join(clone.path, '.git', name)) for name in ('rebase-merge', 'rebase-apply'))
+
+
 def _rebase(clone: Clone) -> None:
     """The own commits onto the fetched remote. A conflict aborts the rebase (`conflict`): the clone is as before,
     with its own commits."""
     if clone.git('rebase', '--quiet', _tracking(clone)).returncode == 0:
         return
-    if not any(os.path.isdir(os.path.join(clone.path, '.git', name)) for name in ('rebase-merge', 'rebase-apply')):
+    if not _rebasing(clone):
         raise _fail('internal', 'the rebase in the sync clone could not start')
     if clone.git('rebase', '--abort').returncode != 0:
         raise _fail('internal', 'a failed rebase in the sync clone could not be aborted')
@@ -403,7 +456,8 @@ def _of_layout(own: str, path: str) -> bool:
 def check_entry(kind: str, mode: str, path: str, own: str, deletable: Callable[[str], bool],
                 root: str | None = None) -> None:
     """One changed path of a commit (`kind` the status letter of `git diff --raw`, `mode` its new mode). With `root`
-    an added or changed path must also be a regular file in the work tree there. `internal` if it may not be
+    an added or changed path must also be a regular file with a single link in the work tree there (as the reader
+    takes them: a second link could share the file with one outside the clone). `internal` if it may not be
     committed."""
     if not below(own, path):
         raise _fail('internal', 'a changed path outside the own machine folder: nothing is committed')
@@ -415,7 +469,8 @@ def check_entry(kind: str, mode: str, path: str, own: str, deletable: Callable[[
         raise _fail('internal', 'a changed path that is no regular file of the layout: nothing is committed')
     if root is not None:
         try:
-            regular = stat.S_ISREG(os.lstat(os.path.join(root, *path.split('/'))).st_mode)
+            info = os.lstat(os.path.join(root, *path.split('/')))
+            regular = stat.S_ISREG(info.st_mode) and info.st_nlink == 1
         except OSError:
             regular = False
         if not regular:
@@ -526,17 +581,21 @@ def _forget(run: _sync_core.Run, machine_id: str, months: set[str]) -> None:
 # --- The push ---------------------------------------------------------------------------------------------------------
 
 def _check_outgoing(clone: Clone, own: str) -> None:
-    """Every path the push would send (from the fork with the remote to HEAD) passes the guard: below `own`, a
-    regular file of the layout, deletions only of request files."""
-    if _commit_of(clone, _tracking(clone)) is None:
-        done = clone.git('hash-object', '-t', 'tree', '--stdin')      # stdin is empty: the empty tree
-        if done.returncode != 0:
-            raise _fail('internal', 'git hash-object failed in the sync clone')
-        entries = _diff(clone, done.stdout.strip(), 'HEAD')
-    else:
-        entries = _diff(clone, f'{_tracking(clone)}...HEAD')
-    for kind, mode, path in entries:
-        check_entry(kind, mode, path, own, lambda deleted: request_month(own, deleted) is not None)
+    """Every commit the push would send (those the remote lacks; all for an empty remote) one by one, not their sum:
+    no merge, and each path a commit changes passes the guard (below `own`, a regular file of the layout, deletions
+    only of request files). A path outside that one commit adds and a later one removes again is caught too."""
+    tracking = _tracking(clone)
+    revisions = f'{tracking}..HEAD' if _commit_of(clone, tracking) else 'HEAD'
+    done = clone.git('log', '--format=%x01%H %P', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff',
+                     revisions)
+    if done.returncode != 0:
+        raise _fail('internal', 'git log failed in the sync clone')
+    for commit in done.stdout.split('\x01')[1:]:
+        head, _, raw = commit.partition('\0')
+        if len(head.split()) > 2:                   # the commit and more than one parent
+            raise _fail('internal', 'a merge commit would be pushed: nothing is pushed')
+        for kind, mode, path in parse_raw(raw.lstrip('\n')):
+            check_entry(kind, mode, path, own, lambda deleted: request_month(own, deleted) is not None)
 
 
 def _behind_refusal(output: str) -> bool:

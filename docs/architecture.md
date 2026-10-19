@@ -564,24 +564,36 @@ run the installer with --sync-repo`).
   by their text), `GIT_EDITOR=:`, the identity `usage-clock <usage-clock@sync.invalid>` as GIT_AUTHOR_* and
   GIT_COMMITTER_* (beats any user.name and any variable of the caller; `.invalid` is never a mailbox), and
   `-c core.hooksPath=<log_dir>/sync/no-hooks` (an empty folder of its own, else `internal`) with fsmonitor, signing,
-  automatic gc and maintenance, submodules, autostash and follow-tags switched off. No hook runs on the side of the
-  clone: `--no-verify` alone would still run post-commit, reference-transaction and a global hooksPath of the user,
-  and a detached gc would outlive the lock.
+  automatic gc and maintenance, submodules, autostash, follow-tags and colour switched off. No hook runs on the side
+  of the clone: `--no-verify` alone would still run post-commit, reference-transaction and a global hooksPath of the
+  user, and a detached gc would outlive the lock. No attributes either: `attr.tree` is the empty tree (SHA-1; a
+  value that does not resolve falls back to `.gitattributes`, measured with git 2.56), `core.attributesFile` is
+  empty, `GIT_ATTR_NOSYSTEM=1` and a `GIT_ATTR_SOURCE` of the caller is dropped, so a `.gitattributes` another
+  machine commits cannot run a filter of the user's config (git-lfs) or recode the own files
+  (`working-tree-encoding`, `eol`).
 - **2. Remote** (`open_clone`, shared with the pull): `sync.repo` set and `owner/name`; the clone a real folder with
-  a `.git` folder (a link, a file or a `.git` file: `internal`); a branch checked out; `git remote get-url --all
-  origin` and `--push --all` (insteadOf and pushInsteadOf applied) each give exactly the one URL of `sync.repo` and
-  `sync.transport`: `https://github.com/<owner>/<name>.git` or `git@github.com:<owner>/<name>.git`. A second URL, a
-  push URL elsewhere or a rewrite to elsewhere: `internal`.
+  a `.git` folder (a link, a file or a `.git` file: `internal`); `git remote get-url --all origin` and `--push --all`
+  (insteadOf and pushInsteadOf applied) each give exactly the one URL of `sync.repo` and `sync.transport`:
+  `https://github.com/<owner>/<name>.git` or `git@github.com:<owner>/<name>.git`. A second URL, a push URL elsewhere
+  or a rewrite to elsewhere: `internal`. Then it heals what a run the watchdog or a shutdown ended left (the sync
+  lock is held, no other run works in the clone): a git lock file below `.git` (index, refs, packed-refs, HEAD …,
+  not `objects/`) older than 75 s (`STALE_LOCK_S`: deadline, kill wait and watchdog) is removed; a younger one, or
+  one from the future, belongs to a git someone else started: `internal`, the next run tries again. An interrupted
+  rebase is aborted (the branch is back on its own commits). Last, the branch checked out must be the default
+  branch of the remote (`origin/HEAD` as the installer's clone set it, else `main`); it is the only one pushed.
 - **3. Visibility** (`check_visibility`, the installer uses it too), unless `<log_dir>/sync/visibility.json` (0600)
   says `private` for this repository and is younger than 24 h (a note from the future or of another repository does
   not count): `git -c credential.helper= ls-remote --heads https://github.com/<owner>/<name>.git` in the sync folder
   with no GIT_* of the caller, `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` (no credential helper, no
-  insteadOf, no proxy of the git config), HOME in the sync folder (no `.netrc`), `XDG_CONFIG_HOME` dropped, no prompt
-  or askpass, C messages, no repository above the sync folder, at most 15 s. The table `VISIBILITY_TABLE`: exit 0 is
+  insteadOf, no proxy of the git config), HOME in the sync folder (no `.netrc`), `XDG_CONFIG_HOME` dropped,
+  `GIT_DIR` on the null device (a `.git` put into the sync folder or above it, whose config could rewrite the URL to a
+  readable or unreadable repository, is never read), no prompt or askpass, C messages, at most 15 s. The table `VISIBILITY_TABLE`: exit 0 is
   public, `visibility` (the core blocks every push until the installer runs again); exit 128 with `could not read
   Username for 'https://github.com': terminal prompts disabled` is private (noted, on we go; a private and a missing
   repository look alike anonymously, both are not public); anything else (an unknown host, another exit, another
-  text, a timeout, no git) is unclear, `network`, no push.
+  text, a timeout, no git) is unclear, `network`, no push. The note holds for 24 h (the node asks for it): a
+  repository made public within that time is still pushed to until the note is older. Whoever can write
+  `<log_dir>/sync/` can write the note as well; the sync folder is as private as the log folder (0700).
 - **4. Update** (`update_clone`, shared with the pull of the report): fetch (`--prune --no-tags`, all branches to
   `refs/remotes/origin/`); same or ahead: `up_to_date`; behind: `merge --ff-only`, `fast_forwarded` (refused by git:
   `conflict`); apart, because commits of an earlier run were not pushed (shadow, a failed push), with a clean work
@@ -598,17 +610,18 @@ run the installer with --sync-repo`).
   hides nothing), then every path of `git status --porcelain=v1 -z --untracked-files=all --no-renames` and of
   `git diff --cached --raw -z --no-renames` is checked: below `machines/<own id>/` as a plain path (no `.`, `..` or
   empty part, no backslash; a rename gives both paths), nothing git did not take (untracked, unstaged, unmerged),
-  every added or changed path a regular file of the layout (mode 100644, `lstat` a regular file: no link, no
-  submodule, no executable), every deletion a request file of a month of step 5 or the note. Else `internal`, no
+  every added or changed path a regular file of the layout (mode 100644, `lstat` a regular file with one link: no
+  symlink, no hard link, no submodule, no executable), every deletion a request file of a month of step 5 or the note. Else `internal`, no
   commit. Nothing changed: no commit, a success.
 - **7. Commit:** `status.json` (`last_success` the time of the run, `tool_version`, `schema`), staged and guarded
   with the rest, `git commit -m "sync: <name> <time UTC>"` (`sync_format.display_name`). **7b.** A history that went
   apart is rebased onto the remote (never merged); a conflict aborts the rebase, `conflict`, and the own commits stay.
 - **8. Shadow:** no push; one log line `shadow` with `lines` and `bytes` of this export (`committed, not pushed` or
   `nothing new, not pushed`). The commits gather and go out with the first push in `on`.
-- **9. Push** (only if the clone is ahead): first every path from the fork with the remote to HEAD passes the guard
-  again (deletions only of request files), so a commit made by hand in the clone never leaves; then `git push
-  --porcelain origin HEAD:refs/heads/<branch>`. Refused as `[rejected] (fetch first)` or `(non-fast-forward)`: fetch,
+- **9. Push** (only if the clone is ahead): first every commit the remote lacks is checked one by one (`git log
+  --raw -z --no-renames`, all of HEAD for an empty remote): no merge commit, and each path a commit changes passes the
+  guard again (deletions only of request files). So a commit made by hand in the clone never leaves, not even one
+  whose path a later commit removes again. Then `git push --porcelain origin HEAD:refs/heads/<default branch>`. Refused as `[rejected] (fetch first)` or `(non-fast-forward)`: fetch,
   rebase, guard, push once more; refused again: `rejected`. `[remote rejected]` (a rule of the repository):
   `rejected`. Credentials missing or refused: `auth`; anything else: `network`.
 - **Nothing exported is thrown away:** no reset, checkout, clean or stash anywhere, also not after `conflict` or a

@@ -9,6 +9,7 @@ import functools
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -394,7 +395,7 @@ def test_no_git_call_can_ask_for_credentials(device, remote, monkeypatch):
     assert (env['GIT_TERMINAL_PROMPT'], env['GIT_ASKPASS'], env['GCM_INTERACTIVE']) == ('0', '', 'never')
     assert (env['GIT_CONFIG_GLOBAL'], env['GIT_CONFIG_NOSYSTEM'], env['LC_ALL'], env['LANGUAGE']) == (
         '/dev/null', '1', 'C', 'C')
-    assert env['HOME'] == cwd == str(device.log / 'sync') and 'GIT_DIR' not in env
+    assert env['HOME'] == cwd == str(device.log / 'sync') and env['GIT_DIR'] == os.devnull
 
 
 def write_archive(device, days):
@@ -1041,14 +1042,227 @@ def test_a_push_never_sends_a_path_outside_the_own_folder(device, remote):
     assert remote.head() == before
 
 
-def test_an_empty_tree_that_cannot_be_named_is_internal(tmp_path, monkeypatch):
+def test_a_log_of_the_outgoing_commits_that_fails_is_internal(device, remote, monkeypatch):
+    device.request()
+    scripted(monkeypatch, {'log': (128, '', 'fatal: no')})
+    assert device.push() == 1 and device.failure()['reason'] == 'git log failed in the sync clone'
+
+
+def test_a_path_one_commit_adds_and_a_later_one_removes_never_leaves(device, remote):
+    """Each outgoing commit is checked, not their sum: the sum of these two commits is nothing outside."""
+    device.request()
+    assert device.push() == 0
+    with open(os.path.join(device.clone, 'secret.txt'), 'w', encoding='utf-8') as f:
+        f.write('secret\n')
+    git('add', 'secret.txt', cwd=device.clone)
+    git('commit', '--quiet', '-m', 'out', cwd=device.clone)
+    git('rm', '--quiet', 'secret.txt', cwd=device.clone)
+    git('commit', '--quiet', '-m', 'gone again', cwd=device.clone)
+    before = remote.head()
+    device.request()
+    assert device.push(now=NOW + 60) == 1
+    assert device.failure()['reason'] == 'a changed path outside the own machine folder: nothing is committed'
+    assert remote.head() == before
+    assert git('log', '--all', '--format=%s', '--', 'secret.txt', cwd=remote.bare).stdout == ''
+
+
+def test_a_merge_commit_is_never_pushed(device, remote):
+    device.request()
+    assert device.push() == 0
+    git('checkout', '--quiet', '-b', 'side', cwd=device.clone)
+    git('commit', '--quiet', '--allow-empty', '-m', 'side', cwd=device.clone)
+    git('checkout', '--quiet', 'main', cwd=device.clone)
+    git('commit', '--quiet', '--allow-empty', '-m', 'main', cwd=device.clone)
+    git('merge', '--quiet', '--no-ff', '--no-edit', 'side', cwd=device.clone)
+    before = remote.head()
+    device.request()
+    assert device.push(now=NOW + 60) == 1
+    assert device.failure()['reason'] == 'a merge commit would be pushed: nothing is pushed'
+    assert remote.head() == before
+
+
+def test_variables_of_the_caller_for_index_attributes_and_dates_do_not_reach_the_clone(device, remote, tmp_path,
+                                                                                         monkeypatch):
+    device.request()
+    index = tmp_path / 'foreign-index'
+    monkeypatch.setenv('GIT_INDEX_FILE', str(index))
+    monkeypatch.setenv('GIT_AUTHOR_DATE', '@0 +0000')
+    monkeypatch.setenv('GIT_COMMITTER_DATE', '@0 +0000')
+    monkeypatch.setenv('GIT_ATTR_SOURCE', 'no-such-tree')     # git would stop with a fatal error
+    assert device.push() == 0
+    assert not index.exists()
+    dates = git('log', '-1', '--format=%at %ct', 'refs/heads/main', cwd=remote.bare).stdout.split()
+    assert all(int(date) > 1_000_000_000 for date in dates)
+
+
+@pytest.mark.posix_only
+def test_a_gitattributes_of_another_machine_runs_no_filter_of_the_user(device, remote, git_alone, tmp_path):
+    marker = tmp_path / 'filter-ran'
+    for kind in ('clean', 'smudge'):
+        script = tmp_path / f'{kind}.sh'
+        script.write_text(f'#!/bin/sh\necho "$PWD" >> "{marker.as_posix()}"\ncat\n', encoding='utf-8')
+        os.chmod(script, 0o755)
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write(f'[filter "probe"]\n\tclean = {(tmp_path / "clean.sh").as_posix()}\n'
+                f'\tsmudge = {(tmp_path / "smudge.sh").as_posix()}\n')
+    remote.foreign_commit('.gitattributes', '* filter=probe\n')
+    device.request()
+    assert device.push() == 0
+    # The other machine of the test shares the test config: its own add runs the filter (so the filter works); the
+    # sync in the clone runs it nowhere.
+    ran = set(marker.read_text(encoding='utf-8').splitlines())
+    assert ran == {str(remote.other)}
+
+
+def test_a_gitattributes_of_another_machine_changes_no_own_file(device, remote):
+    remote.foreign_commit('.gitattributes', 'machines/** working-tree-encoding=UTF-16 eol=crlf text\n')
+    device.request()
+    assert device.push() == 0
+    path = f'{device.own}/requests/2026-10/aaaaaaaa-1.jsonl'
+    stored = git('cat-file', 'blob', f'refs/heads/main:{path}', cwd=remote.bare).stdout
+    with open(os.path.join(device.clone, *path.split('/')), encoding='utf-8', newline='') as f:
+        assert f.read() == stored and '\r' not in stored
+    sync_format.decode('request', stored.splitlines()[0])
+
+
+def test_a_repository_put_into_the_sync_folder_does_not_steer_the_probe(tmp_path, monkeypatch):
+    """A `.git` in <log_dir>/sync whose config rewrites the probe URL to a readable repository: without GIT_DIR on
+    the null device the probe would find it and call the repository public."""
+    readable = tmp_path / 'readable.git'
+    git('init', '--bare', '--quiet', str(readable))
+    sync_dir = tmp_path / 'log' / 'sync'
+    sync_dir.mkdir(parents=True)
+    git('init', '--quiet', str(sync_dir))
+    missing = (tmp_path / 'missing').as_posix() + '/{}.git'
+    with open(sync_dir / '.git' / 'config', 'a', encoding='utf-8') as f:
+        f.write(f'[url "{readable.as_posix()}"]\n\tinsteadOf = {missing.format(REPO)}\n')
+    monkeypatch.setattr(_sync_git, 'PROBE_URL', missing)
+    assert _sync_git.check_visibility(REPO, str(sync_dir)) == 'unclear'
+
+
+def test_an_entry_with_a_second_link_is_refused(tmp_path):
+    folder = tmp_path / OWN / 'days'
+    folder.mkdir(parents=True)
+    (folder / '2026-10.jsonl').write_text('{}\n', encoding='utf-8')
+    os.link(folder / '2026-10.jsonl', tmp_path / 'outside.jsonl')
+    assert failure_of(_sync_git.check_entry, 'A', '100644', f'{OWN}/days/2026-10.jsonl', OWN, lambda p: True,
+                      str(tmp_path)) == (
+        'internal', 'a changed path that is no regular file of the layout: nothing is committed')
+
+
+# --- Healing what an ended run left -----------------------------------------------------------------------------------
+
+def age(path, seconds):
+    moment = time.time() - seconds
+    os.utime(path, (moment, moment))
+
+
+@pytest.mark.parametrize('lock', ['index.lock', 'refs/remotes/origin/main.lock', 'packed-refs.lock', 'HEAD.lock'])
+def test_a_left_over_git_lock_is_removed_and_the_run_goes_on(device, remote, lock):
+    device.request()
+    assert device.push() == 0
+    path = os.path.join(device.clone, '.git', *lock.split('/'))
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('')
+    age(path, _sync_git.STALE_LOCK_S + 5)
+    device.request()
+    assert device.push(now=NOW + 60) == 0
+    assert not os.path.exists(path) and remote.head() == device.head()
+
+
+@pytest.mark.parametrize('seconds', [5, -3600])
+def test_a_young_git_lock_is_someone_elses_and_ends_the_run(device, remote, seconds):
+    path = os.path.join(device.clone, '.git', 'index.lock')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('')
+    age(path, seconds)                                        # just made, or from the future
+    device.request()
+    assert device.push() == 1
+    assert device.failure()['reason'] == 'the sync clone is in use by another git process (a young lock file)'
+    assert os.path.exists(path)
+
+
+def test_a_lock_that_cannot_be_removed_is_internal(device, remote, monkeypatch):
+    path = os.path.join(device.clone, '.git', 'index.lock')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('')
+    age(path, _sync_git.STALE_LOCK_S + 5)
+
+    def unlink(target, *args, **kwargs):
+        raise PermissionError(13, 'denied')
+    monkeypatch.setattr(os, 'unlink', unlink)
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'a lock file of the sync clone cannot be removed (PermissionError)')
+
+
+def test_an_interrupted_rebase_is_aborted_and_the_run_goes_on(device, remote):
+    device.request()
+    assert device.push() == 0
+    device.cfg['sync']['mode'] = 'shadow'
+    device.request()
+    assert device.push(now=NOW + 60) == 0                         # an own commit that is not pushed
+    remote.foreign_commit('README.md', 'news\n')
+    git('fetch', '--quiet', cwd=device.clone)
+    stopped = git('rebase', '--exec', 'false', 'origin/main', cwd=device.clone, check=False)
+    assert stopped.returncode != 0 and os.path.isdir(os.path.join(device.clone, '.git', 'rebase-merge'))
+    device.cfg['sync']['mode'] = 'on'
+    device.request()
+    assert device.push(now=NOW + 120) == 0                        # as if the run had been ended mid-rebase
+    assert remote.head() == device.head() and len(device.worktree_requests()) == 3
+    assert not os.path.isdir(os.path.join(device.clone, '.git', 'rebase-merge'))
+
+
+def test_an_interrupted_rebase_with_a_conflict_ends_as_conflict_not_stuck(device, remote):
+    device.request()
+    assert device.push() == 0
+    status = os.path.join(device.clone, *device.own.split('/'), 'status.json')
+    with open(status, 'a', encoding='utf-8') as f:
+        f.write('x\n')
+    git('commit', '--quiet', '-am', 'own', cwd=device.clone)
+    own = device.head()
+    remote.foreign_commit(f'{device.own}/status.json', 'foreign\n')
+    git('fetch', '--quiet', cwd=device.clone)
+    assert git('rebase', 'origin/main', cwd=device.clone, check=False).returncode != 0
+    device.request()
+    for minutes in (1, 2):
+        assert device.push(now=NOW + 60 * minutes) == 1
+        assert device.failure()['category'] == 'conflict'
+    git('merge-base', '--is-ancestor', own, 'HEAD', cwd=device.clone)              # the own commit stays
+    assert not os.path.isdir(os.path.join(device.clone, '.git', 'rebase-merge'))
+
+
+def test_an_interrupted_rebase_that_cannot_be_aborted_is_internal(device, monkeypatch):
+    os.mkdir(os.path.join(device.clone, '.git', 'rebase-merge'))
+    scripted(monkeypatch, {'rebase --abort': (1, '', 'error')})
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'an interrupted rebase in the sync clone could not be aborted')
+
+
+# --- The branch that is pushed ----------------------------------------------------------------------------------------
+
+def test_only_the_default_branch_of_the_remote_is_pushed(device, remote):
+    git('checkout', '--quiet', '-b', 'other', cwd=device.clone)
+    device.request()
+    assert device.push() == 1
+    assert device.failure()['reason'] == (
+        'the sync clone has another branch checked out than the default branch of the remote')
+    assert git('branch', '--list', 'other', cwd=remote.bare).stdout == ''
+
+
+def test_a_remote_whose_default_branch_is_not_main(tmp_path):
     bare = tmp_path / 'remotes' / 'owner' / 'name.git'
     bare.parent.mkdir(parents=True)
-    git('init', '--bare', '--quiet', '--initial-branch=main', str(bare))
+    git('init', '--bare', '--quiet', '--initial-branch=master', str(bare))
+    seed = tmp_path / 'seed'
+    git('clone', '--quiet', str(bare), str(seed))
+    git('commit', '--quiet', '--allow-empty', '-m', 'start', cwd=seed)
+    git('push', '--quiet', 'origin', 'HEAD:refs/heads/master', cwd=seed)
     device = Device(tmp_path / 'a')
-    device.request()
-    scripted(monkeypatch, {'hash-object': (128, '', 'fatal: no')})
-    assert device.push() == 1 and device.failure()['reason'] == 'git hash-object failed in the sync clone'
+    for minutes in (0, 1):                                    # the fetch with --prune keeps origin/HEAD
+        device.request()
+        assert device.push(now=NOW + 60 * minutes) == 0
+    assert git('rev-parse', 'refs/heads/master', cwd=bare).stdout.strip() == device.head()
+    assert git('branch', '--list', 'main', cwd=bare).stdout == ''
 
 
 def test_on_without_news_and_nothing_ahead_pushes_nothing(device, remote, monkeypatch):
