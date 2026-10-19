@@ -540,7 +540,8 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
   modification time) is not opened. The cursor of a source changes only after its lines are in the clone; entries of
   transcripts that are gone are dropped. A cursor that cannot be read counts as empty (log line `cursor_unreadable`).
 - **Request key:** `k` from message id and request id; a line without a message id is a request of its own, its `k`
-  made from its transcript and byte offset (a replaced transcript can then add it twice).
+  made from its transcript and byte offset (a replaced transcript can then add it twice). Gate lines have no key
+  either: a log file replaced without a rotation is read from byte 0 and its gate lines are appended twice.
 - **Errors:** `project_labels: hash` without `label_salt`, a machine id that cannot be used, a clone or cursor that
   cannot be written: `SyncError('internal')`. A source line that does not fit or a file that cannot be read is
   counted (`Result.skipped`, `Result.unreadable_files`) and left out. With a deadline the export stops at the next

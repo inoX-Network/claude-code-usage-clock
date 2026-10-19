@@ -78,7 +78,7 @@ def transcript_path(world, session=SESSION, project=PROJECT):
 
 
 def sums(requests):
-    """Requests, tokens and output by `k`, after the rule of the reader (the last line of a key counts)."""
+    """Requests, tokens and output by `k`, after the rule of the reader (`latest_by_key`)."""
     latest = sync_format.latest_by_key(requests).values()
     return (len(latest), sum(r['in'] + r['cw5'] + r['cw1h'] + r['cr'] for r in latest), sum(r['out'] for r in latest))
 
@@ -206,10 +206,12 @@ def export_sums(requests, prices):
     return (len(requests), main, tokens, models, types), costs
 
 
-def test_the_exported_requests_sum_up_like_the_local_report(world, clone, monkeypatch):
+@pytest.mark.parametrize('order', [list, lambda lines: lines[::-1]], ids=['as-read', 'reversed'])
+def test_the_exported_requests_sum_up_like_the_local_report(world, clone, monkeypatch, order):
     """The golden fixture: last line of a request, lines without a message id, agent types, a request in two
-    transcripts, lines that cannot be requests. Its old transcript gets the modification time of its request, so that
-    the report reads it as the export does (the report does not open files older than the period)."""
+    transcripts with different output, lines that cannot be requests. Its old transcript gets the modification time of
+    its request, so that the report reads it as the export does (the report does not open files older than the
+    period). The sums do not depend on the order in which the lines are read."""
     prices_file = os.path.join(GOLDEN, 'prices.json')
     monkeypatch.setattr(report_module, 'PRICES_FILE', prices_file)
     build(world)
@@ -217,7 +219,7 @@ def test_the_exported_requests_sum_up_like_the_local_report(world, clone, monkey
     report = world.report('--day', DAY)
     result = run(world, clone)
     start, end = report_module.day_bounds(date.fromisoformat(DAY))
-    requests = [r for r in sync_format.latest_by_key(exported(world, clone).requests).values()
+    requests = [r for r in sync_format.latest_by_key(order(exported(world, clone).requests)).values()
                 if start <= sync_format.parse_time(r['t']) < end]
     counts, costs = export_sums(requests, report_module.load_prices(prices_file))
     expected_counts, expected_costs = report_sums(report)

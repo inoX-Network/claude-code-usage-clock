@@ -795,10 +795,14 @@ def read_repo(root: str, skip: str | None = None) -> Repo:
 
 
 def latest_by_key(requests: Iterable[dict]) -> dict[str, dict]:
-    """The requests by `k`; of the lines with one `k` the one read last counts."""
+    """The requests by `k`. Of the lines with one `k` the one with the most output tokens counts, of those with the same
+    output the one read last: the rule of the local report, so the sums do not depend on the order in which the files
+    are read (a request copied into a continued session can stand in two files with different output)."""
     latest: dict[str, dict] = {}
     for request in requests:
-        latest[request['k']] = request
+        known = latest.get(request['k'])
+        if known is None or request['out'] >= known['out']:
+            latest[request['k']] = request
     return latest
 
 

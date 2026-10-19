@@ -729,6 +729,11 @@ def test_of_the_lines_with_one_key_the_one_read_last_counts():
     assert sf.latest_by_key([first, other, second]) == {'0' * 16: second, '1' * 16: other}
 
 
+def test_of_the_lines_with_one_key_the_one_with_the_most_output_counts_in_any_order():
+    small, large = ({**request('2026-10-13T12:30:00Z', '0' * 16), 'out': out} for out in (5, 9))
+    assert sf.latest_by_key([small, large]) == sf.latest_by_key([large, small]) == {'0' * 16: large}
+
+
 # --- Compacting -----------------------------------------------------------------------------------------------------
 
 def requests_in(root, machine_id, days, session=SESSION):
