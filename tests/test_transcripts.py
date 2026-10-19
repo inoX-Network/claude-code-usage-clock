@@ -42,7 +42,7 @@ def test_reading_from_an_offset_keeps_the_last_line_of_a_request_in_the_place_it
              line('2026-10-13T08:00:04Z', None, 'r3', 1), json.dumps({'type': 'user', 'message': 'no usage'}),
              line('2026-10-13T08:00:05Z', 'm4', 123, 1)]
     path = tmp_path / 's.jsonl'
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    path.write_bytes(('\n'.join(lines) + '\n').encode('utf-8'))      # no CRLF on Windows: the offsets count
     requests, _, unreadable = _transcripts.read_requests_from(str(path), 0, 's', True)
     offset = len('\n'.join(lines[:4])) + 1
     assert list(requests) == [('m1', 'r1'), ('m2', 'r2'), (None, offset)]
