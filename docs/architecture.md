@@ -23,6 +23,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
                           and ending a process tree (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
   _sync_core.py           the sync core: state, due check, lock, backoff, timeouts, triggers (<log_dir>/sync/)
+  _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report does)
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
   log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)
@@ -518,10 +519,11 @@ in `<log_dir>/context-breakdown/<session_id>.json` (written by the desktop plugi
 
 `tools/usage_report.py` is a separate tool, not a hook. It reads and counts; the only file it writes is the day
 archive. Python 3.10+, standard library only. It reuses `log_summary.resolve_log_dir` (where the log folder is) and
-`_usage.NO_FOLLOW`.
+`_usage.NO_FOLLOW`, and reads the transcripts with `hooks/_transcripts.py`, a module of its own so that other tools can read
+them by the same rules; it imports no other module of the tool and is installed with the hooks.
 
-**Sources.** (1) Transcripts `<projects>/<project>/<session>.jsonl` and `<project>/<session>/subagents/agent-*.jsonl`
-(links are not followed; files not modified since the start of the period minus 60 minutes are not opened). Per
+**Sources.** (1) Transcripts `<projects>/<project>/<session>.jsonl` and `<project>/<session>/subagents/agent-*.jsonl`,
+read by `_transcripts.read_transcripts` into `Request`s (links are not followed; files not modified since the start of the period minus 60 minutes are not opened). Per
 assistant line only `timestamp`, `cwd`, `requestId`, `message.id`, `message.model` and `message.usage` (with
 `output_tokens_details.thinking_tokens` and `server_tool_use.web_search_requests` / `web_fetch_requests`) are used; of
 the lines with one `(message.id, requestId)` the last counts (it has the complete `output_tokens`; with equal output the
@@ -632,7 +634,7 @@ function `_cli_block` as `--full`) and `Sum of N CLIs`: the raw figures of the s
 printed as one block. `--json` takes none of `--full`, `--project`, `--session` (exit 2), and `--archive` none of them.
 
 **Startup context.** `Request.source` is the transcript a request stands in (never printed). `Data.set_requests` takes the first
-request of every source in time order as a start (`start_indices`, `start_times`), after the deduplication of
+request of every source in time order as a start (`_transcripts.start_indices`; `start_indices`, `start_times`), after the deduplication of
 requests, so a request that stands in two transcripts is a start of the file that owns it. `_starts_between` turns the
 starts inside an interval into `stats['starts']`: a list of `{t, session, type, model, input, cache_write, cache_read}`
 (`type` is `None` for a main session, else the agent type of the report; no path, no content), mergeable by

@@ -1,0 +1,69 @@
+Usage report 2026-10-13 (local time, UTC+02:00)
+Sources: 10 transcript file(s) read; 2 unreadable transcript line(s) skipped
+
+Subscription
+  Week: 20 % -> 42 % (+22 points), resets Mon 19 Oct 09:00
+  5h windows: 2
+    reset 14:00, peak 56 % at Tue 13 Oct 13:50 (first seen 08:00)
+    reset 19:00, peak 19 % at Tue 13 Oct 17:00 (first seen 14:00)
+
+Total
+  Requests: 29 (main 15, subagents 14)
+  Tokens: input 101k, cache write 5m 301k, cache write 1h 70k, cache read 1.2M, output 259k
+  Cost weight: 7.09 USD at API prices (main 5.34, subagents 1.75)
+  Output: thinking 4000 (20 %), web searches 2, web fetches 1
+  Cache: hit rate 72 %, cold starts 1
+  Main session: ~4.42 pts ~16.8 pts 5h
+  Subagents by type: unknown 0.83 USD (6) <1 pts ~5.1 pts 5h, other 0.27 USD (2) <1 pts ~1.2 pts 5h, Explore 0.24 USD (2) <1 pts <1 pts 5h, python-meister 0.22 USD (2) <1 pts ~1.6 pts 5h, arbeiter-bauen 0.21 USD (2) ~1.00 pts ~2.6 pts 5h
+  Models:
+    model Opus 5.5: 6.62 USD, 26 requests; thinking 4000 (20 %), web searches 2, web fetches 1; cache hits 79 %
+    model Sonnet 5.x: 0.42 USD, 1 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 53 %
+    model Haiku 5.5: 0.06 USD, 1 requests; thinking n/a, web searches n/a, web fetches n/a; cache hits 0 %
+    model claude-mystery-1: no price (not in the cost weight), 1 request(s), 1400 tokens; thinking n/a, web searches n/a, web fetches n/a
+
+Startup context
+  Measured, the first request of a session or subagent (input + cache write + cache read):
+    main: 3 starts, median 80k tokens, min 60k, max 90k, 1 warm (33 %)
+    subagents by type:
+      unknown: 3 starts, median 25k tokens, min 23k, max 26k, 0 warm (0 %)
+      Explore: 1 start, median 22k tokens, min 22k, max 22k, 0 warm (0 %)
+      arbeiter-bauen: 1 start, median 20k tokens, min 20k, max 20k, 0 warm (0 %)
+      other: 1 start, median 24k tokens, min 24k, max 24k, 0 warm (0 %)
+      python-meister: 1 start, median 21k tokens, min 21k, max 21k, 0 warm (0 %)
+    per day:
+      Tue 13 Oct: main 80k tokens (3 starts), subagents 23k tokens (7 starts)
+  Estimate (~): not available, no folder of a start in this period exists any more
+
+By CLI (main session and its subagents, most expensive first; ~ = estimate)
+  proj-a  aaaaaaaa  started Tue 13 Oct 08:01  5.22 USD  24 requests  ~20.3 5h points  ~5.15 week points
+    tokens input 101k, cache write 5m 221k, cache write 1h 70k, cache read 825k, output 189k
+    models Opus 5.5 4.74, Sonnet 5.x 0.42, Haiku 5.5 0.06, claude-mystery-1 0.00
+    output thinking 4000 (20 %), web searches 2, web fetches 1
+    subagents unknown 0.83 USD (6), other 0.27 USD (2), Explore 0.24 USD (2), python-meister 0.22 USD (2), arbeiter-bauen 0.21 USD (2)
+    cache hits 67.8 %, cold starts 1
+  proj-b  bbbbbbbb  started Tue 13 Oct 12:00  1.30 USD  3 requests  ~4.7 5h points  ~1.85 week points
+    tokens input 0, cache write 5m 80k, cache write 1h 0, cache read 190k, output 43k
+    models Opus 5.5 1.30
+    output thinking n/a, web searches n/a, web fetches n/a
+    cache hits 70.4 %, cold starts 0
+  proj-b  cccccccc  started Tue 13 Oct 12:30  0.58 USD  2 requests  ~3.0 5h points  0 week points
+    tokens input 0, cache write 5m 0, cache write 1h 0, cache read 200k, output 27k
+    models Opus 5.5 0.58
+    output thinking n/a, web searches n/a, web fetches n/a
+    cache hits 100.0 %, cold starts 0
+
+Allocation of the subscription rise (estimate)
+  5h: 66 points counted, ~28.0 shared by cost between the CLIs, 38 unexplained (no request with a price in between)
+      2 stretch(es) not counted (a reset, or over 60 minutes between measurements), 6 points rise in them
+  week: 21 points counted, ~7.0 shared by cost between the CLIs, 14 unexplained (no request with a price in between)
+      1 stretch(es) not counted (a reset, or over 60 minutes between measurements), 1 points rise in them
+
+Calibration (USD per point, from stretches in which only one CLI was active)
+  5h: not calibrated yet (15 of 50 stretches)
+  week: not calibrated yet (15 of 50 stretches)
+
+Gates
+  spawn gate (enforce mode): allowed 1, warned 0, asked 0, denied 1
+      denied by reason: week at N %: 1
+  soft stop (shadow mode, only logged): warnings 1, denied 0
+      warned by reason: 5h window at N %: 1

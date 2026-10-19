@@ -1,0 +1,30 @@
+Usage report 2026-10-13 (local time, UTC+02:00) - project proj-a
+Sources: 10 transcript file(s) read; 2 unreadable transcript line(s) skipped
+
+By CLI (main session and its subagents, most expensive first; ~ = estimate)
+  proj-a  aaaaaaaa  started Tue 13 Oct 08:01  5.22 USD  24 requests  ~20.3 5h points  ~5.15 week points
+    tokens input 101k, cache write 5m 221k, cache write 1h 70k, cache read 825k, output 189k
+    models Opus 5.5 4.74, Sonnet 5.x 0.42, Haiku 5.5 0.06, claude-mystery-1 0.00
+    output thinking 4000 (20 %), web searches 2, web fetches 1
+    subagents unknown 0.83 USD (6), other 0.27 USD (2), Explore 0.24 USD (2), python-meister 0.22 USD (2), arbeiter-bauen 0.21 USD (2)
+    cache hits 67.8 %, cold starts 1
+
+Sum of 1 CLI
+  5.22 USD  24 requests  ~20.3 5h points  ~5.15 week points
+    tokens input 101k, cache write 5m 221k, cache write 1h 70k, cache read 825k, output 189k
+    models Opus 5.5 4.74, Sonnet 5.x 0.42, Haiku 5.5 0.06, claude-mystery-1 0.00
+    output thinking 4000 (20 %), web searches 2, web fetches 1
+    subagents unknown 0.83 USD (6), other 0.27 USD (2), Explore 0.24 USD (2), python-meister 0.22 USD (2), arbeiter-bauen 0.21 USD (2)
+    cache hits 67.8 %, cold starts 1
+
+Startup context of the selected sessions
+  Measured, the first request of a session or subagent (input + cache write + cache read):
+    main: 1 start, median 60k tokens, min 60k, max 60k, 0 warm (0 %)
+    subagents by type:
+      unknown: 3 starts, median 25k tokens, min 23k, max 26k, 0 warm (0 %)
+      Explore: 1 start, median 22k tokens, min 22k, max 22k, 0 warm (0 %)
+      arbeiter-bauen: 1 start, median 20k tokens, min 20k, max 20k, 0 warm (0 %)
+      other: 1 start, median 24k tokens, min 24k, max 24k, 0 warm (0 %)
+      python-meister: 1 start, median 21k tokens, min 21k, max 21k, 0 warm (0 %)
+    per day:
+      Tue 13 Oct: main 60k tokens (1 start), subagents 23k tokens (7 starts)

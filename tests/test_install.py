@@ -386,8 +386,16 @@ def test_dry_run_names_the_report_files(tmp_path):
     target = tmp_path / 'target'
     r = run('--settings', settings, '--target', target, '--dry-run')
     assert r.returncode == 0, r.stdout
-    assert f'Report: usage_report.py, log_summary.py, prices.json would be copied to {target}.' in r.stdout, r.stdout
+    assert (f'Report: usage_report.py, log_summary.py, prices.json, _transcripts.py would be copied to {target}.'
+            in r.stdout), r.stdout
     assert f'Files: {len(INSTALLED_FILES)} runtime files would be copied' in r.stdout and not target.exists()
+
+
+def test_the_modules_named_with_the_report_are_hook_files():
+    module = load_module()
+    assert module.REPORT_MODULES == ('_transcripts.py',)
+    assert all(name in module.REQUIRED_FILES and module.source_of(name) == os.path.join(HOOKS, name)
+               for name in module.REPORT_MODULES)
 
 
 @pytest.mark.parametrize('name', REPORT_FILES)
@@ -1582,6 +1590,18 @@ def test_check_names_a_missing_and_an_outdated_report(tmp_path):
     r = check(tmp_path)
     assert r.returncode == 1
     assert 'FIX  Files: missing usage_report.py; different from this checkout prices.json' in r.stdout, r.stdout
+
+
+def test_check_names_a_missing_and_an_outdated_transcript_module(tmp_path):
+    installed(tmp_path)
+    (tmp_path / 'target' / '_transcripts.py').unlink()
+    assert 'FIX  Files: missing _transcripts.py.' in check(tmp_path).stdout
+    installed(tmp_path)
+    with open(tmp_path / 'target' / '_transcripts.py', 'a', encoding='utf-8') as f:
+        f.write('\n')
+    r = check(tmp_path)
+    assert r.returncode == 1
+    assert 'FIX  Files: different from this checkout _transcripts.py.' in r.stdout, r.stdout
 
 
 def test_check_names_a_missing_entry_and_a_wrong_matcher(tmp_path):
