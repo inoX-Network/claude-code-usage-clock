@@ -715,6 +715,7 @@ def test_the_json_carries_the_machine_of_every_cli_and_the_sync_coverage(world, 
     synced.state(last_success=NOW - 60, last_pull=NOW - 1000)
     sync_part = world.report('--day', '2026-10-13')['coverage']['sync']
     assert sync_part['mode'] == 'on' and sync_part['machine'] is None and sync_part['push'] is None
+    assert sync_part['clone'] == 'read'
     assert sync_part['machines'] == [
         {'id': synced.own, 'name': 'desk', 'platform': sync_format.platform_name(), 'own': True,
          'last_success': '2026-10-14T11:59:00Z'},
@@ -780,6 +781,13 @@ def test_an_unusable_machine_id_leaves_the_clone_unread(world, synced):
     assert report['total']['requests'] == 1
     assert [m['name'] for m in report['coverage']['sync']['machines']] == ['desk']
     assert report['coverage']['sync']['machines'][0]['id'] is None
+    assert report['coverage']['sync']['clone'] == 'unread'
+    assert report['coverage']['sync']['text'].endswith(
+        '· pull ok · clone not read: the machine id of this machine cannot be used')
+    note = next(n for n in report['overview']['notable'] if n['rule'] == 'sync_machine_id')
+    assert note['text'] == ('the machine id of this machine (sync/machine_id in the log folder) cannot be used: the '
+                            'other machines are not read and this one does not push')
+    assert '  the machine id of this machine' in world.overview('--day', '2026-10-13')
 
 
 def test_a_machine_that_never_synced_reads_the_clone_by_its_configured_name(world, synced, monkeypatch):
@@ -796,6 +804,8 @@ def test_without_a_clone_only_this_machine_is_shown(world, synced):
     os.rename(synced.clone.root, world.root / 'elsewhere')
     report = world.report('--day', '2026-10-13')
     assert report['total']['requests'] == 1 and len(report['coverage']['sync']['machines']) == 1
+    assert report['coverage']['sync']['clone'] == 'missing'
+    assert report['coverage']['sync']['text'].endswith('· no clone of the sync repository')
 
 
 # --- --machine ------------------------------------------------------------------------------------------------------

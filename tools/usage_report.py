@@ -2207,10 +2207,15 @@ PUSH_TEXTS = {'ok': 'push ok', 'failed': 'push failed ({category})', 'locked': '
               'blocked': 'no push: the sync repository is public (visibility)'}
 
 
+CLONE_TEXTS = {'read': None, 'missing': 'no clone of the sync repository',
+               'unread': 'clone not read: the machine id of this machine cannot be used'}
+
+
 def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _sync_core.State, cfg: dict,
-                  chosen: str | None, now: float) -> dict:
+                  chosen: str | None, now: float, clone: str) -> dict:
     """`coverage.sync`: the machines with the time of their last successful push, the pull, the push of --sync, the
-    backoff of this machine and what was skipped in the clone; `text` is the line `Sources:` prints."""
+    backoff of this machine, whether the clone was read (`clone`: `read`, `missing`, `unread`) and what was skipped in
+    it; `text` is the line `Sources:` prints."""
     keys = [machines.own] + sorted((key for key in machines.names if key != machines.own),
                                    key=lambda key: (machines.names[key], key))
     last_pull = state.last_pull
@@ -2222,7 +2227,9 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
     parts.append(PULL_TEXTS[pull['status']].format(category=pull['category'], last=_when(last_pull, now)))
     if chosen is not None:
         parts.append(f'only {machines.names[chosen]}')
-    return {'mode': cfg['sync']['mode'], 'text': ' · '.join(parts),
+    if CLONE_TEXTS[clone]:
+        parts.append(CLONE_TEXTS[clone])
+    return {'mode': cfg['sync']['mode'], 'text': ' · '.join(parts), 'clone': clone,
             'machine': None if chosen is None else machines.names[chosen],
             'machines': [{'id': key or None, 'name': machines.names[key], 'platform': machines.platforms[key],
                           'own': key == machines.own,
@@ -2255,6 +2262,10 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
         notes.append({'rule': 'sync_backoff', 'category': state.last_error, 'next_due': iso(state.next_due),
                       'text': f'sync of this machine backs off after an error ({state.last_error}), next push '
                               f'{clock(state.next_due, True)}'})
+    if sync['clone'] == 'unread':
+        notes.append({'rule': 'sync_machine_id',
+                      'text': 'the machine id of this machine (sync/machine_id in the log folder) cannot be used: the '
+                              'other machines are not read and this one does not push'})
     pull = sync['pull']
     if pull['status'] in ('failed', 'diverged'):
         last = 'not pulled yet' if pull['last_pull'] is None else \
@@ -2294,10 +2305,11 @@ def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Mach
     name = sync_format.display_name(own, configured) if own else configured or 'this machine'
     machines = Machines(own, machine_name(name), state.last_success)
     root = _sync_git.clone_dir(log_dir)
-    if usable and os.path.isdir(root):
+    clone = 'unread' if not usable else 'read' if os.path.isdir(root) else 'missing'
+    if clone == 'read':
         read_clone(root, machines)
     chosen = None if args.machine is None else choose_machine(parser, machines, args.machine)
-    sync = sync_coverage(machines, pull, push, state, cfg, chosen, now)
+    sync = sync_coverage(machines, pull, push, state, cfg, chosen, now, clone)
     return machines, chosen, sync, sync_notes(sync, state, now)
 
 
