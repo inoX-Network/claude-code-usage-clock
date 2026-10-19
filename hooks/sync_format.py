@@ -15,7 +15,8 @@ to only; the one exception is `compact`, which removes old request months of the
 writes its folder, and only machine.json and status.json are ever overwritten.
 
 Writing is an allowlist: `encode` keeps the fields of the format and drops every other one, and checks each value
-(a value that does not fit raises `FormatError`, category `internal`). No prompt, message text, command, path, file
+(a value that does not fit raises `FormatError`, category `internal`); `encode_day` replaces the project names in a
+day line after `sync.project_labels`. No prompt, message text, command, path, file
 name, host name, raw message or request id and no content of CLAUDE.md, skills or agents can pass.
 
 Reading treats everything below `machines/` as foreign data: only regular files (checked with `lstat`, links are
@@ -246,10 +247,14 @@ def encode(kind: str, values: dict) -> str:
     return _dump(_clean(kind, values)) + '\n'
 
 
-def encode_day(raw: str) -> str:
-    """A line of the day archive (usage-days.jsonl) for `days/`: the line as it is if it has only `v`, `day` and
-    `stats`, else written again with only those three. FormatError if it is no archive line of version 1. The
-    figures in `stats` are not checked here."""
+def encode_day(raw: str, mode: str, aliases: dict, salt: str) -> str:
+    """A line of the day archive (usage-days.jsonl) for `days/`, with only `v`, `day` and `stats`. Every project
+    label in it (`stats.clis[*].label`, the folder name) becomes the label after `sync.project_labels` (`mode`,
+    `aliases`, `salt`: see `project_label`). With `plain` a line that has only the three fields stays as it is, byte
+    for byte. FormatError if it is no archive line of version 1, if `hash` has no salt, or if `clis` is not an object
+    of objects with a text `label`: a name could pass otherwise. The figures in `stats` are not checked here."""
+    if mode not in LABEL_MODES or (mode == 'hash' and not salt):
+        project_label('', mode, aliases, salt)      # raises the same error as for `proj`, even without clis
     try:
         values = json.loads(raw)
     except (ValueError, RecursionError) as error:
@@ -258,9 +263,26 @@ def encode_day(raw: str) -> str:
         raise FormatError('day: not an archive line of version 1')      # not true, not 1.0
     record = _clean_day(values)
     text = raw.strip()
-    if set(values) == set(DAY_FIELDS) and '\n' not in text and '\r' not in text:
+    if mode == 'plain' and set(values) == set(DAY_FIELDS) and '\n' not in text and '\r' not in text:
         return text + '\n'
-    return _dump(record) + '\n'
+    if mode != 'plain':
+        record['stats'] = dict(record['stats'], clis=_relabel(record['stats'].get('clis', {}), mode, aliases, salt))
+    try:
+        return _dump(record) + '\n'
+    except ValueError as error:      # NaN or infinity in the figures
+        raise FormatError('day.stats: not a JSON number') from error
+
+
+def _relabel(clis: object, mode: str, aliases: dict, salt: str) -> dict:
+    """`clis` of a day line with every `label` replaced after the project label mode."""
+    if not isinstance(clis, dict):
+        raise FormatError('day.stats.clis: not an object')
+    relabelled = {}
+    for ident, cli in clis.items():
+        if not isinstance(cli, dict) or not isinstance(cli.get('label'), str):
+            raise FormatError('day.stats.clis: an entry without a text label')
+        relabelled[ident] = dict(cli, label=project_label(cli['label'], mode, aliases, salt))
+    return relabelled
 
 
 def decode(kind: str, raw: str | bytes) -> dict:

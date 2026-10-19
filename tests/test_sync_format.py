@@ -16,6 +16,7 @@ OWN = '0b1c2d3e-4f50-4a6b-8c7d-8e9fa0b1c2d3'
 OTHER = '11111111-2222-4333-8444-555555555555'
 SESSION = 'aaaaaaaa-0000-4000-8000-000000000001'
 NOW = 1_792_411_200     # 2026-10-19T12:00:00Z
+PLAIN = ('plain', {}, '')       # project_labels plain: the day line stays as it is
 EIGHT_MB = 8 * 1024 * 1024      # the limit of the node as a fixed value: a changed constant turns the tests red
 
 REQUEST = {'t': '2026-10-13T12:30:00.250Z', 'k': sf.request_key('msg_01', 'req_01'), 'sid': SESSION, 'sub': None,
@@ -67,15 +68,15 @@ def test_round_trip_of_every_line_kind(kind):
 
 
 def test_round_trip_of_a_day_line_keeps_the_archive_line_as_it_is():
-    assert sf.encode_day(DAY + '\n') == DAY + '\n'
-    assert sf.decode('day', sf.encode_day(DAY)) == json.loads(DAY)
+    assert sf.encode_day(DAY + '\n', *PLAIN) == DAY + '\n'
+    assert sf.decode('day', sf.encode_day(DAY, *PLAIN)) == json.loads(DAY)
 
 
 def test_round_trip_through_the_files_of_the_layout(tmp_path):
     lines = {sf.request_path(OWN, REQUEST['t'], SESSION): sf.encode('request', REQUEST),
              sf.history_path(OWN, HISTORY['t']): sf.encode('history', HISTORY),
              sf.gate_path(OWN, GATE['t']): sf.encode('gate', GATE),
-             sf.day_path(OWN, '2026-10-12'): sf.encode_day(DAY)}
+             sf.day_path(OWN, '2026-10-12'): sf.encode_day(DAY, *PLAIN)}
     for relative, line in lines.items():
         assert sf.append(str(tmp_path), OWN, relative, [line]) == len(line.encode('utf-8'))
     assert sf.write_machine(str(tmp_path), OWN, MACHINE) is True
@@ -107,7 +108,7 @@ def test_an_unknown_field_is_dropped_by_the_writer(kind):
 
 
 def test_an_unknown_field_of_a_day_line_is_dropped_and_the_rest_kept():
-    line = sf.encode_day('{"v":1,"day":"2026-10-12","prompt":"hello","stats":{"requests":3,"cost":1.5}}')
+    line = sf.encode_day('{"v":1,"day":"2026-10-12","prompt":"hello","stats":{"requests":3,"cost":1.5}}', *PLAIN)
     assert json.loads(line) == json.loads(DAY) and 'hello' not in line
 
 
@@ -116,7 +117,8 @@ def test_the_writer_sets_v_itself():
 
 
 def test_a_day_line_spread_over_lines_is_written_as_one_line():
-    assert sf.encode_day('{"v":1,\n"day":"2026-10-12","stats":{}}') == '{"v":1,"day":"2026-10-12","stats":{}}\n'
+    line = sf.encode_day('{"v":1,\n"day":"2026-10-12","stats":{}}', *PLAIN)
+    assert line == '{"v":1,"day":"2026-10-12","stats":{}}\n'
 
 
 @pytest.mark.parametrize('kind, changes', [
@@ -171,7 +173,7 @@ def test_a_record_that_is_not_an_object_is_refused():
                                  '{"v":1,"day":20261012,"stats":{}}', '{"v":1,"day":"2026-10-12","stats":[]}'])
 def test_a_line_that_is_no_archive_line_of_version_1_is_refused_as_day_line(raw):
     with pytest.raises(sf.FormatError):
-        sf.encode_day(raw)
+        sf.encode_day(raw, *PLAIN)
 
 
 # --- Fields made from local data --------------------------------------------------------------------------------------
@@ -372,7 +374,7 @@ def test_no_file_name_of_the_layout_has_a_colon(tmp_path):
         sf.append(root, OWN, sf.request_path(OWN, t, SESSION), [sf.encode('request', dict(REQUEST, t=t))])
         sf.append(root, OWN, sf.history_path(OWN, t), [sf.encode('history', dict(HISTORY, t=t))])
         sf.append(root, OWN, sf.gate_path(OWN, t), [sf.encode('gate', dict(GATE, t=t))])
-    sf.append(root, OWN, sf.day_path(OWN, '2026-10-12'), [sf.encode_day(DAY)])
+    sf.append(root, OWN, sf.day_path(OWN, '2026-10-12'), [sf.encode_day(DAY, *PLAIN)])
     sf.write_machine(root, OWN, MACHINE)
     sf.write_status(root, OWN, STATUS)
     names = list(all_names(root))
@@ -656,7 +658,7 @@ def test_the_reader_counts_folders_and_files_it_cannot_read(tmp_path, monkeypatc
     root = str(tmp_path)
     machine_file(root, OTHER, 'history/2026-10.jsonl', sf.encode('history', HISTORY))
     machine_file(root, OTHER, 'gates/2026-10.jsonl', sf.encode('gate', GATE))
-    machine_file(root, OTHER, 'days/2026-10.jsonl', sf.encode_day(DAY))
+    machine_file(root, OTHER, 'days/2026-10.jsonl', sf.encode_day(DAY, *PLAIN))
     real_listdir, real_lstat, real_open = os.listdir, os.lstat, os.open
 
     def listdir(path):
@@ -739,7 +741,7 @@ def requests_in(root, machine_id, days, session=SESSION):
 def day_lines(root, machine_id, days):
     for day in days:
         sf.append(root, machine_id, sf.day_path(machine_id, day),
-                  [sf.encode_day(json.dumps({'v': 1, 'day': day, 'stats': {'requests': 1}}))])
+                  [sf.encode_day(json.dumps({'v': 1, 'day': day, 'stats': {'requests': 1}}), *PLAIN)])
 
 
 def folder_content(folder):
@@ -933,7 +935,8 @@ def test_the_reader_skips_and_counts_lines_outside_the_month_of_their_file(tmp_p
     machine_file(root, OTHER, 'history/2026-10.jsonl',
                  sf.encode('history', HISTORY) + sf.encode('history', dict(HISTORY, t='2026-11-01T00:00:00Z')))
     machine_file(root, OTHER, 'gates/2026-09.jsonl', sf.encode('gate', GATE))
-    machine_file(root, OTHER, 'days/2026-10.jsonl', sf.encode_day(DAY) + sf.encode_day(DAY.replace('10-12', '09-12')))
+    machine_file(root, OTHER, 'days/2026-10.jsonl',
+                 sf.encode_day(DAY, *PLAIN) + sf.encode_day(DAY.replace('10-12', '09-12'), *PLAIN))
     repo = sf.read_repo(root)
     machine = repo.machines[OTHER]
     assert repo.skipped['misplaced'] == 4
@@ -945,7 +948,7 @@ def test_a_day_line_outside_the_month_of_its_file_covers_nothing(tmp_path):
     root = str(tmp_path)
     requests_in(root, OWN, ['2026-05-10'])
     sf.append(root, OWN, sf.day_path(OWN, '2026-06-01'),
-              [sf.encode_day('{"v":1,"day":"2026-05-10","stats":{}}')])
+              [sf.encode_day('{"v":1,"day":"2026-05-10","stats":{}}', *PLAIN)])
     assert sf.missing_days(root, OWN, '2026-05') == {'2026-05-10'}
     assert sf.compact(root, OWN, 3, NOW) == []
 
@@ -970,3 +973,70 @@ def test_compacting_refuses_a_limit_below_one_full_month(tmp_path, keep):
             call(root, OWN, keep, NOW)
         assert error.value.category == 'internal'
     assert month_folders(root, OWN) == ['2026-09', '2026-10']
+
+
+# --- Knoten v5: the project names in day lines follow sync.project_labels ----------------------------------------
+
+FOLDERS = ('kunde-geheimprojekt', 'interna-buchhaltung', 'Projekt (alt)')
+ARCHIVE = json.dumps({'v': 1, 'day': '2026-10-12', 'stats': {
+    'requests': 3, 'cost': 1.5, 'agent_types': {'reviewer': {'requests': 1}},
+    'clis': {f'aaaaaaa{number}': {'label': folder, 'start': 1_760_000_000.5, 'requests': 1, 'cost': 0.5}
+             for number, folder in enumerate(FOLDERS)},
+    'starts': [{'t': 1_760_000_000.5, 'session': 'aaaaaaa0', 'type': None, 'model': 'opus'}]}},
+    ensure_ascii=False, separators=(',', ':'))
+
+
+def test_with_plain_labels_a_day_line_stays_byte_for_byte_the_archive_line():
+    assert sf.encode_day(ARCHIVE + '\n', 'plain', {}, '') == ARCHIVE + '\n'
+    assert sf.encode_day(ARCHIVE, 'plain', {'kunde-geheimprojekt': 'x'}, 'pepper') == ARCHIVE + '\n'
+
+
+@pytest.mark.parametrize('mode, aliases, salt', [('alias', {}, ''), ('alias', {'kunde-geheimprojekt': 'K1'}, ''),
+                                                 ('hash', {}, 'pepper')])
+def test_with_alias_or_hash_no_day_line_holds_a_folder_name(mode, aliases, salt):
+    line = sf.encode_day(ARCHIVE, mode, aliases, salt)
+    for folder in FOLDERS:
+        assert folder not in line
+        for part in filter(None, re.split(r'[-() ]+', folder)):
+            assert part not in line, part
+    record = sf.decode('day', line)
+    original = json.loads(ARCHIVE)
+    labels = [cli['label'] for cli in record['stats']['clis'].values()]
+    assert labels == [sf.project_label(folder, mode, aliases, salt) for folder in FOLDERS]
+    for cli in record['stats']['clis'].values():
+        cli.pop('label')
+    for cli in original['stats']['clis'].values():
+        cli.pop('label')
+    assert record == original      # nothing but the labels changed
+
+
+def test_a_day_line_without_clis_is_written_without_a_name_to_replace():
+    line = sf.encode_day(DAY, 'hash', {}, 'pepper')
+    assert sf.decode('day', line) == dict(json.loads(DAY), stats=dict(json.loads(DAY)['stats'], clis={}))
+
+
+@pytest.mark.parametrize('stats', [{'clis': ['kunde-geheimprojekt']}, {'clis': 'kunde-geheimprojekt'},
+                                   {'clis': {'aaaaaaaa': 'kunde-geheimprojekt'}}, {'clis': {'aaaaaaaa': {'label': 7}}},
+                                   {'clis': {'aaaaaaaa': {'requests': 1}}}, {'clis': {'aaaaaaaa': {'label': None}}}])
+@pytest.mark.parametrize('mode', ['alias', 'hash'])
+def test_a_broken_clis_or_label_stops_the_day_line_without_naming_it(stats, mode):
+    raw = json.dumps({'v': 1, 'day': '2026-10-12', 'stats': stats})
+    with pytest.raises(sf.FormatError) as error:
+        sf.encode_day(raw, mode, {}, 'pepper')
+    assert error.value.category == 'internal' and 'kunde' not in str(error.value)
+
+
+def test_hash_without_salt_stops_every_day_line_with_category_internal():
+    for raw in (ARCHIVE, DAY):
+        with pytest.raises(sf.FormatError) as error:
+            sf.encode_day(raw, 'hash', {}, '')
+        assert error.value.category == 'internal' and 'label_salt' in str(error.value)
+    with pytest.raises(sf.FormatError, match='project_labels'):
+        sf.encode_day(DAY, 'clear', {}, '')
+
+
+def test_a_day_line_with_a_number_json_cannot_write_is_refused():
+    raw = '{"v":1,"day":"2026-10-12","stats":{"cost":NaN,"clis":{}}}'
+    assert sf.encode_day(raw, 'plain', {}, '') == raw + '\n'      # plain: the archive line as it is
+    with pytest.raises(sf.FormatError, match='JSON number'):
+        sf.encode_day(raw, 'alias', {}, '')

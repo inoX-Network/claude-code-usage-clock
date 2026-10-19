@@ -401,7 +401,7 @@ with the same `k`: a reader keeps, per `k`, the line it read last.
 | `think`, `ws`, `wf` | Thinking tokens, web searches, web fetches; `null` where the transcript does not report them. |
 | `first` | `true` for the first request of a transcript (a start, see `startup`). |
 
-`sync.project_labels` decides what `proj` holds:
+`sync.project_labels` decides what `proj` holds, and the project names in the day lines (`stats.clis[*].label`):
 
 - `plain` (the default): the folder name as the local report shows it. Everyone in the private repository sees the
   project names.
@@ -419,7 +419,7 @@ with the same `k`: a reader keeps, per `k`, the line it read last.
 | `decision` | `gates/`: the decision as the local log names it, read the way the local report reads it: `allow`, `warn`, `ask`, `deny`, and `error` for a soft stop that failed; `other` if the log holds no lower-case word of at most 20 letters. |
 | `mode` | `gates/`: the mode as the local log names it, `shadow` or `enforce`; `unknown` if the log holds no lower-case word. |
 | `reason` | `gates/`: the text of the local log line before its first colon, quoted parts as `…`, percentages as `N %`, other characters outside a small set as `?`, at most 60 characters. The question of the ask dialog, which names the agent, is written as `7-day window at N %`. Never more than the local log holds. |
-| `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl` as they are: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). `sync_format.py` checks only the envelope (`v`, `day`, `stats` an object); the report checks the figures in `stats` with the rules of its day archive before it uses them. |
+| `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl`: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). They are taken over as they are, with one exception: the project name of each session (`stats.clis[*].label`, the folder name) becomes its label after `sync.project_labels`, the same as `proj`. With `plain` the line is the archive line byte for byte; with `alias` or `hash` no folder name is left in it. A `clis` that is not an object of entries with a text `label` stops the export (category `internal`). `sync_format.py` checks only the envelope (`v`, `day`, `stats` an object); the report checks the figures in `stats` with the rules of its day archive before it uses them. |
 
 ### What is never written
 
