@@ -421,6 +421,42 @@ for (const [bodyColumns, width] of [[30, '100%'], [60, '49%'], [120, '24%']] as 
   })
 }
 
+test('desktop: the open view and period are primary buttons in a frame of the accent colour; the frame moves along', async ($, on) => {
+  world(on)
+  await start($)
+  await report($)
+  const ui = await mountPane($, 'desktop')
+  const look = async (key: string) => {
+    const button = await ui.find({ key })
+    const frame = await ui.find({ key: `tab-${key}` })
+    return { variant: button?.props.variant, plain: button?.props.plain, frame: frame?.props.borderColor }
+  }
+  const active = { variant: 'primary', plain: undefined, frame: '#c47a3a' }
+  const other = { variant: undefined, plain: true, frame: undefined }
+  expect(await look('view-overview')).toEqual(active)
+  expect(await look('period-week')).toEqual(active)
+  expect(await look('view-tokens')).toEqual(other)
+  expect(await look('period-year')).toEqual(other)
+  await ui.press({ key: 'view-tokens' })
+  await ui.press({ key: 'period-year' })
+  expect(await look('view-tokens')).toEqual(active)
+  expect(await look('period-year')).toEqual(active)
+  expect(await look('view-overview')).toEqual(other)
+  expect(await look('period-week')).toEqual(other)
+  await ui.unmount()
+})
+
+test('terminal: the tabs stay plain buttons without a frame', async ($, on) => {
+  world(on)
+  await start($)
+  await report($)
+  const ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'view-overview' }))?.props.plain).toBe(true)
+  expect((await ui.find({ key: 'view-overview' }))?.props.variant).toBeUndefined()
+  expect(await ui.find({ key: 'tab-view-overview' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('terminal: no tiles, the overview stays text', async ($, on) => {
   world(on)
   await start($)
