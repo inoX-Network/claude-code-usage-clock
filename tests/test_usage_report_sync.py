@@ -274,14 +274,60 @@ def own_archive(world, *lines):
 
 def test_on_a_day_with_requests_the_figures_come_from_the_requests_and_the_subscription_once(world, synced):
     two_machines(world, synced, laptop_history=True)
-    own_archive(world, ('2026-10-13', archive_line(99, 50.0, 'dddddddd', 'proj-a', 7, peak=40)))
-    synced.clone.days(LAPTOP, [('2026-10-13', archive_line(77, 40.0, 'llllllll', 'proj-l', 9, peak=30))])
+    # each machine has as many requests as its day line names: the requests count, never the lines on top
+    own_archive(world, ('2026-10-13', archive_line(1, 50.0, 'dddddddd', 'proj-a', 7, peak=40)))
+    synced.clone.days(LAPTOP, [('2026-10-13', archive_line(2, 40.0, 'llllllll', 'proj-l', 9, peak=30))])
     report = world.report('--day', '2026-10-13')
     assert report['total']['requests'] == 3 and report['total']['cost_usd'] == pytest.approx(3.0)
-    assert report['coverage']['archive_days'] == []
+    assert report['coverage']['archive_days'] == [] and report['coverage']['sync']['days_from_lines'] == []
     assert len(report['subscription']['five_windows']) == 1 and len(report['subscription']['week_segments']) == 1
     assert report['allocation']['five']['counted_points'] == 8
-    assert world.report('--day', '2026-10-13', '--local')['total']['requests'] == 99     # the archive, as before
+    assert world.report('--day', '2026-10-13', '--local')['total']['cost_usd'] == 50.0     # the archive, as before
+
+
+# --- Criterion (v7): requests or day line, per machine and day ---------------------------------------------------
+
+def test_a_machine_with_fewer_requests_than_its_day_line_counts_the_line_while_another_has_requests(world, synced):
+    world.projects.mkdir()
+    own_archive(world, ('2026-10-11', archive_line(5, 2.0, 'aaaaaaaa', 'proj-a', 3, peak=40)))
+    synced.clone.machine(LAPTOP)
+    synced.clone.requests(LAPTOP, [request_line('2026-10-11T10:05:00Z', 'l1', 1.0, first=True)])
+    report = world.report('--day', '2026-10-11')
+    assert report['total']['requests'] == 6 and report['total']['cost_usd'] == pytest.approx(3.0)
+    clis = by_id(report)
+    assert clis['aaaaaaaa']['machine'] == 'desk' and clis['aaaaaaaa']['estimated_share'] == {'five': 0, 'week': 0}
+    assert clis['aaaaaaaa']['measured_share'] == {'five': 0, 'week': 0}
+    assert report['coverage']['sync']['days_from_lines'] == [{'day': '2026-10-11', 'machine': 'desk'}]
+    assert report['coverage']['archive_days'] == []
+    assert '  proj-a  aaaaaaaa  started Sun 11 Oct 10:00  on desk' in world.overview('--day', '2026-10-11', '--full')
+
+
+def test_a_foreign_day_line_counts_while_a_third_machine_has_requests_also_with_machine(world, synced):
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP)
+    synced.clone.machine(TABLET, name='tablet')
+    synced.clone.days(LAPTOP, [('2026-10-11', archive_line(7, 4.0, 'bbbbbbbb', 'proj-b', 4, peak=60))])
+    synced.clone.requests(TABLET, [request_line('2026-10-11T10:05:00Z', 't1', 1.0, sid='tttttttt-1', first=True)])
+    assert world.report('--day', '2026-10-11')['total']['requests'] == 8
+    only = world.report('--day', '2026-10-11', '--machine', 'laptop')
+    assert only['total']['requests'] == 7 and [cli['id'] for cli in only['clis']] == ['bbbbbbbb']
+    assert world.report('--day', '2026-10-11', '--machine', 'tablet')['total']['requests'] == 1
+
+
+def test_with_one_machine_and_partly_deleted_transcripts_the_report_is_that_of_local(world, synced):
+    own_archive(world, ('2026-10-11', archive_line(5, 5.0, 'aaaaaaaa', 'proj-a', 3, peak=40)))
+    spend(world, ('2026-10-11T10:05:00Z', 1.0), session='aaaaaaaa-1')      # a session that outlived the others
+    report, local = world.report('--day', '2026-10-11'), world.report('--day', '2026-10-11', '--local')
+    for key in ('total', 'allocation', 'calibration', 'subscription', 'guards'):
+        assert report[key] == local[key], key
+    assert report['coverage']['archive_days'] == local['coverage']['archive_days'] == ['2026-10-11']
+
+
+def test_a_day_line_of_a_day_the_period_holds_only_in_part_leaves_its_requests(world, synced):
+    own_archive(world, ('2026-10-12', archive_line(5, 5.0, 'aaaaaaaa', 'proj-a')))
+    world.history([measured('2026-10-13T10:00:00Z', 10, 20)])      # the week begins Mon 12 Oct 09:00, not at midnight
+    spend(world, ('2026-10-12T10:05:00Z', 1.0), session='aaaaaaaa-1')
+    assert world.report('--week')['total']['requests'] == 1 == world.report('--week', '--local')['total']['requests']
 
 
 def test_on_a_day_without_requests_the_usage_of_every_line_adds_up_and_the_subscription_comes_from_one(world, synced):

@@ -272,6 +272,7 @@ class Data:
         self.price_cache: dict[str, dict | None] = {}
         self.machine: dict[str, str] = {}         # with the sync: CLI id -> the machine it ran on
         self.only: str | None = None              # --machine: only the requests and starts of this machine count
+        self.replaced: set[tuple] = set()         # (machine, day) whose day line counts instead of its requests
 
     def counted(self, ident: str) -> bool:
         """Whether the CLI `ident` (the first 8 characters of a session id) counts: always without --machine."""
@@ -2045,9 +2046,10 @@ class Machines:
             days.setdefault(day, stats)
         self.days[key] = days
 
-    def merge_requests(self, local: list[_transcripts.Request]) -> tuple[list[_transcripts.Request], dict, dict]:
-        """(requests, machine by session, project label by session of the clone). The local requests and those of
-        the clone count once by `k`, by the reading rule of the format; of equal lines the local one (read last)."""
+    def merge_requests(self, local: list[_transcripts.Request]) -> list[tuple[_transcripts.Request, str, str | None]]:
+        """(request, machine, project label of the clone or None) of the local requests and those of the clone,
+        counted once by `k` after the reading rule of the format; of equal lines of one session the local one (read
+        last)."""
         rows, keyless = list(self.requests), []
         for request in local:
             if request.ids is None:
@@ -2056,15 +2058,25 @@ class Machines:
             rows.append({'t': sync_format.iso_time(request.ts), 'sid': request.session, 'out': request.tokens[4],
                          'k': sync_format.request_key(request.ids[0], request.ids[1] or ''), '_request': request,
                          '_machine': self.own})
-        winners = [(row.get('_request') or _clone_request(row), row) for row in sync_format.latest_by_key(rows).values()]
-        winners += [(request, {'_machine': self.own}) for request in keyless]
-        machine_of: dict[str, str] = {}
-        labels: dict[str, str] = {}
-        for request, row in sorted(winners, key=lambda pair: pair[0].ts):     # a session runs on the machine it began on
-            machine_of.setdefault(request.session, row['_machine'])
-            if 'proj' in row:
-                labels.setdefault(request.session, row['proj'])
-        return [request for request, _row in winners], machine_of, labels
+        winners = [(row.get('_request') or _clone_request(row), row['_machine'], row.get('proj'))
+                   for row in sync_format.latest_by_key(rows).values()]
+        return winners + [(request, self.own, None) for request in keyless]
+
+    def add_usage(self, stats: dict, lines: list[tuple[str, dict]], machine_of: dict[str, str]) -> dict:
+        """`stats` with the usage of day lines that count beside the requests of other machines on their day: their
+        subscription and points are left out (`_usage_only`), the rise is shared among the requests that count. A line
+        that does not add up is counted and left out. The CLIs are noted with their machine."""
+        for key, line in lines:
+            trial = copy.deepcopy(stats)
+            try:
+                merge_stats(trial, _usage_only(line))
+            except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
+                self.broken_days += 1
+                continue
+            stats = trial
+            for ident in line.get('clis', {}):
+                machine_of.setdefault(ident, key)
+        return stats
 
     def combine_day(self, lines: list[tuple[str, dict]], machine_of: dict[str, str]) -> dict:
         """The figures of a day without requests from its day lines: the usage of every machine added, the
@@ -2432,11 +2444,24 @@ def _whole_days(start: float, end: float) -> list[date]:
     return days
 
 
+def replaced_days(winners: list[tuple], lines: dict[str, list[tuple[str, dict]]], whole: set[str]) -> set[tuple]:
+    """(machine, day) for which the day line counts instead of the requests: a whole day of the period on which the
+    machine has fewer requests than its day line names (compacted, or transcripts deleted)."""
+    counts: dict[tuple, int] = {}
+    for request, machine, _label in winners:
+        key = (machine, local_day(request.ts).isoformat())
+        counts[key] = counts.get(key, 0) + 1
+    return {(machine, day) for day, found in lines.items() if day in whole for machine, stats in found
+            if counts.get((machine, day), 0) < stats.get('requests', 0)}
+
+
 def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
-              anchor: float | None = None, machines: Machines | None = None, chosen: str | None = None) -> Data:
+              anchor: float | None = None, machines: Machines | None = None, chosen: str | None = None,
+              lines: dict | None = None, whole: set[str] | None = None) -> Data:
     """Requests from the transcripts; for the time before the history began, the usage lines in the transcripts stand in
     for it. With the sync (`machines`) the requests and gate decisions of the other machines join them; `chosen` is the
-    machine of --machine."""
+    machine of --machine. The requests of a machine on a day of `replaced_days` (`lines`: the day lines of all
+    machines by day, `whole`: the whole days of the period) are left out: its day line counts for it."""
     data = Data()
     data.week_anchor = anchor
     first_history = min((m.t for m in history), default=math.inf)
@@ -2445,16 +2470,19 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
         requests, fresh, data.files, data.unreadable_requests = _transcripts.read_transcripts(
             projects_dir, modified_since, want_usage_lines=start < first_history)
     if machines is not None:
-        requests, machine_of, labels = machines.merge_requests(requests)
+        winners = machines.merge_requests(requests)
+        data.replaced = replaced_days(winners, lines or {}, whole or set())
+        winners = [found for found in winners if (found[1], local_day(found[0].ts).isoformat()) not in data.replaced]
+        requests = [request for request, _machine, _label in winners]
     data.set_requests(requests)
     older = [Measurement(ts, five, week, None, None) for ts, (five, week) in fresh.items() if ts < first_history]
     data.set_measurements(history + older)
     data.guards = read_guard_log(log_dir)
     if machines is not None:
-        for session, label in labels.items():
-            data.label.setdefault(session, label)
-        for session, key in machine_of.items():
-            data.machine.setdefault(session[:8], key)
+        for request, machine, label in sorted(winners, key=lambda found: found[0].ts):    # a session runs on the
+            data.machine.setdefault(request.session[:8], machine)                         # machine it began on
+            if label is not None:
+                data.label.setdefault(request.session, label)
         data.only = chosen
         data.guards = (data.guards if chosen in (None, machines.own) else []) + [
             guard for key, guards in sorted(machines.guards.items()) if chosen in (None, key) for guard in guards]
@@ -2516,19 +2544,30 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print(period['error'])
         return 1
     start, end = period['start'], period['end']
-    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start, anchor, machines, chosen)
+    whole = everyone = None
+    if machines is not None:      # never with --archive, whose period has no end
+        whole = [d for d in _whole_days(start, end) if d < today]
+        everyone = day_lines(machines, archive, None)
+    data = load_data(projects_dir, log_dir, history, start - MAX_GAP_S, start, anchor, machines, chosen, everyone,
+                     {d.isoformat() for d in whole or []})
     if args.archive:
         return archive_finished_days(data, prices, archive, log_dir, projects_dir, today)
 
     if machines is None:
         lines = archive
         archived = [d for d in _whole_days(start, end) if d < today and d.isoformat() in archive]
-    else:       # a day line counts only for a day without requests on any machine: never added to them
+    else:       # per machine and day the requests or the day line (data.replaced), never both
         busy = {local_day(ts) for ts in data.times}
-        by_day = day_lines(machines, archive, chosen)
-        archived = [d for d in _whole_days(start, end) if d < today and d not in busy and d.isoformat() in by_day]
-        lines = {d.isoformat(): machines.combine_day(by_day[d.isoformat()], data.machine) for d in archived}
-        sync['unreadable_day_lines'] = machines.broken_days      # with the lines that did not add up
+        by_line: dict[str, list[tuple[str, dict]]] = {}
+        for day, found in day_lines(machines, archive, chosen).items():
+            for key, stats in found:
+                if (key, day) in data.replaced:
+                    by_line.setdefault(day, []).append((key, stats))
+        archived = [d for d in whole if d not in busy and d.isoformat() in by_line]      # days of day lines only
+        mixed = [d for d in whole if d in busy and d.isoformat() in by_line]             # day lines beside requests
+        lines = {d.isoformat(): machines.combine_day(by_line[d.isoformat()], data.machine) for d in archived}
+        sync['days_from_lines'] = [{'day': day, 'machine': machines.names[key]} for day in sorted(by_line)
+                                   for key, _stats in by_line[day] if date.fromisoformat(day) in archived + mixed]
     if not data.files and not archived and not os.path.isdir(projects_dir):
         print(f'No transcripts found at {projects_dir} - pass --projects-dir.')
         return 1
@@ -2550,6 +2589,10 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
             break
         archived.remove(unfit)
         broken_archive += 1
+    if machines is not None:
+        for day in mixed:
+            stats = machines.add_usage(stats, by_line[day.isoformat()], data.machine)
+        sync['unreadable_day_lines'] = machines.broken_days      # with the lines that did not add up
     contexts, broken_contexts = read_contexts(log_dir, set(stats['clis']))
     coverage = {'transcript_files': data.files, 'archive_days': used, 'archive_days_without_agent_split': unsplit,
                 'unreadable_history_lines': broken_history,
