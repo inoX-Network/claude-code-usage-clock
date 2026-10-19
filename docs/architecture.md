@@ -500,6 +500,8 @@ see Sync in the report). `sync.mode` `off` (the default) makes every entry point
 - **A pull** (`pull_outcome`, `pull` as an exit code): the same lock and no backoff; a success writes `last_pull` and
   nothing else of the state. Log line `success` or `failure` with `action: pull`. The outcome is `ok`, `locked` (the
   lock is held elsewhere, nothing pulled), `off` or `failed` with the category and the runner's fixed text.
+  `push_outcome` tells a push the same way (`Outcome`), with `blocked` (visibility) and `waiting` (not due, or a
+  backoff without `--now`); `push` is its exit code (1 for `failed` and `blocked`).
 - **Timeouts:** a push has 60 s in total, a pull in the background 30 s, in the foreground `sync.pull_timeout_s`
   (`Deadline`). `run_command` (and `Run.git`) starts each child in a process group of its own (`_plat.GROUP_OPTIONS`);
   at the deadline it ends the whole tree (`_plat.kill_tree`: SIGKILL to the group, on Windows `taskkill /T`), so a
@@ -649,8 +651,9 @@ run the installer with --sync-repo`).
 With `sync.mode` `shadow` or `on`, `usage_report.py` adds the other machines (0034-SYNC-REPORT); `--local` and `sync.mode
 off` give the report of this machine alone, byte for byte as before. The steps of `gather_sync`:
 
-- **Push** (`--sync` only): `_sync_core.push` with `_sync_git.push` and `forced`, as `sync.py push --now`: past the wait and the backoff,
-  never past `visibility` or the lock. Whether it ran is read from the state: unchanged means blocked or locked.
+- **Push** (`--sync` only): `_sync_core.push_outcome` with `_sync_git.push` and `forced`, as `sync.py push --now`:
+  past the wait and the backoff, never past `visibility` or the lock. Its `Outcome` (ok, locked, blocked, failed with
+  category and fixed text) is what the report shows.
 - **Pull:** none with `--no-pull`; none if `last_pull` is less than 300 s old (`PULL_GAP_S`), unless `--sync`: the
   `/report` pane reads four periods one after the other and waits for one pull at most. Else `_sync_core.pull_outcome`
   with `sync.git_pull` (`_sync_git.open_clone`, then `update_clone`: a fast forward, or the own commits rebased; a
@@ -658,24 +661,36 @@ off` give the report of this machine alone, byte for byte as before. The steps o
   the reason (`conflict` is shown as a sync history that differs: nothing merged).
 - **Reading:** the clone (`_sync_git.clone_dir`, if it is a folder) with `sync_format.read_repo`, the own folder skipped; of the own folder only
   `requests/` (the transcripts Claude Code deleted after 30 days, see below). A machine id that cannot be used leaves
-  the clone unread. Names of machines come from `machine.json` and are made harmless again (`machine_name`: control
+  the clone unread (`coverage.sync.clone` `unread`, a line in `Sources:` and the notable rule `sync_machine_id`). Names of machines come from `machine.json` and are made harmless again (`machine_name`: control
   characters as `?`, 64 characters).
-- **Requests:** the local requests (their `k` from message id and request id, as the export makes it,
-  `Request.ids`) and those of the clone go through `sync_format.latest_by_key` together, the local ones last, so of
-  equal lines the local one counts. A line without a message id stays a request of this machine. A request line of the
+- **Requests:** the local requests (their `k` as the export makes it: from message id and request id, `Request.ids`;
+  for a line without a message id from its transcript key `projects/<path>` and its byte offset, which
+  `read_transcripts` reads the transcripts as bytes for) and those of the clone go through `sync_format.latest_by_key`
+  together, the local ones last: by the rule of the format the most output counts, then the session whose first
+  request is earliest, then the smaller session id, and within one session the local line. A request line of the
   clone becomes a `Request` without a working folder; only a line with `first` is a start (the others have the source
   `NO_START`). A session runs on the machine of its earliest request; its project is the folder of a local request,
   else `proj` of the clone.
-- **Measurements:** those of all machines in time order; equal ones (both values, both reset times) within 120 s of a
-  kept one are one (`merge_measurements`), and a machine's copy of a line (a push repeated) counts once. Then
-  `drop_noise` as for one machine.
+- **Measurements:** those of all machines in time order; within a window (the same reset time, within
+  `RESET_TOLERANCE_S`) a value only rises, a lower one (the stale state of another machine) is raised to the highest
+  value of its window, else `_delta` would count the fall as a reset and the rise after it twice; then equal ones (both
+  values, both reset times) within 120 s of a kept one are one (`merge_measurements`), and a machine's copy of a line
+  (a push repeated) counts once. Then `drop_noise` as for one machine.
 - **Gate decisions:** a copy of a line counts once; with `--machine` only those of that machine.
-- **Day lines:** a whole day before today with requests on any machine is computed from the requests of all machines;
-  the day lines (the own archive and `days/` of the others) count only for a day without any. Each is checked with
-  `parse_archive_line` first (a line that does not fit is counted in `coverage.sync.unreadable_day_lines`), the first
-  line of a machine and day counts. Several lines of one day are combined (`combine_day`): the usage of every line is
-  added, the subscription (`abo`, `alloc`, `cal`, `points`) and the points of the CLIs come from the first line only (the
-  own one, else the machine with the smallest id): each line shares the whole rise among the CLIs of its machine.
+- **Day lines:** a day line of another machine passes `parse_archive_line` and `check_foreign_day`: every number
+  finite and from 0 to `MAX_COUNT`, every key and text without control characters and at most 64 characters,
+  `models`, `unpriced`, `agent_types` and `clis` (with their `models` and `subs`) objects of the entries the report
+  reads, names after `START_TEXT`, `AGENT_TYPE`, `CLI_ID` and labels after `sync_format.LABEL`; then, as a net, one
+  `build_report` with `render` of the line alone. What fails is counted in `coverage.sync.unreadable_day_lines`
+  (`ArithmeticError` included); the first line of a machine and day counts.
+- **Requests or day line** (`replaced_days`, in `load_data`): per machine and whole day of the period before today
+  the day line (the own archive or `days/`) counts instead of the requests when the machine has fewer requests on that
+  day than `stats.requests` of its line; those requests are left out of `Data` (from the sums and from the sharing of a
+  rise). A day without any request left is made of its lines (`combine_day`: the usage of every line added, the
+  subscription (`abo`, `alloc`, `cal`, `points`) and the points of the CLIs from the first line only, the own one, else
+  the machine with the smallest id: each line shares the whole rise among the CLIs of its machine). Beside requests
+  (`add_usage`) a line adds its usage only (`_usage_only`: no subscription, CLIs with points 0). A day only partly in
+  the period keeps its requests. `coverage.sync.days_from_lines` lists the lines that count.
 - **`--machine`:** `Data.only` limits the counted requests, starts, CLIs and points by agent to one machine; the
   sharing of a rise still uses the cost of all machines, so `allocation` and `calibration` stay those of the account.
 

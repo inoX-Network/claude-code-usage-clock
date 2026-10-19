@@ -220,6 +220,7 @@ The entries of `notable` by `rule`:
 | `unexplained_rise` | `week_points` and `five_points`: points that rose with no request with a price in between (an entry exists if one of them is above 0). |
 | `sync_stale` | With the sync: `machines`, a list of `name` and `last_success` (`null`: never) of the machines without a successful push for over 24 hours, this one included. |
 | `sync_backoff` | With the sync: this machine's push is blocked (`category` `visibility`: the repository was found public, `next_due` `null`) or backs off after an error (`category`, `next_due`: when it tries again). |
+| `sync_machine_id` | With the sync: the machine id of this machine (`sync/machine_id` in the log folder) cannot be used; the other machines are not read and this one does not push. |
 | `sync_pull` | With the sync: the pull before the report failed (`status` `failed`, `category`) or could not bring the histories together (`status` `diverged`: the own commits do not fit onto the repository, or the clone has changes that are not committed; nothing was merged). The text names the fixed reason. The other machines are as of the last pull. |
 
 ### `subscription`
@@ -335,10 +336,12 @@ Only with the sync (`sync.mode` `shadow` or `on`, not with `--local`). Without i
 | `machine` | The name `--machine` chose, else `null`. |
 | `machines` | Every machine, this one first, then by name: `id` (its machine id; `null` if this machine never synced), `name` (`sync.machine_name`, else `machine-` and 6 characters of the id; from another machine's `machine.json`, with control characters as `?` and at most 64 characters), `platform` (`linux`, `darwin`, `windows`, `null` if unknown), `own` (`true` for this machine), `last_success` (its last successful push, from the state of this machine or the `status.json` of the other; `null`: none). |
 | `pull` | `status`: `ok` (pulled now), `recent` (the last pull is less than 5 minutes old: none now), `skipped` (`--no-pull`), `locked` (another sync run holds the lock: the clone as it is), `failed` or `diverged` (the histories could not be brought together: nothing merged); `category` (the error category of a failed pull, else `null`); `detail` (the fixed text of that error, never output of git, for example `the sync clone is missing, run the installer with --sync-repo`; else `null`); `last_pull` (the last successful pull, `null`: never). |
-| `push` | `null`, or with `--sync`: `status` `ok`, `failed` (with `category`), `blocked` (`category` `visibility`: the repository is public, no push) or `locked`; `category`. |
+| `push` | `null`, or with `--sync`: `status` `ok`, `failed` (with `category`), `blocked` (`category` `visibility`: the repository is public, no push) or `locked`; `category`; `detail` (the fixed text of a failure, never output of git, else `null`). |
+| `clone` | `read` (the clone was read), `missing` (there is no clone: only this machine; `Sources:` says `no clone of the sync repository`) or `unread` (the machine id of this machine cannot be used, so its own folder could not be told from the others: the clone is not read; `Sources:` and `Notable` say so). |
+| `days_from_lines` | The day lines that count in the period instead of the requests of their machine (see [`usage-report.md`](usage-report.md#other-machines-the-sync)): a list of `day` and `machine` (its name). |
 | `backoff` | The push state of this machine: `level` (0 without a backoff), `last_error` (a category or `null`), `next_due` (when the next push is due, `null`: at once). |
 | `skipped` | What the reader skipped in the clone, by counter (`symlinks`, `hardlinks`, `oversized`, `irregular`, `bad_names`, `unreadable`, `unknown_version`, `broken_lines`, `misplaced`, see [Reading](#reading)). `--full` names the sum in `Sources:`. |
-| `unreadable_day_lines` | Day lines of other machines that the rules of the day archive do not accept, or that do not add up with the other lines of their day: skipped. |
+| `unreadable_day_lines` | Day lines of other machines that were skipped: the rules of the day archive do not accept them, a number is not finite, negative or above 10^12, a name or text has control characters or more than 64 characters, `models`, `unpriced`, `agent_types` or `clis` are not in the shape the report reads, the whole report cannot be made of them, or they do not add up with the other figures of their day. |
 
 ### `allocation`
 

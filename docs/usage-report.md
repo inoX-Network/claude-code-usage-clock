@@ -249,16 +249,27 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   says so in `Notable` and in `Sources:`.
 - **Counted once:** a request counts once by its key, wherever it lies: in the local transcripts (also those a file
   sync of `~/.claude` put there), in the folder of another machine, or in the own folder of the clone. Of two lines
-  of one request the one with more output counts, and of equal ones the local one. Measurements of several machines
-  that are equal within 2 minutes are one: every machine measures the same subscription.
+  of one request the one with more output counts; of lines with the same output the one of the session whose first
+  request is earliest, then the smaller session id, and within one session the local one. So with a file sync of
+  `~/.claude`, which puts the transcripts of one machine on the other, a session counts once and, where both hold it
+  alike, as a session of the machine the report runs on. Measurements of several machines that are equal within
+  2 minutes are one: every machine measures the same subscription. Within a window (the same reset time) a value only
+  rises: a lower value of another machine is a stale state, it counts as the highest value so far.
 - **Sharing a rise:** a rise of the subscription is shared by the cost of the requests of all machines, so it is
   "unexplained" only if no machine made a request in between. "Only one CLI active" for the calibration means on all
   machines together.
-- **Day lines** (the day archive of each machine) count only for a day on which no machine has requests any more: a
-  day with requests is computed from the requests of all machines, never by adding day lines. For a day from day lines
-  the usage of each machine's line is added, but the subscription (percentages, windows, the sharing of the rise) comes
-  from one line only, the own one first: a day line shares the rise only among the sessions of its own machine. A
-  machine keeps its requests in the repository for `sync.keep_request_months` (default 3) full months; this machine's
+- **Requests or day line, per machine and day:** a machine counts on a whole day of the period either its requests
+  or its day line (the day archive, `days/` in the repository), never both. The day line counts when the machine has
+  fewer requests on that day than the line names (compacted, or transcripts deleted); its requests of that day are
+  then left out, also from the sharing of a rise. With one machine this is the report of `--local`. Beside requests of
+  other machines a day line adds only its usage: its sessions get no points (shown as `-`, not measured), the
+  subscription of the day comes from the measurements. On a day without any request that counts, the usage of each
+  machine's line is added, but the subscription (percentages, windows, the sharing of the rise) comes from one line
+  only, the own one first, else that of the machine with the smallest id: a day line shares the rise only among the
+  sessions of its own machine. A day line of another machine is checked before it counts: a number that is not finite,
+  negative or above 10^12, a name or text with control characters or longer than 64 characters, or figures in a shape
+  the report does not read make it skipped and counted (`coverage.sync.unreadable_day_lines`); a line that passes is
+  run through the whole report once more as a net. A day line never stops the report. A machine keeps its requests in the repository for `sync.keep_request_months` (default 3) full months; this machine's
   requests are also read from its own folder there (only `requests/`: its measurements, gate decisions and day lines
   come from the local files), so a day stays whole after Claude Code deleted the transcripts. With
   `sync.project_labels` `alias` or `hash` such older days of this machine show the project labels of the repository
@@ -269,6 +280,7 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
 - **What it shows:** `--full` names every machine in `Sources:` with the age of its last successful push and the
   result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); each CLI says on which machine it
   ran (`on laptop`). `Notable` names a machine without a push for over 24 hours, this machine's sync backing off after
-  an error or blocked, and a pull that failed. The JSON has `clis[].machine` and `coverage.sync`; without the sync
+  an error or blocked, a pull that failed with its reason, and a machine id of this machine that cannot be used (then
+  the clone is not read). The JSON has `clis[].machine` and `coverage.sync`; without the sync
   neither is there. What the reader skipped in the clone (a link, a file over 8 MB, a line of an unknown version or a
   broken one) is counted there and named in `Sources:`.
