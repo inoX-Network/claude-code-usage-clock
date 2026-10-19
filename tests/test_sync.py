@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -122,10 +123,11 @@ def test_bad_arguments_exit_2(argv, capsys):
 
 def test_the_script_runs_as_a_hook_and_as_a_command(tmp_path, mode):
     mode('shadow')
-    # Inside a backoff the hook starts no real push in the background, which would race the manual run below.
+    # Inside a backoff the hook starts no real push in the background, which would race the manual run below. The
+    # backoff ends within the longest wait of the core: a next_due further ahead counts as due (bounded).
     (tmp_path / 'log' / 'sync').mkdir(parents=True)
     _sync_core.write_state(str(tmp_path / 'log' / 'sync'),
-                           _sync_core.State(backoff_level=1, next_due=4_000_000_000, last_error='network'))
+                           _sync_core.State(backoff_level=1, next_due=time.time() + 3600, last_error='network'))
     done = subprocess.run([sys.executable, SCRIPT, 'session-end'], input='{"hook_event_name": "SessionEnd"}',
                           capture_output=True, text=True, timeout=60)
     assert (done.returncode, done.stdout, done.stderr) == (0, '', '')

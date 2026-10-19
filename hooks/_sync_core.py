@@ -166,17 +166,24 @@ def bounded(state: State, now: float, cfg: dict) -> State:
     return state
 
 
-def _read_small(path: str) -> bytes:
-    """The bytes of a small regular file, opened without following a link and without blocking on a named pipe.
-    FileNotFoundError if it is missing; any other OSError or ValueError if it cannot be used."""
+def _read_small(path: str, limit: int = MAX_STATE_BYTES) -> bytes:
+    """The bytes of a small regular file (at most `limit`), opened without following a link and without blocking on a
+    named pipe. FileNotFoundError if it is missing; any other OSError or ValueError if it cannot be used."""
     descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_NONBLOCK | _plat.O_BINARY)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError('not a regular file')
-        data = os.read(descriptor, MAX_STATE_BYTES + 1)
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = os.read(descriptor, limit + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        data = b''.join(chunks)
     finally:
         os.close(descriptor)
-    if len(data) > MAX_STATE_BYTES:
+    if len(data) > limit:
         raise ValueError('too large')
     return data
 

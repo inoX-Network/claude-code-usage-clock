@@ -517,8 +517,9 @@ def _own(machine_id: str, relative: str) -> None:
 
 def append(root: str, machine_id: str, relative: str, lines: Iterable[str]) -> int:
     """Appends `lines` (as made by `encode`/`encode_day`) to the file `relative` of the own machine and returns the
-    bytes written. Only paths of the layout below `machines/<machine_id>/`; never through a link; a cut-off last
-    line gets its line break first, so the new lines stand alone."""
+    bytes written. Only paths of the layout below `machines/<machine_id>/`; never through a link, never into a file
+    with a second link (it could be shared with a file outside the repository, and the reader skips it); a cut-off
+    last line gets its line break first, so the new lines stand alone."""
     _own(machine_id, relative)
     if not LAYOUT_LINES.fullmatch(relative):
         raise FormatError('path: not a line file of the layout')
@@ -537,6 +538,8 @@ def append(root: str, machine_id: str, relative: str, lines: Iterable[str]) -> i
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise FormatError(f'{relative}: not a regular file')
+        if info.st_nlink != 1:
+            raise FormatError(f'{relative}: a file with a second link')
         if info.st_size and _plat.pread(descriptor, 1, info.st_size - 1) != b'\n':
             data = b'\n' + data
         view = memoryview(data)
@@ -795,10 +798,22 @@ def read_repo(root: str, skip: str | None = None) -> Repo:
 
 
 def latest_by_key(requests: Iterable[dict]) -> dict[str, dict]:
-    """The requests by `k`; of the lines with one `k` the one read last counts."""
+    """The requests by `k`, whatever the order in which they are read. Of the lines with one `k` the one with the most
+    output tokens counts (the rule of the local report); of those with the same output the one of the session whose
+    first request is earliest (a request copied into a continued session belongs to the session it came from), then
+    of the smaller session id; within one session the one read last."""
+    requests = list(requests)
+    starts: dict[str, float] = {}
+    for request in requests:
+        moment = parse_time(request['t'])
+        starts[request['sid']] = min(starts.get(request['sid'], moment), moment)
     latest: dict[str, dict] = {}
     for request in requests:
-        latest[request['k']] = request
+        known = latest.get(request['k'])
+        if known is None or request['out'] > known['out'] or (
+                request['out'] == known['out']
+                and (starts[request['sid']], request['sid']) <= (starts[known['sid']], known['sid'])):
+            latest[request['k']] = request
     return latest
 
 

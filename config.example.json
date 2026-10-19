@@ -63,6 +63,7 @@
     "project_labels": "plain",
     "project_aliases": {},
     "label_salt": "",
+    "include_gates": true,
     "keep_request_months": 3
   }
 }
