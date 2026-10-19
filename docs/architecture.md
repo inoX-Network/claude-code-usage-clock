@@ -458,7 +458,7 @@ folders, deadline), the push from 0034-SYNC-PUSH and the pull from 0034-SYNC-REP
 success. `sync.mode` `off` (the default) makes every entry point do nothing; `shadow` and `on` run the core alike.
 
 - **State** `<log_dir>/sync/state.json`: `{"last_attempt", "last_success", "backoff_level", "next_due",
-  "last_error"}`, times as UTC ISO like `measured_at`, `last_error` null or one of `visibility`, `auth`, `network`,
+  "last_error", "last_pull"}`, times as UTC ISO like `measured_at`, `last_error` null or one of `visibility`, `auth`, `network`,
   `rejected`, `conflict`, `timeout`, `internal`. The folder is 0700 (`chmod` after creating it, so whatever the umask;
   a link or a file there is refused), the files 0600 (`fchmod`), written atomically with `_context_state.write_private`.
   A missing file is an empty state. A broken one (not UTF-8 JSON, not an object, a field of the wrong kind, a time
@@ -497,8 +497,9 @@ success. `sync.mode` `off` (the default) makes every entry point do nothing; `sh
   `visibility` `next_due` stays as it is and the push stays blocked until `clear_visibility` (for the installer's
   `--sync-repo`). Jitter: uniform +-20 % of the wait. Interval: `sync.interval_min`, at least 10 minutes (a smaller
   value is raised with a log line `interval_raised`). An exception of the runner that is no `SyncError` is `internal`.
-- **A pull** (`pull`): the same lock, no backoff and no state change; log line `success` or `failure` with
-  `action: pull`.
+- **A pull** (`pull_outcome`, `pull` as an exit code): the same lock and no backoff; a success writes `last_pull` and
+  nothing else of the state. Log line `success` or `failure` with `action: pull`. The outcome is `ok`, `locked` (the
+  lock is held elsewhere, nothing pulled), `off` or `failed` with the category and the runner's fixed text.
 - **Timeouts:** a push has 60 s in total, a pull in the background 30 s, in the foreground `sync.pull_timeout_s`
   (`Deadline`). `run_command` (and `Run.git`) starts each child in a process group of its own (`_plat.GROUP_OPTIONS`);
   at the deadline it ends the whole tree (`_plat.kill_tree`: SIGKILL to the group, on Windows `taskkill /T`), so a
@@ -548,6 +549,40 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
   cannot be written: `SyncError('internal')`. A source line that does not fit or a file that cannot be read is
   counted (`Result.skipped`, `Result.unreadable_files`) and left out. With a deadline the export stops at the next
   file once 30 s are left for commit and push (`Result.complete` false); the next run goes on from there.
+
+## Sync in the report
+
+With `sync.mode` `shadow` or `on`, `usage_report.py` adds the other machines (0034-SYNC-REPORT); `--local` and `sync.mode
+off` give the report of this machine alone, byte for byte as before. The steps of `gather_sync`:
+
+- **Push** (`--sync` only): `_sync_core.push` with `forced`, as `sync.py push --now`: past the wait and the backoff,
+  never past `visibility` or the lock. Whether it ran is read from the state: unchanged means blocked or locked.
+- **Pull:** none with `--no-pull`; none if `last_pull` is less than 300 s old (`PULL_GAP_S`), unless `--sync`: the
+  `/report` pane reads four periods one after the other and waits for one pull at most. Else `_sync_core.pull_outcome`
+  with `sync.git_pull` and `sync.pull_timeout_s`. A failure never fails the report: it uses the clone as it is and names
+  the reason (`conflict` is shown as a sync history that differs: nothing merged).
+- **Reading:** the clone (`sync.clone_dir`) with `sync_format.read_repo`, the own folder skipped; of the own folder only
+  `requests/` (the transcripts Claude Code deleted after 30 days, see below). A machine id that cannot be used leaves
+  the clone unread. Names of machines come from `machine.json` and are made harmless again (`machine_name`: control
+  characters as `?`, 64 characters).
+- **Requests:** the local requests (their `k` from message id and request id, as the export makes it,
+  `Request.ids`) and those of the clone go through `sync_format.latest_by_key` together, the local ones last, so of
+  equal lines the local one counts. A line without a message id stays a request of this machine. A request line of the
+  clone becomes a `Request` without a working folder; only a line with `first` is a start (the others have the source
+  `NO_START`). A session runs on the machine of its earliest request; its project is the folder of a local request,
+  else `proj` of the clone.
+- **Measurements:** those of all machines in time order; equal ones (both values, both reset times) within 120 s of a
+  kept one are one (`merge_measurements`), and a machine's copy of a line (a push repeated) counts once. Then
+  `drop_noise` as for one machine.
+- **Gate decisions:** a copy of a line counts once; with `--machine` only those of that machine.
+- **Day lines:** a whole day before today with requests on any machine is computed from the requests of all machines;
+  the day lines (the own archive and `days/` of the others) count only for a day without any. Each is checked with
+  `parse_archive_line` first (a line that does not fit is counted in `coverage.sync.unreadable_day_lines`), the first
+  line of a machine and day counts. Several lines of one day are combined (`combine_day`): the usage of every line is
+  added, the subscription (`abo`, `alloc`, `cal`, `points`) and the points of the CLIs come from the first line only (the
+  own one, else the machine with the smallest id): each line shares the whole rise among the CLIs of its machine.
+- **`--machine`:** `Data.only` limits the counted requests, starts, CLIs and points by agent to one machine; the
+  sharing of a rise still uses the cost of all machines, so `allocation` and `calibration` stay those of the account.
 
 ## Log
 

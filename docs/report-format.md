@@ -98,7 +98,8 @@ Notable
   one 5h window reached 82 % (Tue 13 Oct)
 ```
 
-- **Notable:** every line is one fixed rule that hit. The rules are, in this order:
+- **Notable:** every line is one fixed rule that hit. The rules are, in this order (with the sync three more follow,
+  see [`coverage.sync`](#coveragesync)):
   1. **A gate denied or asked** (`spawn gate`, `soft stop`; `agent starts` or `subagent tool calls`), per mode, with the
      number and the reasons (the three largest, then `other`). In `shadow` mode it says `would have denied` and
      `shadow mode, nothing was blocked`.
@@ -176,7 +177,7 @@ The top-level fields are, in this order:
 |---|---|
 | `schema_version` | The number of the format (now `1`). It changes only when a field is renamed or removed; a new field does not change it. |
 | `period` | `kind` (`day`, `week`, `month`, `year` or `range`), `label` (as in the title), `start` and `end` (the period is from `start` up to, not including, `end`). |
-| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `archive_days_without_agent_split` (the days among them whose points could not be split by agent type, see `total`), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read), `unreadable_context_files` (count of context files, among those of the period's sessions, that were skipped because they could not be read or do not fit the format). |
+| `coverage` | What was read: `transcript_files` (count), `archive_days` (days that came from the archive), `archive_days_without_agent_split` (the days among them whose points could not be split by agent type, see `total`), `unreadable_history_lines`, `unreadable_archive_lines`, `unreadable_transcript_lines` (counts of lines skipped because they could not be read), `unreadable_context_files` (count of context files, among those of the period's sessions, that were skipped because they could not be read or do not fit the format); with the sync `sync` (see [`coverage.sync`](#coveragesync)). |
 | `overview` | The numbers of the text overview, see below. |
 | `subscription` | The measured percentages of the subscription, see below. |
 | `total` | The figures of the whole period. |
@@ -193,7 +194,7 @@ Measured unless it says estimate. The text overview is made of this object alone
 
 | Field | Meaning |
 |---|---|
-| `title` | The period as the first line says it (`Day 2026-10-13`, `Week to Mon 19 Oct 09:00`, `Month 2026-10`, `Days a to b`). |
+| `title` | The period as the first line says it (`Day 2026-10-13`, `Week to Mon 19 Oct 09:00`, `Month 2026-10`, `Days a to b`); with `--machine` followed by ` · machine NAME`. |
 | `cost_usd` | The cost weight of the period, USD at API prices. |
 | `week` | `null` without a weekly measurement. Else `used_percent` (the weekly limit used at the end of the period, percent), `rise_points` (points it rose within the period, across weekly resets added up), `windows` (how many weekly windows the period touches) and `reset_at` (the weekly reset time of the last one in Unix seconds, or `null`). |
 | `five_hour` | `windows` (count of 5h windows with a measurement), `highest_percent` and `highest_at` (the highest peak and its time; `null` without windows). |
@@ -217,6 +218,9 @@ The entries of `notable` by `rule`:
 | `cache_hits_low` | `threshold` (0.9) and `projects`: a list of `name` and `cache_hit_rate`. |
 | `project_dominates` | `project`, `share` (above 0.5) and `cost_usd`. |
 | `unexplained_rise` | `week_points` and `five_points`: points that rose with no request with a price in between (an entry exists if one of them is above 0). |
+| `sync_stale` | With the sync: `machines`, a list of `name` and `last_success` (`null`: never) of the machines without a successful push for over 24 hours, this one included. |
+| `sync_backoff` | With the sync: this machine's push is blocked (`category` `visibility`: the repository was found public, `next_due` `null`) or backs off after an error (`category`, `next_due`: when it tries again). |
+| `sync_pull` | With the sync: the pull before the report failed (`status` `failed`, `category`) or found no fast forward (`status` `diverged`: the sync history differs, nothing was merged). The other machines are as of the last pull. |
 
 ### `subscription`
 
@@ -268,7 +272,8 @@ The `estimate` (all numbers are estimates, from the sizes of local files as they
 
 ### `clis`
 
-One entry per session, highest cost first. `id` (8 characters of the session id), `label` (the working folder's last name: the project of the session),
+One entry per session, highest cost first. `id` (8 characters of the session id), `label` (the working folder's last name: the project of the session; for a session of another machine its project label in the sync repository),
+`machine` (with the sync only: the name of the machine the session ran on),
 `start` (time of its first request), `requests`, `cost_usd`, `tokens` (as in `total`), `models` (model name to
 cost in USD), `subagents` (agent type to `requests` and `cost_usd`), `cache_hit_rate`, `cold_starts`, `thinking_tokens`,
 `thinking_share`, `web_searches`, `web_fetches` (as in `total`), `estimated_share` with `five` and `week`: the
@@ -317,6 +322,23 @@ dearest tools), the memory files, the skills (tokens, how many were included of 
 agents (the ten dearest); every list has the dearest row first and ends with `… N more` if rows were left out. Without a
 file the block is the one line `No context recorded for this session.`; an unreadable file is named in `Sources:` as
 `N unreadable context file(s) skipped`. `--project` alone and the overview do not show the block.
+
+### `coverage.sync`
+
+Only with the sync (`sync.mode` `shadow` or `on`, not with `--local`). Without it neither this object nor
+`clis[].machine` is in the report. How the report merges the machines: [`usage-report.md`](usage-report.md#other-machines-the-sync).
+
+| Field | Meaning |
+|---|---|
+| `mode` | `sync.mode`: `shadow` or `on`. |
+| `text` | The part of the `Sources:` line of `--full` about the sync, for example `Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`: the number of machines, each with the age of its last successful push (`never pushed` without one), the push of `--sync`, the pull, and `only NAME` with `--machine`. |
+| `machine` | The name `--machine` chose, else `null`. |
+| `machines` | Every machine, this one first, then by name: `id` (its machine id; `null` if this machine never synced), `name` (`sync.machine_name`, else `machine-` and 6 characters of the id; from another machine's `machine.json`, with control characters as `?` and at most 64 characters), `platform` (`linux`, `darwin`, `windows`, `null` if unknown), `own` (`true` for this machine), `last_success` (its last successful push, from the state of this machine or the `status.json` of the other; `null`: none). |
+| `pull` | `status`: `ok` (pulled now), `recent` (the last pull is less than 5 minutes old: none now), `skipped` (`--no-pull`), `locked` (another sync run holds the lock: the clone as it is), `failed` or `diverged` (no fast forward: nothing merged); `category` (the error category of a failed pull, else `null`); `last_pull` (the last successful pull, `null`: never). |
+| `push` | `null`, or with `--sync`: `status` `ok`, `failed` (with `category`), `blocked` (`category` `visibility`: the repository is public, no push) or `locked`; `category`. |
+| `backoff` | The push state of this machine: `level` (0 without a backoff), `last_error` (a category or `null`), `next_due` (when the next push is due, `null`: at once). |
+| `skipped` | What the reader skipped in the clone, by counter (`symlinks`, `hardlinks`, `oversized`, `irregular`, `bad_names`, `unreadable`, `unknown_version`, `broken_lines`, `misplaced`, see [Reading](#reading)). `--full` names the sum in `Sources:`. |
+| `unreadable_day_lines` | Day lines of other machines that the rules of the day archive do not accept, or that do not add up with the other lines of their day: skipped. |
 
 ### `allocation`
 

@@ -22,6 +22,7 @@ python3 tools/usage_report.py --week --session 5f3a     # the details of one ses
 python3 tools/usage_report.py --week --full             # every figure
 python3 tools/usage_report.py --json                # the same figures for other tools, the overview included
 python3 tools/usage_report.py --archive             # see docs/usage-report.md
+python3 tools/usage_report.py --week --local        # with the sync: this machine only (other machines: docs/usage-report.md)
 ```
 
 The installer copies the report, `log_summary.py` and `prices.json` to `~/.claude/hooks/usage-clock/` as well, so you
