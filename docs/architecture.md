@@ -671,9 +671,10 @@ off` give the report of this machine alone, byte for byte as before. The steps o
   clone becomes a `Request` without a working folder; only a line with `first` is a start (the others have the source
   `NO_START`). A session runs on the machine of its earliest request; its project is the folder of a local request,
   else `proj` of the clone.
-- **Measurements:** those of all machines in time order; within a window (the same reset time, within
-  `RESET_TOLERANCE_S`) a value only rises, a lower one (the stale state of another machine) is raised to the highest
-  value of its window, else `_delta` would count the fall as a reset and the rise after it twice; then equal ones (both
+- **Measurements:** those of all machines in time order; per metric only the newest window (the latest reset time
+  seen, within `RESET_TOLERANCE_S`) is kept in mind: in it a value only rises, and a lower value, or one of an older
+  window (a machine that missed the change), is the stale state of another machine and counts as the newest window at
+  its highest value; else `_delta` would count the fall as a reset and the rise after it twice, or cut the new window; then equal ones (both
   values, both reset times) within 120 s of a kept one are one (`merge_measurements`), and a machine's copy of a line
   (a push repeated) counts once. Then `drop_noise` as for one machine.
 - **Gate decisions:** a copy of a line counts once; with `--machine` only those of that machine.
@@ -684,8 +685,10 @@ off` give the report of this machine alone, byte for byte as before. The steps o
   `build_report` with `render` of the line alone. What fails is counted in `coverage.sync.unreadable_day_lines`
   (`ArithmeticError` included); the first line of a machine and day counts.
 - **Requests or day line** (`replaced_days`, in `load_data`): per machine and whole day of the period before today
-  the day line (the own archive or `days/`) counts instead of the requests when the machine has fewer requests on that
-  day than `stats.requests` of its line; those requests are left out of `Data` (from the sums and from the sharing of a
+  the day line (the own archive or `days/`) counts instead of the requests when the machine has fewer requests of its
+  own on that day than `stats.requests` of its line: the different `k` of its own lines before they are counted once
+  (`Machines.merge_requests`; for this machine the local and its own clone lines), so a session a file sync put here,
+  which counts for this machine, still counts as a request of the machine it ran on; those requests are left out of `Data` (from the sums and from the sharing of a
   rise). A day without any request left is made of its lines (`combine_day`: the usage of every line added, the
   subscription (`abo`, `alloc`, `cal`, `points`) and the points of the CLIs from the first line only, the own one, else
   the machine with the smallest id: each line shares the whole rise among the CLIs of its machine). Beside requests

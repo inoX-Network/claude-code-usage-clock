@@ -254,13 +254,15 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   `~/.claude`, which puts the transcripts of one machine on the other, a session counts once and, where both hold it
   alike, as a session of the machine the report runs on. Measurements of several machines that are equal within
   2 minutes are one: every machine measures the same subscription. Within a window (the same reset time) a value only
-  rises: a lower value of another machine is a stale state, it counts as the highest value so far.
+  rises, and a window that ended does not come back: a lower value of another machine, or one of a window that already
+  ended, is a stale state and counts as the highest value of the newest window so far.
 - **Sharing a rise:** a rise of the subscription is shared by the cost of the requests of all machines, so it is
   "unexplained" only if no machine made a request in between. "Only one CLI active" for the calibration means on all
   machines together.
 - **Requests or day line, per machine and day:** a machine counts on a whole day of the period either its requests
   or its day line (the day archive, `days/` in the repository), never both. The day line counts when the machine has
-  fewer requests on that day than the line names (compacted, or transcripts deleted); its requests of that day are
+  fewer requests of its own on that day than the line names (compacted, or transcripts deleted; a session a file sync
+  put here still counts as one of the machine it ran on); its requests of that day are
   then left out, also from the sharing of a rise. With one machine this is the report of `--local`. Beside requests of
   other machines a day line adds only its usage: its sessions get no points (shown as `-`, not measured), the
   subscription of the day comes from the measurements. On a day without any request that counts, the usage of each

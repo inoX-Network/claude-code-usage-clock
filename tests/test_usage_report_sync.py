@@ -11,6 +11,7 @@ import pytest
 
 import _sync_core
 import _sync_export
+import _transcripts
 import _sync_git
 import sync
 import sync_format
@@ -268,15 +269,29 @@ def test_a_stale_measurement_of_another_machine_does_not_inflate_the_rise(world,
     assert world.report('--day', '2026-10-13', '--local')['allocation']['five']['counted_points'] == 2
 
 
+def test_a_measurement_of_a_window_that_already_ended_does_not_cut_the_new_one(world, synced):
+    r1, r2, week = T('2026-10-13T11:00:00Z'), T('2026-10-13T16:00:00Z'), T('2026-10-19T07:00:00Z')
+    world.history([row('2026-10-13T10:50:00Z', 40, 20, r1, week), row('2026-10-13T11:10:00Z', 2, 21, r2, week),
+                   row('2026-10-13T11:30:00Z', 4, 22, r2, week)])
+    spend(world, ('2026-10-13T11:15:00Z', 1.0), ('2026-10-13T11:25:00Z', 1.0), session='dddddddd-1')
+    synced.clone.machine(LAPTOP)
+    synced.clone.history(LAPTOP, [row('2026-10-13T11:20:00Z', 41, 21, r1, week)])     # it missed the change
+    five = world.report('--day', '2026-10-13')['allocation']['five']
+    local = world.report('--day', '2026-10-13', '--local')['allocation']['five']
+    assert five['counted_points'] == local['counted_points'] == 2 and five['skipped_sections'] == 1
+
+
 def test_within_a_window_a_value_only_rises_a_new_window_starts_anew():
     m = report_module.Measurement
     kept = report_module.merge_measurements([
         m(0, 40, 20, 1000.0, 9000.0), m(100, 39, 21, 1000.0, 9000.0),      # 5h stale, week rose
         m(300, 38, 21, 1030.0, 9000.0),                                    # the same window within 60 s of its reset
         m(400, 2, 22, 19000.0, 9000.0),                                    # a new 5h window: falls
-        m(500, 1, 22, None, None)])                                        # no reset times: not judged
+        m(500, 1, 22, None, None),                                         # no reset times: not judged
+        m(600, 45, 23, 1000.0, 9000.0)])                                   # the old window: stale, the new one counts
     assert [(x.t, x.five, x.week) for x in kept] == [(0, 40, 20), (100, 40, 21), (300, 40, 21), (400, 2, 22),
-                                                     (500, 1, 22)]
+                                                     (500, 1, 22), (600, 2, 23)]
+    assert kept[-1].five_resets == 19000.0
 
 
 def test_measurements_further_apart_than_two_minutes_stay_two(world):
@@ -346,6 +361,18 @@ def test_a_day_line_beside_requests_that_does_not_add_up_with_them_is_counted_an
     synced.clone.days(LAPTOP, [('2026-10-11', line)])
     report = world.report('--day', '2026-10-11')
     assert report['total']['requests'] == 1 and report['coverage']['sync']['unreadable_day_lines'] == 1
+
+
+def test_a_session_a_file_sync_put_here_counts_once_beside_the_day_line_of_its_machine(world, synced):
+    # a file sync of ~/.claude put the laptop session here; the laptop has the same requests and its day line
+    spend(world, ('2026-10-11T10:05:00Z', 1.0), ('2026-10-11T10:15:00Z', 1.0), ('2026-10-11T10:25:00Z', 1.0),
+          session='llllllll-1', project='-home-u-proj-l')
+    synced.clone.machine(LAPTOP)
+    synced.clone.requests(LAPTOP, [request_line(t, f'llllllll-1-{i}', 1.0, first=i == 0) for i, t in enumerate(
+        ('2026-10-11T10:05:00Z', '2026-10-11T10:15:00Z', '2026-10-11T10:25:00Z'))])
+    synced.clone.days(LAPTOP, [('2026-10-11', archive_line(3, 3.0, 'llllllll', 'proj-l'))])
+    report = world.report('--day', '2026-10-11')
+    assert report['total']['requests'] == 3 and report['coverage']['sync']['days_from_lines'] == []
 
 
 def test_a_foreign_day_line_counts_while_a_third_machine_has_requests_also_with_machine(world, synced):
@@ -476,12 +503,13 @@ def set_in(path, value):
     set_in(('agent_types',), {'agent\x1b[5m': {'requests': 7, 'cost': 4.0}}),
     set_in(('models',), {'evil\x1b[31mmodel': {'requests': 7, 'cost': 4.0, 'tokens': {}}}),
     set_in(('guard_reasons', 'soft_stop', 'enforce', 'deny'), {'why\x07': 1}),
+    set_in(('unpriced',), {'x': {'requests': 1, 'tokens': {**dict.fromkeys(_transcripts.KINDS, 0), 'output': {}}}}),
     set_in(('abo',), {'five_windows': [{'resets': None, 'first': 1.0, 'peak': 1, 'peak_at': 10 ** 12, 'last': 2.0,
                                         'first_value': 1, 'last_value': 1}]}),   # passes the checks, fails the report
 ], ids=['huge', 'negative-count', 'negative-cost', 'too-many-tokens', 'agent-types-shape', 'models-shape',
         'unpriced-shape', 'cli-shape', 'cli-id', 'cli-models', 'cli-subs', 'label-escape', 'label-pattern',
         'agent-type-escape',
-        'model-escape', 'reason-escape', 'probe'])
+        'model-escape', 'reason-escape', 'net-tokens', 'probe'])
 def test_a_hostile_foreign_day_line_is_skipped_and_counted(world, synced, change):
     hostile(world, synced, change)
     report = world.report('--day', '2026-10-11')

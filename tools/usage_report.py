@@ -2051,18 +2051,20 @@ class Machines:
             try:
                 day, stats = parse_archive_line(json.dumps(row))
                 check_foreign_day(day, stats)
-            except (ValueError, TypeError, KeyError, RecursionError, ArithmeticError):
+            except (ValueError, TypeError, KeyError, RecursionError):
                 self.broken_days += 1
                 continue
             days.setdefault(day, stats)
         self.days[key] = days
 
     def merge_requests(self, local: list[_transcripts.Request],
-                       projects_dir: str) -> list[tuple[_transcripts.Request, str, str | None]]:
-        """(request, machine, project label of the clone or None) of the local requests and those of the clone,
-        counted once by `k` after the reading rule of the format; of equal lines of one session the local one (read
-        last). The `k` of a local request is the one the export makes: of message id and request id, for a line
-        without a message id of its transcript (below `projects_dir`) and its byte offset."""
+                       projects_dir: str) -> tuple[list[tuple[_transcripts.Request, str, str | None]], dict]:
+        """([(request, machine, project label of the clone or None)], {(machine, day): its keys}): the local requests
+        and those of the clone counted once by `k` after the reading rule of the format (of equal lines of one session
+        the local one, read last), and the keys each machine has itself on each local day, before they are counted once:
+        a request a file sync put here, which counts for this machine, is still one of the machine it ran on. The `k`
+        of a local request is the one the export makes: of message id and request id, for a line without a message id
+        of its transcript (below `projects_dir`) and its byte offset."""
         rows = list(self.requests)
         for request in local:
             first, second = request.ids
@@ -2071,8 +2073,12 @@ class Machines:
             rows.append({'t': sync_format.iso_time(request.ts), 'sid': request.session, 'out': request.tokens[4],
                          'k': sync_format.request_key(first, '' if second is None else str(second)), '_request': request,
                          '_machine': self.own})
+        keys: dict[tuple, set] = {}
+        for row in rows:
+            day = local_day(sync_format.parse_time(row['t'])).isoformat()
+            keys.setdefault((row['_machine'], day), set()).add(row['k'])
         return [(row.get('_request') or _clone_request(row), row['_machine'], row.get('proj'))
-                for row in sync_format.latest_by_key(rows).values()]
+                for row in sync_format.latest_by_key(rows).values()], keys
 
     def add_usage(self, stats: dict, lines: list[tuple[str, dict]], machine_of: dict[str, str]) -> dict:
         """`stats` with the usage of day lines that count beside the requests of other machines on their day: their
@@ -2123,21 +2129,23 @@ def _clone_request(row: dict) -> _transcripts.Request:
 def merge_measurements(measurements: list[Measurement]) -> list[Measurement]:
     """The measurements of all machines in time order; equal ones (both values and both reset times) within
     SAME_MEASUREMENT_S of one that is kept are one measurement: every machine measures the same subscription. Within
-    a window (the same reset time, within RESET_TOLERANCE_S) a value only rises: a value below the highest one of its
-    window is the stale state of another machine and is raised to it, or the stretches around it would count as a
-    reset and the rise after it twice. A value without its reset time is left as it is (drop_noise judges it)."""
+    a window (the same reset time, within RESET_TOLERANCE_S) a value only rises, and a window that ended does not come
+    back: a value below the highest one of the newest window, or one of an older window (a machine that missed the
+    change), is the stale state of another machine and counts as the newest window at its highest value. Else the
+    stretches around it would count as a reset and the rise after it twice, or the new window would be cut. A value
+    without its reset time is left as it is (drop_noise judges it)."""
     kept, last = [], {}
-    peaks: dict[str, list[list[float]]] = {metric: [] for metric in METRICS}     # [reset time, highest value]
+    newest: dict[str, list[float]] = {}           # by metric: [reset time, highest value] of the newest window
     for m in sorted(measurements, key=lambda m: m.t):
         for metric in METRICS:
             value, resets = getattr(m, metric), getattr(m, metric + '_resets')
             if value is None or resets is None:
                 continue
-            window = next((peak for peak in peaks[metric] if abs(peak[0] - resets) < RESET_TOLERANCE_S), None)
-            if window is None:
-                peaks[metric].append([resets, value])
-            elif value < window[1]:
-                m = m._replace(**{metric: window[1]})
+            window = newest.get(metric)
+            if window is None or resets - window[0] >= RESET_TOLERANCE_S:
+                newest[metric] = [resets, value]
+            elif value < window[1] or window[0] - resets >= RESET_TOLERANCE_S:
+                m = m._replace(**{metric: window[1], metric + '_resets': window[0]})
             else:
                 window[1] = value
         values = m[1:]
@@ -2479,15 +2487,12 @@ def _whole_days(start: float, end: float) -> list[date]:
     return days
 
 
-def replaced_days(winners: list[tuple], lines: dict[str, list[tuple[str, dict]]], whole: set[str]) -> set[tuple]:
+def replaced_days(keys: dict[tuple, set], lines: dict[str, list[tuple[str, dict]]], whole: set[str]) -> set[tuple]:
     """(machine, day) for which the day line counts instead of the requests: a whole day of the period on which the
-    machine has fewer requests than its day line names (compacted, or transcripts deleted)."""
-    counts: dict[tuple, int] = {}
-    for request, machine, _label in winners:
-        key = (machine, local_day(request.ts).isoformat())
-        counts[key] = counts.get(key, 0) + 1
+    machine has fewer requests of its own (`keys`, see Machines.merge_requests) than its day line names (compacted,
+    or transcripts deleted)."""
     return {(machine, day) for day, found in lines.items() if day in whole for machine, stats in found
-            if counts.get((machine, day), 0) < stats.get('requests', 0)}
+            if len(keys.get((machine, day), ())) < stats.get('requests', 0)}
 
 
 def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
@@ -2505,8 +2510,8 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
         requests, fresh, data.files, data.unreadable_requests = _transcripts.read_transcripts(
             projects_dir, modified_since, want_usage_lines=start < first_history)
     if machines is not None:
-        winners = machines.merge_requests(requests, projects_dir)
-        data.replaced = replaced_days(winners, lines or {}, whole or set())
+        winners, keys = machines.merge_requests(requests, projects_dir)
+        data.replaced = replaced_days(keys, lines or {}, whole or set())
         winners = [found for found in winners if (found[1], local_day(found[0].ts).isoformat()) not in data.replaced]
         requests = [request for request, _machine, _label in winners]
     data.set_requests(requests)
