@@ -5,8 +5,8 @@ What it does:
 1. Smoke test: every selected hook is started once from a temporary copy, before anything is written.
 2. Copies the runtime files from hooks/ to --target and creates config.json from config.example.json
    there, but only if it does not exist (an existing config.json is never touched). The usage report
-   (tools/usage_report.py with log_summary.py and prices.json) goes the same way, so that it runs from --target
-   without this checkout.
+   (tools/usage_report.py with log_summary.py and prices.json; hooks/_transcripts.py, which reads the transcripts,
+   comes with the hooks) goes the same way, so that it runs from --target without this checkout.
 3. Backs up settings.json, then adds the selected components:
      statusline   statusLine = python3 <target>/statusline.py (refreshInterval 60)
    (On Windows the command is `"<this python>" -X utf8 "<target>/statusline.py"`, in forward slashes, for Git
@@ -71,10 +71,12 @@ DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
 REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_plat.py', '_spawn_check.py',
-                  '_usage.py', '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
-                  'soft_stop.py', 'wake_watcher.py')
+                  '_transcripts.py', '_usage.py', '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py',
+                  'spawn_gate.py', 'soft_stop.py', 'wake_watcher.py')
 # The usage report from tools/ and everything it loads from beside itself (its other modules come from hooks/).
 REPORT_FILES = ('usage_report.py', 'log_summary.py', 'prices.json')
+# The modules of hooks/ that no hook needs, only the report: copied with the hooks, named with the report.
+REPORT_MODULES = ('_transcripts.py',)
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
            'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
 NEVER_BLOCK = ' || true'
@@ -799,7 +801,7 @@ def run(args: argparse.Namespace) -> int:
         if not args.uninstall:
             note = 'would be created from config.example.json' if not config_exists(target) else 'exists, stays untouched'
             print(f'Files: {len(runtime_files())} runtime files would be copied to {target}; config.json {note}.')
-            print(f'Report: {", ".join(REPORT_FILES)} would be copied to {target}.')
+            print(f'Report: {", ".join(REPORT_FILES + REPORT_MODULES)} would be copied to {target}.')
         print('DRY RUN - nothing written.' + ('' if changed else ' settings.json would stay as it is.'))
         return 0
     if not args.uninstall:

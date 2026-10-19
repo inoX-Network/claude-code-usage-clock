@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import _transcripts
 from conftest import ROOT, tzset
 
 SCRIPT = os.path.join(ROOT, 'tools', 'usage_report.py')
@@ -1052,7 +1053,7 @@ def test_the_usage_lines_are_not_even_parsed_when_the_history_covers_the_period(
     def fail(raw):
         raise AssertionError('parsed')
 
-    monkeypatch.setattr(report_module, 'parse_usage_line', fail)
+    monkeypatch.setattr(_transcripts, 'parse_usage_line', fail)
     world.history([row('2026-10-01T08:00:00Z', 10, 20)])
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1',
                      [usage_line('2026-10-13T09:00:00Z', 10, 20), paid('2026-10-13T09:01:00Z', 'a', 1.0)])
@@ -1506,15 +1507,15 @@ def test_a_transcript_that_cannot_be_opened_is_skipped(world, monkeypatch):
             raise PermissionError('denied')
         return real(path, *args, **kwargs)
 
-    monkeypatch.setattr(report_module, 'open', refuse, raising=False)
+    monkeypatch.setattr(_transcripts, 'open', refuse, raising=False)
     data = world.report('--day', DAY)
     assert data['total']['cost_usd'] == pytest.approx(1.0) and data['coverage']['transcript_files'] == 1
 
 
 def test_a_transcript_that_vanishes_before_it_is_read_is_skipped(world, monkeypatch):
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'a', 1.0)])
-    real = report_module.find_transcripts
-    monkeypatch.setattr(report_module, 'find_transcripts',
+    real = _transcripts.find_transcripts
+    monkeypatch.setattr(_transcripts, 'find_transcripts',
                         lambda folder: [(str(world.projects / 'gone.jsonl'), 'gone', False), *real(folder)])
     assert world.report('--day', DAY)['total']['requests'] == 1
 
@@ -1525,7 +1526,7 @@ def test_old_files_are_not_read_for_a_recent_period(world, monkeypatch):
     world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:00:00Z', 'b', 2.0)])
     opened = []
     real = builtins.open
-    monkeypatch.setattr(report_module, 'open', lambda path, *a, **k: (opened.append(str(path)), real(path, *a, **k))[1],
+    monkeypatch.setattr(_transcripts, 'open', lambda path, *a, **k: (opened.append(str(path)), real(path, *a, **k))[1],
                         raising=False)
     data = world.report('--day', DAY)
     assert data['total']['cost_usd'] == pytest.approx(2.0)
@@ -1597,13 +1598,13 @@ def test_the_shipped_price_file_has_the_agreed_prices():
     prices = {p['name']: p for p in report_module.load_prices(report_module.PRICES_FILE)}
 
     def rates(name):
-        return tuple(prices[name][kind] for kind in report_module.KINDS)
+        return tuple(prices[name][kind] for kind in _transcripts.KINDS)
 
     assert rates('Opus 5.5') == (4, 5, 8, 0.20, 20) and rates('Opus 4.x') == (5, 6.25, 10, 0.50, 25)
     assert rates('Sonnet 5.x') == (2, 2.5, 4, 0.20, 10) and rates('Haiku 4.5') == (1, 1.25, 2, 0.10, 5)
     assert rates('Haiku 5.5') == (0.10, 0.125, 0.20, 0.01, 0.50) and rates('Fable') == (10, 12.5, 20, 0.25, 50)
     tier = prices['Haiku 5.5']['long_context']
-    assert tier['above_tokens'] == 100_000 and tuple(tier[k] for k in report_module.KINDS) == (0.50, 0.625, 1.0, 0.05,
+    assert tier['above_tokens'] == 100_000 and tuple(tier[k] for k in _transcripts.KINDS) == (0.50, 0.625, 1.0, 0.05,
                                                                                                2.50)
 
 
