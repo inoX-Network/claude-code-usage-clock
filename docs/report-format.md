@@ -354,17 +354,17 @@ machines/<machine_id>/
   requests/<YYYY-MM>/<session_id>.jsonl
   history/<YYYY-MM>.jsonl
   gates/<YYYY-MM>.jsonl
-  days/<YYYY>.jsonl
+  days/<YYYY-MM>.jsonl
 ```
 
 - `<machine_id>` is a UUID4, made at the first activation and kept in `<log_dir>/sync/machine_id` (mode 0600). A
   folder whose name is not a UUID4 is not read.
 - `requests/<YYYY-MM>/<session_id>.jsonl`, `history/<YYYY-MM>.jsonl` and `gates/<YYYY-MM>.jsonl` are named after the
-  month of the line's `t` in UTC, `days/<YYYY>.jsonl` after the year of its `day`. No file name has a colon; times are
-  only in the lines.
-- Every `.jsonl` file is UTF-8 with one record per line and is only appended to. `machine.json` is written once,
-  `status.json` is the only file that is overwritten, and only by its own machine. Old request months are compacted (see
-  below).
+  month of the line's `t` in UTC, `days/<YYYY-MM>.jsonl` after the month of its `day`. No file name has a colon; times
+  are only in the lines.
+- Every `.jsonl` file is UTF-8 with one record per line and is only appended to. `status.json` and `machine.json` are
+  the only files that are overwritten, and only by their own machine: `status.json` on every push, `machine.json` only
+  when `name` or `platform` changed (it keeps its `created`). Old request months are compacted (see below).
 - Times are UTC in the form `2026-10-13T12:30:00Z`, with three decimals of a second where the transcript has them
   (`2026-10-13T12:30:00.250Z`).
 
@@ -375,7 +375,7 @@ Every line and file has `v`, the version of its format (now `1`). A reader skips
 | Field | Meaning |
 |---|---|
 | `v` | The version of the format, `1`. |
-| `name` | The name of the machine: `sync.machine_name`, or `machine-` and the first 6 characters of its id if that is empty. The host name is never used. |
+| `name` | The name of the machine: `sync.machine_name`, or `machine-` and the first 6 characters of its id if that is empty. The host name is never used. A changed name rewrites `machine.json`. |
 | `platform` | `linux`, `darwin` or `windows`. |
 | `schema` | The version of the line formats the machine writes (now `1`), in both files. |
 | `created` | When the machine first wrote to the repository. |
@@ -405,8 +405,8 @@ with the same `k`: a reader keeps, per `k`, the line it read last.
 
 - `plain` (the default): the folder name as the local report shows it. Everyone in the private repository sees the
   project names.
-- `alias`: the entry of the folder in `sync.project_aliases`; a folder without one becomes `unbenannt-` and the first 8
-  hex characters of SHA-256 of its name.
+- `alias`: the entry of the folder in `sync.project_aliases`, looked up by the folder name as it is, then as the report
+  shows it; a folder without one becomes `unbenannt-` and the first 8 hex characters of SHA-256 of its name.
 - `hash`: `p-` and the first 12 hex characters of SHA-256 of `sync.label_salt`, a line break and the folder name.
   Without a salt the export stops with the error category `internal`; it never falls back to `plain`.
 
@@ -414,12 +414,12 @@ with the same `k`: a reader keeps, per `k`, the line it read last.
 
 | Field | Meaning |
 |---|---|
-| `five`, `week`, `five_resets`, `week_resets` | `history/`: one measurement, as in `usage-history.jsonl` (see `subscription`): the 5h and weekly percentage and their reset times in Unix seconds, each `null` if unknown; with `v` and `t`. |
+| `five`, `week`, `five_resets`, `week_resets` | `history/`: one measurement, as in `usage-history.jsonl` (see `subscription`): the 5h and weekly percentage and their reset times in Unix seconds, each `null` if unknown, never negative; with `v` and `t`. |
 | `hook` | `gates/`: the gate, `spawn_gate` or `soft_stop`; with `v` and `t` (the time of the decision). |
-| `decision` | `gates/`: `allow`, `warn`, `ask`, `deny` as the local log has it (`other` for anything else). |
-| `mode` | `gates/`: `shadow` or `enforce` (`unknown` if the log does not say). |
+| `decision` | `gates/`: the decision as the local log names it, read the way the local report reads it: `allow`, `warn`, `ask`, `deny`, and `error` for a soft stop that failed; `other` if the log holds no lower-case word of at most 20 letters. |
+| `mode` | `gates/`: the mode as the local log names it, `shadow` or `enforce`; `unknown` if the log holds no lower-case word. |
 | `reason` | `gates/`: the text of the local log line before its first colon, quoted parts as `…`, percentages as `N %`, other characters outside a small set as `?`, at most 60 characters. The question of the ask dialog, which names the agent, is written as `7-day window at N %`. Never more than the local log holds. |
-| `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl` as they are: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). |
+| `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl` as they are: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). `sync_format.py` checks only the envelope (`v`, `day`, `stats` an object); the report checks the figures in `stats` with the rules of its day archive before it uses them. |
 
 ### What is never written
 
@@ -429,26 +429,30 @@ of CLAUDE.md, skills or agents. A value that does not fit the format stops the e
 
 ### Reading
 
-Everything below `machines/` counts as foreign data. A reader takes only regular files (checked with `lstat`) with names
-of the layout, at most 8 MB per file, and never a path outside the repository folder. It never runs anything and
-ignores executable bits. What it skips it counts:
+Everything below `machines/` counts as foreign data. A reader takes only regular files (checked with `lstat`) with a
+single link and names of the layout, at most 8 MB per file, and never a path outside the repository folder. A line
+must lie in the file of its month (`t`, or `day` for a day line). It never runs anything and ignores executable bits.
+What it skips it counts:
 
 | Counter | What was skipped |
 |---|---|
 | `symlinks` | A link, as a file or as a folder. |
-| `oversized` | A file larger than 8 MB. |
-| `irregular` | Anything that is neither a regular file nor a folder (a named pipe, a device), or a file that changed while it was read. |
+| `hardlinks` | A file with more than one hard link (it could be shared with a file outside the repository; git never makes one). |
+| `oversized` | A file larger than 8 MB, also one that grew past 8 MB while it was read. |
+| `irregular` | Anything that is neither a regular file nor a folder (a named pipe, a device), also a file that turned into one after it was checked. |
 | `bad_names` | A file or folder whose name is not one of the layout, or that resolves outside the repository folder. |
 | `unreadable` | A file or folder that could not be opened. |
 | `unknown_version` | A line or file with another `v`. |
 | `broken_lines` | A line or file that is not UTF-8 JSON or does not fit its format. |
+| `misplaced` | A line in the file of another month: a request, measurement or gate line whose `t`, or a day line whose `day`, is not in the month the file or folder is named after. |
 
 ### Compacting (`sync.keep_request_months`)
 
 A machine removes month folders `requests/<YYYY-MM>/` from its own folder once they are older than
-`sync.keep_request_months` full months (default 3; with 3, in October the months up to June go, July to September and
-October stay), as a commit in the checked-out repository. A month goes only if, for every local day on which it has
-requests, a day line lies in `days/`; if one is missing, or anything in the month could not be read, it stays. The day
+`sync.keep_request_months` full months (default 3, at least 1; with 3, in October the months up to June go, July to
+September and October stay), as a commit in the checked-out repository. A month goes only if, for every local day on
+which it has requests, a day line lies in the file of its month in `days/`; if one is missing, or anything in the month
+could not be read or lies in the wrong month, it stays. The day
 lines stay. A compacted month therefore has, in a report, only the local split of each machine from its day line, no
 split across machines. The git history is never rewritten.
 

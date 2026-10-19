@@ -3,23 +3,26 @@
 Below the root of a checked-out sync repository every machine has one folder of its own:
 
     machines/<machine_id>/
-      machine.json                              written once: v, name, platform, schema, created
-      status.json                               the only file that is overwritten, by its own machine only
+      machine.json                              v, name, platform, schema, created; rewritten if name or platform change
+      status.json                               v, last_success, tool_version, schema; rewritten on every push
       requests/<YYYY-MM>/<session_id>.jsonl     one line per request (month of `t`, UTC)
       history/<YYYY-MM>.jsonl                   the measurement history (month of `t`, UTC)
       gates/<YYYY-MM>.jsonl                     the decisions of the two gates (month of `t`, UTC)
-      days/<YYYY>.jsonl                         the lines of the day archive, as they are (year of `day`)
+      days/<YYYY-MM>.jsonl                      the lines of the day archive, as they are (month of `day`)
 
 No file name has a colon; times are in the lines only. Every `.jsonl` file is UTF-8, one record per line, appended
-to only; the one exception is `compact`, which removes old request months of the own machine.
+to only; the one exception is `compact`, which removes old request months of the own machine. Only the own machine
+writes its folder, and only machine.json and status.json are ever overwritten.
 
 Writing is an allowlist: `encode` keeps the fields of the format and drops every other one, and checks each value
 (a value that does not fit raises `FormatError`, category `internal`). No prompt, message text, command, path, file
 name, host name, raw message or request id and no content of CLAUDE.md, skills or agents can pass.
 
 Reading treats everything below `machines/` as foreign data: only regular files (checked with `lstat`, links are
-skipped), at most `MAX_FILE_BYTES` per file, only names of the layout, never a path outside the root. A line of
-another version or one that does not fit is skipped. Everything skipped is counted. Nothing read is ever run.
+skipped) with one link, at most `MAX_FILE_BYTES` per file, only names of the layout, never a path outside the root. A
+line of another version, one that does not fit, or one outside the month of its file is skipped. Everything skipped is
+counted. Nothing read is ever run. Of a day line only the envelope (`v`, `day`, `stats` an object) is checked: the
+report checks the figures in `stats` with the rules of its day archive.
 
 Pure file work: no git, no network. Committing is the job of sync.py.
 """
@@ -51,7 +54,6 @@ ID_FILE = os.path.join('sync', 'machine_id')      # below the log folder
 MACHINE_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
 SESSION_ID = re.compile(r'[A-Za-z0-9_-]{1,128}')
 MONTH = re.compile(r'[0-9]{4}-(?:0[1-9]|1[0-2])')
-YEAR = re.compile(r'[0-9]{4}')
 DAY = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}')
 TIME = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3}|\.[0-9]{6})?Z')
 KEY = re.compile(r'[0-9a-f]{16}')
@@ -75,7 +77,8 @@ QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')
 WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % · ')     # the ask question names the agent: never synced
 WEEK_KIND = '7-day window at N %'
 
-COUNTERS = ('symlinks', 'oversized', 'irregular', 'bad_names', 'unreadable', 'unknown_version', 'broken_lines')
+COUNTERS = ('symlinks', 'hardlinks', 'oversized', 'irregular', 'bad_names', 'unreadable', 'unknown_version',
+            'broken_lines', 'misplaced')
 
 
 class FormatError(ValueError):
@@ -151,7 +154,7 @@ def _optional(check: Check) -> Check:
 
 def _number(maximum: float) -> Check:
     def check(value: object, name: str) -> object:
-        if value is None or (_is_number(value) and math.isfinite(value) and abs(value) <= maximum):
+        if value is None or (_is_number(value) and math.isfinite(value) and 0 <= value <= maximum):
             return value
         raise FormatError(f'{name}: not a number')
     return check
@@ -220,6 +223,7 @@ def _clean(kind: str, values: object) -> dict:
 
 
 def _clean_day(values: dict) -> dict:
+    """The envelope of a day line. `stats` is only checked to be an object: its figures are checked by the report."""
     day, stats = values.get('day'), values.get('stats')
     if not isinstance(day, str) or not DAY.fullmatch(day):
         raise FormatError('day.day: not a day')
@@ -244,13 +248,14 @@ def encode(kind: str, values: dict) -> str:
 
 def encode_day(raw: str) -> str:
     """A line of the day archive (usage-days.jsonl) for `days/`: the line as it is if it has only `v`, `day` and
-    `stats`, else written again with only those three. FormatError if it is no archive line of version 1."""
+    `stats`, else written again with only those three. FormatError if it is no archive line of version 1. The
+    figures in `stats` are not checked here."""
     try:
         values = json.loads(raw)
     except (ValueError, RecursionError) as error:
         raise FormatError('day: not JSON') from error
-    if not isinstance(values, dict) or values.get('v') != VERSION or isinstance(values.get('v'), bool):
-        raise FormatError('day: not an archive line of version 1')
+    if not isinstance(values, dict) or type(values.get('v')) is not int or values['v'] != VERSION:
+        raise FormatError('day: not an archive line of version 1')      # not true, not 1.0
     record = _clean_day(values)
     text = raw.strip()
     if set(values) == set(DAY_FIELDS) and '\n' not in text and '\r' not in text:
@@ -260,7 +265,8 @@ def encode_day(raw: str) -> str:
 
 def decode(kind: str, raw: str | bytes) -> dict:
     """The record in one line or file of `kind` (also `day`), with only the fields of the format. UnknownVersion for
-    another `v`, FormatError for anything that does not fit (not UTF-8, not JSON, a missing or wrong field)."""
+    another `v`, FormatError for anything that does not fit (not UTF-8, not JSON, a missing or wrong field). Of a day
+    line only the envelope is checked: the report must check `stats` with the rules of its day archive."""
     try:
         text = raw.decode('utf-8') if isinstance(raw, bytes) else raw
         values = json.loads(text)
@@ -290,14 +296,15 @@ def folder_label(name: str) -> str:
 
 def project_label(folder: str, mode: str, aliases: dict, salt: str) -> str:
     """`proj` of a request after `sync.project_labels`. `plain`: the folder name as the report shows it; `alias`: its
-    entry in `sync.project_aliases`, else `unbenannt-` and 8 hex characters of SHA-256 of the folder name; `hash`: `p-`
-    and 12 hex characters of SHA-256 of salt, line break, folder name. `hash` without a salt raises FormatError
-    (category `internal`): the export stops, it never falls back to the plain name."""
-    folder = folder_label(folder)
+    entry in `sync.project_aliases` (looked up by the folder name as it is, then as the report shows it), else
+    `unbenannt-` and 8 hex characters of SHA-256 of the folder name; `hash`: `p-` and 12 hex characters of SHA-256 of
+    salt, line break, folder name. `hash` without a salt raises FormatError (category `internal`): the export stops,
+    it never falls back to the plain name."""
+    raw, folder = folder, folder_label(folder)
     if mode == 'plain':
         return folder
     if mode == 'alias':
-        alias = aliases.get(folder)
+        alias = aliases.get(raw) or aliases.get(folder)
         if isinstance(alias, str) and alias:
             return folder_label(alias)
         return 'unbenannt-' + hashlib.sha256(folder.encode('utf-8')).hexdigest()[:8]
@@ -309,14 +316,14 @@ def project_label(folder: str, mode: str, aliases: dict, salt: str) -> str:
 
 
 def gate_reason(reason: object) -> str:
-    """The reason of a gate line: the text of the local log before its first colon, quoted parts as `…`,
-    percentages as `N %`, other characters outside a small set as `?`, at most 60 characters. The question of the
-    ask dialog names the agent and becomes the kind the report gives it."""
+    """The reason of a gate line: quoted parts as `…` (first, so a colon inside quotes does not cut), then the text
+    before the first colon, percentages as `N %`, other characters outside a small set as `?`, at most 60 characters.
+    The question of the ask dialog names the agent and becomes the kind the report gives it."""
     if not isinstance(reason, str):
         return ''
     if WEEK_QUESTION.match(reason):
         return WEEK_KIND
-    prefix = PERCENT.sub('N %', QUOTED.sub('…', reason.split(':', 1)[0]))
+    prefix = PERCENT.sub('N %', QUOTED.sub('…', reason).split(':', 1)[0])
     return REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]
 
 
@@ -449,13 +456,13 @@ def gate_path(machine_id: str, t: str) -> str:
 
 
 def day_path(machine_id: str, day: str) -> str:
-    """The file of a day line: `days/<year of day>.jsonl`."""
+    """The file of a day line: `days/<month of day>.jsonl`."""
     _clean_day({'day': day, 'stats': {}})
-    return f'{machine_dir(machine_id)}/days/{day[:4]}.jsonl'
+    return f'{machine_dir(machine_id)}/days/{day[:7]}.jsonl'
 
 
 LAYOUT_LINES = re.compile(r'machines/(?P<id>[^/]+)/(?:requests/[0-9]{4}-[0-9]{2}/[A-Za-z0-9_-]{1,128}'
-                          r'|history/[0-9]{4}-[0-9]{2}|gates/[0-9]{4}-[0-9]{2}|days/[0-9]{4})\.jsonl')
+                          r'|(?:history|gates|days)/[0-9]{4}-[0-9]{2})\.jsonl')
 
 
 # --- Writing ------------------------------------------------------------------------------------------------------
@@ -528,23 +535,9 @@ def _write_new(path: str, data: bytes) -> None:
         os.close(descriptor)
 
 
-def write_machine(root: str, machine_id: str, values: dict) -> bool:
-    """Creates `machine.json` of the own machine from `values` (name, platform, schema, created). An existing file is
-    kept as it is (False): only status.json is ever overwritten."""
-    path = os.path.join(_folder(root, machine_dir(machine_id), True), 'machine.json')
-    data = encode('machine', values).encode('utf-8')
-    try:
-        _write_new(path, data)
-    except FileExistsError:
-        return False
-    return True
-
-
-def write_status(root: str, machine_id: str, values: dict) -> None:
-    """Replaces `status.json` of the own machine with `values` (last_success, tool_version, schema), atomically: a
-    temporary file next to it, then a rename. A link as status.json is replaced, never written through."""
-    path = os.path.join(_folder(root, machine_dir(machine_id), True), 'status.json')
-    data = encode('status', values).encode('utf-8')
+def _replace_file(path: str, data: bytes) -> None:
+    """Writes `path` atomically: a temporary file next to it, then a rename. A link as `path` is replaced, never
+    written through."""
     tmp = f'{path}.tmp.{os.getpid()}'
     try:
         os.unlink(tmp)      # a leftover, possibly a planted link: removed, never written through
@@ -559,6 +552,34 @@ def write_status(root: str, machine_id: str, values: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def write_machine(root: str, machine_id: str, values: dict) -> bool:
+    """Writes `machine.json` of the own machine from `values` (name, platform, schema, created): if it is missing,
+    or if its `name` or `platform` differ (a file that cannot be read counts as different); a rewritten file keeps
+    its `created`. True if written, False if the file was kept as it is. Atomic, like status.json."""
+    folder = _folder(root, machine_dir(machine_id), True)
+    path = os.path.join(folder, 'machine.json')
+    record = _clean('machine', values)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        known = None
+    else:
+        regular = stat.S_ISREG(info.st_mode)
+        known = _single(root, path, info, 'machine', dict.fromkeys(COUNTERS, 0)) if regular else None
+    if known is not None:
+        if (known['name'], known['platform']) == (record['name'], record['platform']):
+            return False
+        record['created'] = known['created']
+    _replace_file(path, (_dump(record) + '\n').encode('utf-8'))
+    return True
+
+
+def write_status(root: str, machine_id: str, values: dict) -> None:
+    """Replaces `status.json` of the own machine with `values` (last_success, tool_version, schema), atomically."""
+    path = os.path.join(_folder(root, machine_dir(machine_id), True), 'status.json')
+    _replace_file(path, encode('status', values).encode('utf-8'))
 
 
 # --- Reading ------------------------------------------------------------------------------------------------------
@@ -613,7 +634,8 @@ def _inside(root: str, path: str) -> bool:
 
 
 def _file_content(root: str, path: str, info: os.stat_result, skipped: dict[str, int]) -> bytes | None:
-    """The bytes of a regular file of at most MAX_FILE_BYTES inside `root`, else None (counted)."""
+    """The bytes of a regular file with one link and at most MAX_FILE_BYTES inside `root`, else None (counted). A
+    file with a second link could be shared with a file outside the repository; git never makes one."""
     if info.st_size > MAX_FILE_BYTES:
         skipped['oversized'] += 1
         return None
@@ -626,8 +648,12 @@ def _file_content(root: str, path: str, info: os.stat_result, skipped: dict[str,
         skipped['unreadable'] += 1
         return None
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        opened = os.fstat(descriptor)      # also on Windows the link count comes from the handle
+        if not stat.S_ISREG(opened.st_mode):
             skipped['irregular'] += 1      # replaced since the lstat
+            return None
+        if opened.st_nlink != 1:
+            skipped['hardlinks'] += 1
             return None
         chunks, size = [], 0
         while True:
@@ -647,18 +673,25 @@ def _file_content(root: str, path: str, info: os.stat_result, skipped: dict[str,
         os.close(descriptor)
 
 
-def _lines(root: str, path: str, info: os.stat_result, kind: str, skipped: dict[str, int]) -> list[dict]:
+def _lines(root: str, path: str, info: os.stat_result, kind: str, month: str, skipped: dict[str, int]) -> list[dict]:
+    """The records of a line file whose lines belong to `month`; a line of another month is counted as misplaced."""
     content = _file_content(root, path, info, skipped)
     records = []
     for raw in (content or b'').split(b'\n'):
         if not raw.strip():
             continue
         try:
-            records.append(decode(kind, raw))
+            record = decode(kind, raw)
         except UnknownVersion:
             skipped['unknown_version'] += 1
+            continue
         except FormatError:
             skipped['broken_lines'] += 1
+            continue
+        if record['day' if kind == 'day' else 't'][:7] != month:
+            skipped['misplaced'] += 1
+        else:
+            records.append(record)
     return records
 
 
@@ -679,13 +712,16 @@ def _single(root: str, path: str, info: os.stat_result, kind: str, skipped: dict
 KIND_OF = {'history': 'history', 'gates': 'gate', 'days': 'day'}
 
 
-def _line_files(root: str, folder: str, pattern: re.Pattern, kind: str, skipped: dict[str, int]) -> list[dict]:
+def _line_files(root: str, folder: str, pattern: re.Pattern, kind: str, skipped: dict[str, int],
+                month: str | None = None) -> list[dict]:
+    """The records of the `.jsonl` files in `folder` whose names fit `pattern`. Their lines belong to `month`, or
+    without it to the month the file is named after."""
     records = []
     for name, path, info in _entries(folder, skipped):
         if not (stat.S_ISREG(info.st_mode) and name.endswith('.jsonl') and pattern.fullmatch(name[:-6])):
             skipped['bad_names'] += 1
             continue
-        records += _lines(root, path, info, kind, skipped)
+        records += _lines(root, path, info, kind, month or name[:-6], skipped)
     return records
 
 
@@ -695,7 +731,7 @@ def _requests(root: str, folder: str, skipped: dict[str, int]) -> list[dict]:
         if not (stat.S_ISDIR(info.st_mode) and MONTH.fullmatch(month)):
             skipped['bad_names'] += 1
             continue
-        records += _line_files(root, path, SESSION_ID, 'request', skipped)
+        records += _line_files(root, path, SESSION_ID, 'request', skipped, month)
     return records
 
 
@@ -710,8 +746,7 @@ def read_machine(root: str, machine_id: str, skipped: dict[str, int]) -> Machine
         elif name == 'requests' and not is_file:
             machine.requests = _requests(root, path, skipped)
         elif name in KIND_OF and not is_file:
-            pattern = MONTH if name != 'days' else YEAR
-            setattr(machine, name, _line_files(root, path, pattern, KIND_OF[name], skipped))
+            setattr(machine, name, _line_files(root, path, MONTH, KIND_OF[name], skipped))
         else:
             skipped['bad_names'] += 1
     return machine
@@ -752,7 +787,10 @@ def _month_index(month: str) -> int:
 
 
 def old_months(root: str, machine_id: str, keep_months: int, now: float) -> list[str]:
-    """The months of `requests/` of the own machine that are older than `keep_months` full months (by UTC)."""
+    """The months of `requests/` of the own machine that are older than `keep_months` full months (by UTC).
+    `keep_months` below 1 raises FormatError: it would remove the month that just ended, or the current one."""
+    if type(keep_months) is not int or keep_months < 1:
+        raise FormatError('sync.keep_request_months: must be a whole number of at least 1')
     current = datetime.fromtimestamp(now, timezone.utc)
     limit = current.year * 12 + current.month - 1 - keep_months
     try:
@@ -765,17 +803,18 @@ def old_months(root: str, machine_id: str, keep_months: int, now: float) -> list
 
 def missing_days(root: str, machine_id: str, month: str) -> set[str] | None:
     """The local days with requests in `requests/<month>/` of the own machine that have no line in `days/`. None if
-    the month cannot be judged: anything in it was skipped (a link, a file too large, a line that is broken or of
-    another version), so a day could be missing unseen."""
+    the month cannot be judged: anything in it was skipped (a link, a file too large, a line that is broken, of
+    another version or of another month), so a day could be missing unseen. A day line outside the month of its file
+    covers nothing."""
     skipped = dict.fromkeys(COUNTERS, 0)
     base = machine_dir(machine_id)
     folder = _folder(root, f'{base}/requests/{_text(MONTH)(month, "month")}', False)
-    requests = _line_files(root, folder, SESSION_ID, 'request', skipped)
+    requests = _line_files(root, folder, SESSION_ID, 'request', skipped, month)
     if any(skipped.values()):
         return None
     days_folder = os.path.join(root, base, 'days')
     if os.path.isdir(days_folder) and not os.path.islink(days_folder):
-        days = _line_files(root, days_folder, YEAR, 'day', dict.fromkeys(COUNTERS, 0))
+        days = _line_files(root, days_folder, MONTH, 'day', dict.fromkeys(COUNTERS, 0))
     else:
         days = []
     covered = {record['day'] for record in days}

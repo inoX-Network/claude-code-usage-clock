@@ -16,11 +16,13 @@ OWN = '0b1c2d3e-4f50-4a6b-8c7d-8e9fa0b1c2d3'
 OTHER = '11111111-2222-4333-8444-555555555555'
 SESSION = 'aaaaaaaa-0000-4000-8000-000000000001'
 NOW = 1_792_411_200     # 2026-10-19T12:00:00Z
+EIGHT_MB = 8 * 1024 * 1024      # the limit of the node as a fixed value: a changed constant turns the tests red
 
 REQUEST = {'t': '2026-10-13T12:30:00.250Z', 'k': sf.request_key('msg_01', 'req_01'), 'sid': SESSION, 'sub': None,
            'proj': 'webshop', 'model': 'claude-opus-5-5', 'in': 10, 'cw5': 20, 'cw1h': 30, 'cr': 40, 'out': 50,
            'think': 5, 'ws': None, 'wf': 1, 'first': True}
 HISTORY = {'t': '2026-10-13T12:30:00Z', 'five': 40, 'week': 61.5, 'five_resets': 1_768_399_200, 'week_resets': None}
+SEPTEMBER = dict(HISTORY, t='2026-09-13T12:30:00Z')
 GATE = {'t': '2026-10-13T12:31:00Z', 'hook': 'soft_stop', 'decision': 'deny', 'mode': 'enforce',
         'reason': 'checkpoint due'}
 MACHINE = {'name': 'laptop', 'platform': 'linux', 'schema': 1, 'created': '2026-10-01T08:00:00Z'}
@@ -125,7 +127,8 @@ def test_a_day_line_spread_over_lines_is_written_as_one_line():
     ('request', {'t': '2026-10-13T12:30:00+00:00'}),
     ('request', {'t': '2026-02-30T12:00:00Z'}), ('request', {'t': 1_760_000_000}), ('history', {'five': float('nan')}),
     ('history', {'week': float('inf')}), ('history', {'five': True}), ('history', {'five': '40'}),
-    ('history', {'week_resets': 5_000_000_000}), ('gate', {'hook': 'usage_clock'}), ('gate', {'decision': 'Deny!'}),
+    ('history', {'week_resets': 5_000_000_000}), ('history', {'five': -1}), ('history', {'week_resets': -5}),
+    ('gate', {'hook': 'usage_clock'}), ('gate', {'decision': 'Deny!'}),
     ('gate', {'mode': ''}), ('gate', {'reason': 'a: b'}), ('gate', {'reason': 'x' * 61}), ('machine', {'name': ''}),
     ('machine', {'name': 'a\nb'}), ('machine', {'name': 'host/name'}), ('machine', {'platform': 'freebsd'}),
     ('machine', {'schema': 0}), ('machine', {'schema': True}), ('status', {'tool_version': '1.6.0 beta'}),
@@ -162,7 +165,8 @@ def test_a_record_that_is_not_an_object_is_refused():
 
 
 @pytest.mark.parametrize('raw', ['not json', '[1]', '{"v":2,"day":"2026-10-12","stats":{}}',
-                                 '{"v":true,"day":"2026-10-12","stats":{}}', '{"day":"2026-10-12","stats":{}}',
+                                 '{"v":true,"day":"2026-10-12","stats":{}}', '{"v":1.0,"day":"2026-10-12","stats":{}}',
+                                 '{"day":"2026-10-12","stats":{}}',
                                  '{"v":1,"day":"2026-13-01","stats":{}}', '{"v":1,"day":"12.10.2026","stats":{}}',
                                  '{"v":1,"day":20261012,"stats":{}}', '{"v":1,"day":"2026-10-12","stats":[]}'])
 def test_a_line_that_is_no_archive_line_of_version_1_is_refused_as_day_line(raw):
@@ -187,8 +191,10 @@ def test_plain_labels_are_the_folder_name_as_the_report_shows_it():
 
 def test_alias_labels_come_from_the_aliases_or_are_unnamed_with_a_hash():
     import hashlib
-    aliases = {'webshop': 'shop', 'blank': '', 'odd': 'a/b'}
+    aliases = {'webshop': 'shop', 'blank': '', 'odd': 'a/b', 'Projekt (alt)': 'old', 'x?y': 'cleaned'}
     assert sf.project_label('webshop', 'alias', aliases, '') == 'shop'
+    assert sf.project_label('Projekt (alt)', 'alias', aliases, '') == 'old'      # the name as it is comes first
+    assert sf.project_label('x/y', 'alias', aliases, '') == 'cleaned'           # then as the report shows it
     assert sf.project_label('odd', 'alias', aliases, '') == 'a?b'
     for folder in ('secret-client', 'blank'):
         assert sf.project_label(folder, 'alias', aliases, '') == \
@@ -219,6 +225,7 @@ def test_an_unknown_label_mode_is_refused():
     ('checkpoint due: write it to /home/me/agent-checkpoints/x.md', 'checkpoint due'),
     ('5h window at 78.5 %: no new blocks', '5h window at N %'),
     ('agent "stripe-meister" has no effort', 'agent … has no effort'),
+    ('agent "a:b" missing: details', 'agent … missing'),
     ('WEEK 92 % · start stripe-meister?', '7-day window at N %'),
     ('WOCHE 92 % · stripe-meister starten?', '7-day window at N %'),
     ('odd <chars> & more', 'odd ?chars? ? more'),
@@ -344,7 +351,7 @@ def test_the_paths_of_the_layout():
     assert sf.request_path(OWN, '2026-10-31T23:59:59Z', SESSION) == f'{base}/requests/2026-10/{SESSION}.jsonl'
     assert sf.history_path(OWN, '2026-11-01T00:00:00Z') == f'{base}/history/2026-11.jsonl'
     assert sf.gate_path(OWN, '2026-01-05T00:00:00Z') == f'{base}/gates/2026-01.jsonl'
-    assert sf.day_path(OWN, '2026-12-31') == f'{base}/days/2026.jsonl'
+    assert sf.day_path(OWN, '2026-12-31') == f'{base}/days/2026-12.jsonl'
 
 
 @pytest.mark.parametrize('call', [
@@ -452,11 +459,42 @@ def test_a_folder_made_by_another_process_at_the_same_time_is_used(tmp_path, mon
     assert os.path.isfile(os.path.join(str(tmp_path), 'machines', OWN, 'history', '2026-10.jsonl'))
 
 
-def test_machine_json_is_written_once_and_never_overwritten(tmp_path):
+def test_machine_json_stays_as_it_is_while_name_and_platform_are_the_same(tmp_path):
     root = str(tmp_path)
     assert sf.write_machine(root, OWN, MACHINE) is True
-    assert sf.write_machine(root, OWN, dict(MACHINE, name='desktop')) is False
+    path = os.path.join(root, 'machines', OWN, 'machine.json')
+    before = os.stat(path)
+    assert sf.write_machine(root, OWN, dict(MACHINE, created='2026-10-19T00:00:00Z', schema=2)) is False
+    assert os.stat(path).st_mtime_ns == before.st_mtime_ns
     assert sf.read_repo(root).machines[OWN].machine == record('machine')
+
+
+@pytest.mark.parametrize('changes', [{'name': 'desktop'}, {'platform': 'windows'}])
+def test_machine_json_is_rewritten_when_name_or_platform_change_and_keeps_created(tmp_path, changes):
+    root = str(tmp_path)
+    sf.write_machine(root, OWN, MACHINE)
+    assert sf.write_machine(root, OWN, dict(MACHINE, created='2026-10-19T00:00:00Z', **changes)) is True
+    assert sf.read_repo(root).machines[OWN].machine == record('machine', **changes)
+    assert os.listdir(os.path.join(root, 'machines', OWN)) == ['machine.json']
+
+
+def test_a_machine_json_that_cannot_be_read_is_rewritten(tmp_path):
+    root = str(tmp_path)
+    machine_file(root, OWN, 'machine.json', '{"v":1,')
+    assert sf.write_machine(root, OWN, MACHINE) is True
+    assert sf.read_repo(root).machines[OWN].machine == record('machine')
+
+
+@pytest.mark.posix_only
+def test_a_link_as_machine_json_is_replaced_never_written_through(tmp_path):
+    root = str(tmp_path / 'repo')
+    target = write_file(str(tmp_path / 'outside.json'), sf.encode('machine', dict(MACHINE, name='other')))
+    os.makedirs(os.path.join(root, 'machines', OWN))
+    os.symlink(target, os.path.join(root, 'machines', OWN, 'machine.json'))
+    assert sf.write_machine(root, OWN, MACHINE) is True
+    assert not os.path.islink(os.path.join(root, 'machines', OWN, 'machine.json'))
+    with open(target, encoding='utf-8') as f:
+        assert json.loads(f.read())['name'] == 'other'
 
 
 def test_status_json_is_replaced_and_a_leftover_temporary_file_removed(tmp_path):
@@ -504,13 +542,13 @@ def test_the_reader_skips_the_own_machine_and_a_missing_repository_is_empty(tmp_
 def test_the_reader_skips_and_counts_a_symlink(tmp_path):
     root = str(tmp_path / 'repo')
     outside = write_file(str(tmp_path / 'outside.jsonl'), sf.encode('history', HISTORY))
-    machine_file(root, OTHER, 'history/2026-09.jsonl', sf.encode('history', HISTORY))
+    machine_file(root, OTHER, 'history/2026-09.jsonl', sf.encode('history', SEPTEMBER))
     os.symlink(outside, os.path.join(root, 'machines', OTHER, 'history', '2026-10.jsonl'))
     os.symlink(os.path.dirname(outside), os.path.join(root, 'machines', OTHER, 'gates'))
     os.symlink(os.path.dirname(outside), os.path.join(root, 'machines', OWN))
     repo = sf.read_repo(root)
     assert repo.skipped['symlinks'] == 3
-    assert list(repo.machines) == [OTHER] and repo.machines[OTHER].history == [record('history')]
+    assert list(repo.machines) == [OTHER] and repo.machines[OTHER].history == [record('history', **SEPTEMBER)]
 
 
 @pytest.mark.posix_only
@@ -527,19 +565,19 @@ def test_the_reader_skips_and_counts_a_file_over_8_mb(tmp_path):
     root = str(tmp_path)
     path = machine_file(root, OTHER, 'history/2026-10.jsonl', sf.encode('history', HISTORY))
     with open(path, 'r+b') as f:
-        f.truncate(sf.MAX_FILE_BYTES + 1)
-    machine_file(root, OTHER, 'history/2026-09.jsonl', sf.encode('history', HISTORY))
+        f.truncate(EIGHT_MB + 1)
+    machine_file(root, OTHER, 'history/2026-09.jsonl', sf.encode('history', SEPTEMBER))
     status = machine_file(root, OTHER, 'status.json', sf.encode('status', STATUS))
     with open(status, 'r+b') as f:
-        f.truncate(sf.MAX_FILE_BYTES + 1)
+        f.truncate(EIGHT_MB + 1)
     repo = sf.read_repo(root)
-    assert repo.skipped['oversized'] == 2 and repo.machines[OTHER].history == [record('history')]
+    assert repo.skipped['oversized'] == 2 and repo.machines[OTHER].history == [record('history', **SEPTEMBER)]
     assert repo.machines[OTHER].status is None
 
 
 def test_a_file_of_exactly_8_mb_is_read(tmp_path):
     line = sf.encode('history', HISTORY).encode('utf-8')
-    content = line + b' ' * (sf.MAX_FILE_BYTES - len(line))
+    content = line + b' ' * (EIGHT_MB - len(line))
     machine_file(str(tmp_path), OTHER, 'history/2026-10.jsonl', content)
     repo = sf.read_repo(str(tmp_path))
     assert repo.skipped['oversized'] == 0 and repo.machines[OTHER].history == [record('history')]
@@ -618,7 +656,7 @@ def test_the_reader_counts_folders_and_files_it_cannot_read(tmp_path, monkeypatc
     root = str(tmp_path)
     machine_file(root, OTHER, 'history/2026-10.jsonl', sf.encode('history', HISTORY))
     machine_file(root, OTHER, 'gates/2026-10.jsonl', sf.encode('gate', GATE))
-    machine_file(root, OTHER, 'days/2026.jsonl', sf.encode_day(DAY))
+    machine_file(root, OTHER, 'days/2026-10.jsonl', sf.encode_day(DAY))
     real_listdir, real_lstat, real_open = os.listdir, os.lstat, os.open
 
     def listdir(path):
@@ -632,7 +670,7 @@ def test_the_reader_counts_folders_and_files_it_cannot_read(tmp_path, monkeypatc
         return real_lstat(path, *args, **kwargs)
 
     def open_(path, *args, **kwargs):
-        if str(path).endswith('2026.jsonl'):
+        if str(path).endswith(os.path.join('days', '2026-10.jsonl')):
             raise PermissionError(path)
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(sf.os, 'listdir', listdir)
@@ -658,7 +696,7 @@ def test_the_reader_never_reads_a_file_that_resolves_outside_the_root(tmp_path, 
 def test_a_file_that_changed_after_its_lstat_is_skipped(tmp_path, monkeypatch):
     skipped = dict.fromkeys(sf.COUNTERS, 0)
     small = write_file(str(tmp_path / 'small.jsonl'), 'x')
-    big = write_file(str(tmp_path / 'big.jsonl'), b'x' * (sf.MAX_FILE_BYTES + 1))
+    big = write_file(str(tmp_path / 'big.jsonl'), b'x' * (EIGHT_MB + 1))
     folder = str(tmp_path / 'folder')
     os.makedirs(folder)
     info = os.lstat(small)
@@ -699,8 +737,17 @@ def requests_in(root, machine_id, days, session=SESSION):
 
 
 def day_lines(root, machine_id, days):
-    sf.append(root, machine_id, sf.day_path(machine_id, days[0]),
-              [sf.encode_day(json.dumps({'v': 1, 'day': day, 'stats': {'requests': 1}})) for day in days])
+    for day in days:
+        sf.append(root, machine_id, sf.day_path(machine_id, day),
+                  [sf.encode_day(json.dumps({'v': 1, 'day': day, 'stats': {'requests': 1}}))])
+
+
+def folder_content(folder):
+    content = {}
+    for name in sorted(os.listdir(folder)):
+        with open(os.path.join(folder, name), 'rb') as f:
+            content[name] = f.read()
+    return content
 
 
 def month_folders(root, machine_id):
@@ -714,16 +761,15 @@ def test_compacting_removes_only_own_months_beyond_the_limit_and_keeps_every_day
     for machine_id in (OWN, OTHER):
         requests_in(root, machine_id, days)
         day_lines(root, machine_id, days[:-1])
-    days_file = os.path.join(root, 'machines', OWN, 'days', '2026.jsonl')
-    with open(days_file, 'rb') as f:
-        before = f.read()
+    days_folder = os.path.join(root, 'machines', OWN, 'days')
+    before = folder_content(days_folder)
+    assert sorted(before) == ['2026-05.jsonl', '2026-06.jsonl', '2026-07.jsonl', '2026-09.jsonl']
     assert sf.old_months(root, OWN, 3, NOW) == ['2026-05', '2026-06']
     assert sf.compactable_months(root, OWN, 3, NOW) == ['2026-05', '2026-06']
     assert sf.compact(root, OWN, 3, NOW) == ['2026-05', '2026-06']
     assert month_folders(root, OWN) == ['2026-07', '2026-09', '2026-10']
     assert month_folders(root, OTHER) == ['2026-05', '2026-06', '2026-07', '2026-09', '2026-10']
-    with open(days_file, 'rb') as f:
-        assert f.read() == before
+    assert folder_content(days_folder) == before
     assert sf.compact(root, OWN, 3, NOW) == []
 
 
@@ -857,7 +903,7 @@ def test_the_report_format_describes_every_field_and_file_of_the_sync_repository
     fields = {name for kind in sf.FIELDS.values() for name in kind} | {'v', 'day', 'stats'}
     assert fields - described == set()
     layout = {'machine.json', 'status.json', 'requests/<YYYY-MM>/<session_id>.jsonl', 'history/<YYYY-MM>.jsonl',
-              'gates/<YYYY-MM>.jsonl', 'days/<YYYY>.jsonl', 'sync.project_labels', 'sync.keep_request_months'}
+              'gates/<YYYY-MM>.jsonl', 'days/<YYYY-MM>.jsonl', 'sync.project_labels', 'sync.keep_request_months'}
     assert layout - described == set()
     for counter in sf.COUNTERS:
         assert f'`{counter}`' in section
@@ -866,3 +912,61 @@ def test_the_report_format_describes_every_field_and_file_of_the_sync_repository
 def test_the_architecture_names_the_module():
     with open(os.path.join(ROOT, 'docs', 'architecture.md'), encoding='utf-8') as f:
         assert 'sync_format.py' in f.read()
+
+
+# --- Knoten v4: hard links, lines outside their month, the limit of keep_request_months ---------------------------
+
+def test_the_reader_skips_and_counts_a_file_with_a_second_link(tmp_path):
+    root = str(tmp_path / 'repo')
+    outside = write_file(str(tmp_path / 'outside.jsonl'), sf.encode('history', HISTORY))
+    folder = os.path.join(root, 'machines', OTHER, 'history')
+    os.makedirs(folder)
+    os.link(outside, os.path.join(folder, '2026-10.jsonl'))
+    repo = sf.read_repo(root)
+    assert repo.skipped['hardlinks'] == 1 and repo.machines[OTHER].history == []
+
+
+def test_the_reader_skips_and_counts_lines_outside_the_month_of_their_file(tmp_path):
+    root = str(tmp_path)
+    machine_file(root, OTHER, f'requests/2026-10/{SESSION}.jsonl',
+                 sf.encode('request', REQUEST) + sf.encode('request', dict(REQUEST, t='2026-09-30T23:59:59Z')))
+    machine_file(root, OTHER, 'history/2026-10.jsonl',
+                 sf.encode('history', HISTORY) + sf.encode('history', dict(HISTORY, t='2026-11-01T00:00:00Z')))
+    machine_file(root, OTHER, 'gates/2026-09.jsonl', sf.encode('gate', GATE))
+    machine_file(root, OTHER, 'days/2026-10.jsonl', sf.encode_day(DAY) + sf.encode_day(DAY.replace('10-12', '09-12')))
+    repo = sf.read_repo(root)
+    machine = repo.machines[OTHER]
+    assert repo.skipped['misplaced'] == 4
+    assert (machine.requests, machine.history, machine.gates) == ([record('request')], [record('history')], [])
+    assert machine.days == [json.loads(DAY)]
+
+
+def test_a_day_line_outside_the_month_of_its_file_covers_nothing(tmp_path):
+    root = str(tmp_path)
+    requests_in(root, OWN, ['2026-05-10'])
+    sf.append(root, OWN, sf.day_path(OWN, '2026-06-01'),
+              [sf.encode_day('{"v":1,"day":"2026-05-10","stats":{}}')])
+    assert sf.missing_days(root, OWN, '2026-05') == {'2026-05-10'}
+    assert sf.compact(root, OWN, 3, NOW) == []
+
+
+def test_a_month_with_a_request_line_of_another_month_stays(tmp_path):
+    root = str(tmp_path)
+    requests_in(root, OWN, ['2026-05-10'])
+    day_lines(root, OWN, ['2026-05-10', '2026-06-10'])
+    sf.append(root, OWN, sf.request_path(OWN, '2026-05-11T12:00:00Z', 'b'),
+              [sf.encode('request', request('2026-06-10T12:00:00Z', 'f' * 16, 'b'))])
+    assert sf.missing_days(root, OWN, '2026-05') is None
+    assert sf.compact(root, OWN, 3, NOW) == []
+
+
+@pytest.mark.parametrize('keep', [0, -1, 2.0, True, None])
+def test_compacting_refuses_a_limit_below_one_full_month(tmp_path, keep):
+    root = str(tmp_path)
+    requests_in(root, OWN, ['2026-09-10', '2026-10-01'])
+    day_lines(root, OWN, ['2026-09-10', '2026-10-01'])
+    for call in (sf.old_months, sf.compactable_months, sf.compact):
+        with pytest.raises(sf.FormatError) as error:
+            call(root, OWN, keep, NOW)
+        assert error.value.category == 'internal'
+    assert month_folders(root, OWN) == ['2026-09', '2026-10']
