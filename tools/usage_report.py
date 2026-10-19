@@ -50,6 +50,7 @@ import _config  # noqa: E402
 import _plat  # noqa: E402
 import _spawn_check  # noqa: E402
 import _sync_core  # noqa: E402
+import _sync_export  # noqa: E402
 import _sync_git  # noqa: E402
 import _transcripts  # noqa: E402
 import _usage  # noqa: E402
@@ -2046,21 +2047,22 @@ class Machines:
             days.setdefault(day, stats)
         self.days[key] = days
 
-    def merge_requests(self, local: list[_transcripts.Request]) -> list[tuple[_transcripts.Request, str, str | None]]:
+    def merge_requests(self, local: list[_transcripts.Request],
+                       projects_dir: str) -> list[tuple[_transcripts.Request, str, str | None]]:
         """(request, machine, project label of the clone or None) of the local requests and those of the clone,
         counted once by `k` after the reading rule of the format; of equal lines of one session the local one (read
-        last)."""
-        rows, keyless = list(self.requests), []
+        last). The `k` of a local request is the one the export makes: of message id and request id, for a line
+        without a message id of its transcript (below `projects_dir`) and its byte offset."""
+        rows = list(self.requests)
         for request in local:
-            if request.ids is None:
-                keyless.append(request)      # no message id: no `k` the export could have made the same
-                continue
+            first, second = request.ids
+            if first is None:
+                first = _sync_export.TRANSCRIPTS + os.path.relpath(request.source, projects_dir).replace(os.sep, '/')
             rows.append({'t': sync_format.iso_time(request.ts), 'sid': request.session, 'out': request.tokens[4],
-                         'k': sync_format.request_key(request.ids[0], request.ids[1] or ''), '_request': request,
+                         'k': sync_format.request_key(first, '' if second is None else str(second)), '_request': request,
                          '_machine': self.own})
-        winners = [(row.get('_request') or _clone_request(row), row['_machine'], row.get('proj'))
-                   for row in sync_format.latest_by_key(rows).values()]
-        return winners + [(request, self.own, None) for request in keyless]
+        return [(row.get('_request') or _clone_request(row), row['_machine'], row.get('proj'))
+                for row in sync_format.latest_by_key(rows).values()]
 
     def add_usage(self, stats: dict, lines: list[tuple[str, dict]], machine_of: dict[str, str]) -> dict:
         """`stats` with the usage of day lines that count beside the requests of other machines on their day: their
@@ -2485,7 +2487,7 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
         requests, fresh, data.files, data.unreadable_requests = _transcripts.read_transcripts(
             projects_dir, modified_since, want_usage_lines=start < first_history)
     if machines is not None:
-        winners = machines.merge_requests(requests)
+        winners = machines.merge_requests(requests, projects_dir)
         data.replaced = replaced_days(winners, lines or {}, whole or set())
         winners = [found for found in winners if (found[1], local_day(found[0].ts).isoformat()) not in data.replaced]
         requests = [request for request, _machine, _label in winners]

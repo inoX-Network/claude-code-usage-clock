@@ -10,6 +10,7 @@ import shutil
 import pytest
 
 import _sync_core
+import _sync_export
 import _sync_git
 import sync
 import sync_format
@@ -208,6 +209,17 @@ def test_of_two_lines_of_one_request_the_one_with_more_output_counts_wherever_it
     report = world.report('--day', '2026-10-13')
     assert report['total']['requests'] == 1 and report['total']['cost_usd'] == pytest.approx(3.0)
     assert by_id(report)['llllllll']['machine'] == 'laptop' and by_id(report)['llllllll']['label'] == 'proj-l'
+
+
+@pytest.mark.parametrize('message', [None, 'm-keyed'])
+def test_the_own_export_in_the_clone_adds_nothing_also_for_lines_without_a_message_id(world, synced, message):
+    world.transcript('-home-u-proj-a', 'dddddddd-1', [
+        req('2026-10-13T10:05:00Z', message, out=dollars(1.0)),
+        req('2026-10-13T10:06:00Z', message and message + '2', request='r2', out=dollars(1.0))])
+    before = world.report('--day', '2026-10-13', '--no-pull')
+    _sync_export.export(synced.clone.root, synced.log, report_module.load_config(None), str(world.projects), NOW)
+    after = world.report('--day', '2026-10-13', '--no-pull')
+    assert after['total'] == before['total'] and after['total']['requests'] == 2
 
 
 def test_lines_without_a_message_id_stay_requests_of_this_machine(world, synced):

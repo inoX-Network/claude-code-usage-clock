@@ -57,8 +57,13 @@ def test_the_folder_of_a_working_directory_is_its_last_part():
 def test_a_request_read_for_the_report_carries_the_ids_that_tell_it_apart(tmp_path):
     folder = tmp_path / 'p'
     folder.mkdir()
-    (folder / 's.jsonl').write_text('\n'.join([line('2026-10-13T08:00:00Z', 'm1', 'r1', 10),
-                                              line('2026-10-13T08:00:01Z', 'm2', None, 5),
-                                              line('2026-10-13T08:00:02Z', None, 'r3', 1)]) + '\n', encoding='utf-8')
+    lines = [line('2026-10-13T08:00:00Z', 'm1', 'r1', 10), line('2026-10-13T08:00:01Z', 'm2', None, 5),
+             line('2026-10-13T08:00:02Z', None, 'r3', 1)]
+    (folder / 's.jsonl').write_bytes(('\n'.join(lines) + '\n').encode('utf-8'))
     requests, _, _, _ = _transcripts.read_transcripts(str(tmp_path), 0, False)
-    assert sorted(r.ids or ('-',) for r in requests) == [('-',), ('m1', 'r1'), ('m2', None)]
+    offset = len(lines[0]) + len(lines[1]) + 2
+    assert sorted(r.ids for r in requests if r.ids[0]) == [('m1', 'r1'), ('m2', None)]
+    assert [r.ids for r in requests if r.ids[0] is None] == [(None, offset)]
+    # the export keys the line without a message id by the same offset
+    found, _, _ = _transcripts.read_requests_from(str(folder / 's.jsonl'), 0, 's', False)
+    assert (None, offset) in found
