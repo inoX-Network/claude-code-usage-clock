@@ -191,14 +191,14 @@ for (const surface of SURFACES) {
       // A card per session: the button with name and cost, the start and the counts under it
       expect(await texts(ui)).toMatch(/SESSIONS · HIGHEST COST FIRST/)
       expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/webshop aaaaaaaa\s+60 USD/)
-      expect((await ui.find({ key: 'card-aaaaaaaa' }))?.text).toMatch(/13 Oct \d\d:\d\d · 300 requests · cache 90 % · ~20\.0 week pts/)
+      expect((await ui.find({ key: 'card-aaaaaaaa' }))?.text).toMatch(/13 Oct \d\d:\d\d · 300 requests · cache 90 % · week: ~20\.0 pts/)
     }
     expect(await ui.find({ key: 'session-bbbbbbbb' })).toBeDefined()
 
     await ui.press({ key: 'session-aaaaaaaa' })
     const detail = await texts(ui)
     for (const pattern of [
-      /webshop aaaaaaaa · .* · 60 USD · ~20\.0 week pts, ~8\.0 5h pts/,
+      /webshop aaaaaaaa · .* · 60 USD · week: ~20\.0 pts · 5h: ~8\.0 pts/,
       /Context after the first answer: 63,000 tokens of 1,000,000 \(6 %\)/,
       /MCP tools\s+12,400/,
       /context7 \(2 tools\)\s+1,500/,

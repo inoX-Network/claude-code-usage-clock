@@ -2,7 +2,7 @@
 // in report.ts. Pure functions of the report, so that the tests need no engine; pane.tsx draws them. The terminal
 // keeps the text views.
 
-import { localTime, pct, pts, tone, tokens, usd, whole } from './report'
+import { estimate, localTime, measuredPts, pct, pts, tone, tokens, usd, whole } from './report'
 import type { Limits, Report, Tone, View } from './report'
 
 /** The colours of the tiles: a dark ground of their own, so they read the same in a light and a dark app. */
@@ -137,7 +137,7 @@ export function overviewTiles(report: Report, limits: Limits): OverviewTiles {
     kpis,
     projects: bars(projects.map(entry => {
       const amount = num(entry.cost_usd) ?? 0
-      return [str(entry.name) ?? '?', amount, `${usd(amount)} · ${pts(num(entry.week_points))}`]
+      return [str(entry.name) ?? '?', amount, `${usd(amount)} · ${measuredPts(num(entry.week_points), rec(entry.measured_share).week)}`]
     })),
     more: more === null ? null : `${num(more.projects) ?? '?'} more · ${usd(num(more.cost_usd))} USD · ${num(more.sessions) ?? '?'} sessions`,
     models: bars(list(rec(o.models).families).map(rec).map(family => {
@@ -198,7 +198,7 @@ function agentTiles(report: Report): Tile[] {
   return [
     { kind: 'kpis', key: 'split', kpis: [
       ...(main === null ? [] : [{ id: 'main', label: 'Main', value: usd(num(main.cost_usd)), unit: 'USD', lines: [
-        `${whole(num(main.requests))} requests`, `~${pts(num(main.week_points))} week · ~${pts(num(main.five_points))} 5h pts`,
+        `${whole(num(main.requests))} requests`, `week: ${estimate(num(main.week_points))} pts · 5h: ${estimate(num(main.five_points))} pts`,
       ] }]),
       { id: 'subagents', label: 'Subagents', value: usd(num(subagents.cost_usd)), unit: 'USD', lines: [
         `${whole(num(subagents.requests))} requests`, `${byType.length} type${byType.length === 1 ? '' : 's'}`,
@@ -268,7 +268,8 @@ function projectTiles(report: Report): Tile[] {
     kind: 'bars', key: 'projects', label: 'Projects · USD · share · ~week pts · sessions',
     bars: bars(entries.map((entry): [string, number, string] => [
       str(entry.name) ?? '?', num(entry.cost_usd) ?? 0,
-      `${usd(num(entry.cost_usd))} · ${pct(num(entry.share))} · ${pts(num(entry.week_points))} · ${whole(num(entry.sessions))}`,
+      `${usd(num(entry.cost_usd))} · ${pct(num(entry.share))} · ${measuredPts(num(entry.week_points), rec(entry.measured_share).week)}`
+        + ` · ${whole(num(entry.sessions))}`,
     ])),
     note: '~week pts is an estimate: a share of the measured rise, divided by cost.',
   }]
@@ -292,10 +293,11 @@ export function sessionTiles(report: Report, id: string): Tile[] {
   const cli = list(report.clis).map(rec).find(entry => str(entry.id) === id)
   if (cli === undefined) return [{ kind: 'note', key: 'gone', text: 'This session is not in the report any more. Press q for the list.' }]
   const share = rec(cli.estimated_share)
+  const measured = rec(cli.measured_share)
   const thinking = num(cli.thinking_share)
   const out: Tile[] = [
     { kind: 'kpis', key: 'figures', kpis: [
-      { id: 'cost', label: 'Cost', value: usd(num(cli.cost_usd)), unit: 'USD', lines: [`~${pts(num(share.week))} week · ~${pts(num(share.five))} 5h pts`] },
+      { id: 'cost', label: 'Cost', value: usd(num(cli.cost_usd)), unit: 'USD', lines: [`week: ${estimate(num(share.week), measured.week)} pts`, `5h: ${estimate(num(share.five), measured.five)} pts`] },
       { id: 'requests', label: 'Requests', value: whole(num(cli.requests)), unit: '', lines: [] },
       { id: 'cache', label: 'Cache', value: pct(num(cli.cache_hit_rate), 'n/a').replace(' %', ''), unit: num(cli.cache_hit_rate) === null ? '' : '% hits',
         lines: [`cold starts ${whole(num(cli.cold_starts))}`] },
@@ -366,7 +368,7 @@ export function sessionCards(report: Report, own: string | null): SessionCard[] 
         start === null ? null : localTime(start),
         `${num(cli.requests) ?? '-'} requests`,
         hits === null ? null : `cache ${pct(hits)}`,
-        `~${pts(num(rec(cli.estimated_share).week))} week pts`,
+        `week: ${estimate(num(rec(cli.estimated_share).week), rec(cli.measured_share).week)} pts`,
       ].filter(Boolean).join(' · '),
       isOwn: id === own,
     }

@@ -886,6 +886,40 @@ def test_the_rise_is_shared_by_cost_between_the_clis_and_a_section_without_reque
     assert 'points counted' in text and 'measured' not in text.split('Allocation')[1].split('Calibration')[0]
 
 
+def test_a_session_outside_every_counted_section_is_not_measured_rather_than_zero(world):
+    # a counted section 10:00-10:10 holds the request of a; the request of b lies in a gap of more than 60 minutes
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 14, 21),
+                   row('2026-10-13T12:00:00Z', 30, 30)])
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:05:00Z', 'a', 3.0)])
+    world.transcript('-home-u-proj-b', 'bbbbbbbb-2', [paid('2026-10-13T11:00:00Z', 'b', 5.0, cwd='/home/u/proj-b')])
+    data = world.report('--day', DAY)
+    clis = {c['id']: c for c in data['clis']}
+    assert clis['aaaaaaaa']['measured_share'] == {'five': pytest.approx(1.0), 'week': pytest.approx(1.0)}
+    assert clis['bbbbbbbb']['measured_share'] == {'five': 0, 'week': 0}
+    assert clis['bbbbbbbb']['estimated_share'] == {'five': 0, 'week': 0}
+    projects = {p['name']: p for p in data['overview']['projects']}
+    assert projects['proj-b']['measured_share'] == {'five': 0, 'week': 0}
+    assert projects['proj-a']['measured_share'] == {'five': pytest.approx(1.0), 'week': pytest.approx(1.0)}
+    # Not measured is '-', a measured 0 stays 0
+    text = world.text('--day', DAY)
+    block_b = text.split('bbbbbbbb')[1].splitlines()[0]
+    assert '- 5h points  - week points' in block_b
+    overview = world.overview('--day', DAY)
+    table = overview.split('Where it went')[1]
+    row_b = next(line for line in table.splitlines() if line.strip().startswith('proj-b'))
+    assert row_b.split()[-2] == '-'         # ~week pts, before the sessions
+
+
+def test_a_measured_zero_stays_zero(world):
+    world.history([row('2026-10-13T10:00:00Z', 10, 20), row('2026-10-13T10:10:00Z', 10, 20)])
+    world.transcript('-home-u-proj-a', 'aaaaaaaa-1', [paid('2026-10-13T10:05:00Z', 'a', 3.0)])
+    cli = world.report('--day', DAY)['clis'][0]
+    assert cli['estimated_share'] == {'five': 0, 'week': 0}
+    assert cli['measured_share'] == {'five': pytest.approx(1.0), 'week': pytest.approx(1.0)}
+    block = world.text('--day', DAY).split('aaaaaaaa')[1].splitlines()[0]
+    assert '0 5h points  0 week points' in block
+
+
 def test_attributed_and_unexplained_add_up_to_the_measured_rise(world):
     rows = [row(iso(T('2026-10-13T08:00:00Z') + i * 600), i * 2 % 17, i, None, None) for i in range(1, 40)]
     world.history(rows)
@@ -1588,7 +1622,7 @@ def test_the_json_has_a_fixed_set_of_sections(world):
                                   'web_fetches'}
     assert set(data['total']['subagents']) == {'requests', 'cost_usd', 'by_type'}
     assert set(data['clis'][0]) == {'id', 'label', 'start', 'requests', 'cost_usd', 'tokens', 'models', 'subagents',
-                                    'cache_hit_rate', 'cold_starts', 'estimated_share', 'thinking_tokens', 'thinking_share',
+                                    'cache_hit_rate', 'cold_starts', 'estimated_share', 'measured_share', 'thinking_tokens', 'thinking_share',
                                     'web_searches', 'web_fetches', 'context'}
     assert data['clis'][0]['context'] is None
     assert set(data['calibration']) == {'five', 'week'}
@@ -2240,7 +2274,7 @@ def test_the_overview_json_carries_the_same_numbers(world):
     assert view['more'] == {'projects': 2, 'cost_usd': pytest.approx(0.75), 'share': pytest.approx(0.75 / 100.486),
                             'week_points': pytest.approx(0.0667, abs=1e-3),
                             'five_points': pytest.approx(0.0667 * 2, abs=1e-2),
-                            'sessions': 2}
+                            'measured_share': {'five': pytest.approx(1.0), 'week': pytest.approx(1.0)}, 'sessions': 2}
     assert view['split']['main_usd'] == pytest.approx(75.486) and view['split']['subagents_usd'] == pytest.approx(25)
     assert view['split']['top_subagent'] == {'type': 'stripe-meister', 'cost_usd': pytest.approx(20),
                                              'week_points': pytest.approx(6.636, abs=1e-3)}
@@ -2925,9 +2959,9 @@ def test_a_share_of_exactly_one_percent_is_shown_as_one_percent(world):
     assert [row.split()[-4:-2] for row in rows] == [['99', '%'], ['1', '%']]
 
 
-def test_a_cli_without_any_estimated_points_has_no_tilde(world):
+def test_a_cli_without_any_measurement_shows_a_dash_not_zero(world):
     spend(world, ('2026-10-13T10:00:00Z', 2.0))
-    assert '  2.00 USD  1 requests  0 5h points  0 week points' in world.text('--day', DAY)
+    assert '  2.00 USD  1 requests  - 5h points  - week points' in world.text('--day', DAY)
 
 
 def test_exactly_one_unrecorded_decision_is_named(world):

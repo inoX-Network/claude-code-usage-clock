@@ -100,6 +100,15 @@ export const pct = (x: number | null, none = '-'): string =>
 /** Points of a limit, an estimate: `<1` is more than 0 and less than one point. */
 export const pts = (x: number | null): string => (x === null ? '-' : x === 0 ? '0' : x < 1 ? '<1' : x.toFixed(1))
 export const whole = (x: number | null): string => (x === null ? '-' : String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
+/** Points of a limit where the report says how much of the cost was measured (`measured_share`): `-` if none of it
+ *  lay in a counted section and so the points are not measured, not zero. A report without the field shows the figure. */
+export const measuredPts = (points: number | null, measured: unknown): string =>
+  num(measured) === 0 && (points ?? 0) === 0 ? '-' : pts(points)
+/** The same with `~` before a figure, as an estimate stands in running text; `0`, `<1` and `-` stay without. */
+export const estimate = (points: number | null, measured?: unknown): string => {
+  const text = measuredPts(points, measured)
+  return /^[\d.]+$/.test(text) && text !== '0' ? `~${text}` : text
+}
 /** A number with at most one decimal, without a trailing zero. */
 const plain = (x: number): string => String(Number(x.toFixed(1)))
 /** Tokens, with `k` for thousands from 10 000 on. */
@@ -157,7 +166,8 @@ const none = (text: string): Line[] => [{ text, style: 'dim' }]
 const PROJECT_HEAD = ['project', 'USD', 'share', '~week pts', 'sessions']
 
 function projectRow(name: string, entry: Record<string, unknown>): string[] {
-  return [name, usd(num(entry.cost_usd)), pct(num(entry.share)), pts(num(entry.week_points)), whole(num(entry.sessions))]
+  return [name, usd(num(entry.cost_usd)), pct(num(entry.share)), measuredPts(num(entry.week_points), rec(entry.measured_share).week),
+    whole(num(entry.sessions))]
 }
 
 function overview(report: Report, columns: number, limits: Limits): Line[] {
@@ -347,7 +357,7 @@ export function sessionList(report: Report, columns: number, own: string | null 
     `${indent(cli)}${str(cli.label) ?? '?'} ${str(cli.id)}`,
     str(cli.start) === null ? '-' : localTime(str(cli.start) as string),
     usd(num(cli.cost_usd)),
-    pts(num(rec(cli.estimated_share).week)),
+    measuredPts(num(rec(cli.estimated_share).week), rec(cli.measured_share).week),
     whole(num(cli.requests)),
   ])
   const [head, ...lines] = table([`${indent(null)}${SESSION_HEAD[0]}`, ...SESSION_HEAD.slice(1)], cells, columns)
@@ -421,11 +431,13 @@ export function sessionDetail(report: Report, id: string, columns: number, own: 
   const cli = list(report.clis).map(rec).find(entry => str(entry.id) === id)
   if (cli === undefined) return none('This session is not in the report any more. Press q for the list.')
   const share = rec(cli.estimated_share)
+  const measured = rec(cli.measured_share)
   const start = str(cli.start)
   const out: Line[] = [
     {
       text: `${str(cli.label) ?? '?'} ${id}${id === own ? ' · this session' : ''} · ${start === null ? '-' : localTime(start)}`
-        + ` · ${usd(num(cli.cost_usd))} USD · ~${pts(num(share.week))} week pts, ~${pts(num(share.five))} 5h pts`,
+        + ` · ${usd(num(cli.cost_usd))} USD · week: ${estimate(num(share.week), measured.week)} pts`
+        + ` · 5h: ${estimate(num(share.five), measured.five)} pts`,
       style: 'heading',
     },
     {

@@ -197,9 +197,9 @@ Measured unless it says estimate. The text overview is made of this object alone
 | `cost_usd` | The cost weight of the period, USD at API prices. |
 | `week` | `null` without a weekly measurement. Else `used_percent` (the weekly limit used at the end of the period, percent), `rise_points` (points it rose within the period, across weekly resets added up), `windows` (how many weekly windows the period touches) and `reset_at` (the weekly reset time of the last one in Unix seconds, or `null`). |
 | `five_hour` | `windows` (count of 5h windows with a measurement), `highest_percent` and `highest_at` (the highest peak and its time; `null` without windows). |
-| `projects` | Every project, highest cost first (ties by name): `name` (the whole folder name); `cost_usd`; `share` (part of the whole cost, 0 to 1, `null` if the whole cost is 0); `week_points` and `five_points` (estimates: the points of the weekly and of the 5h limit that fall to the project); `sessions` (count); `session_ids` (the 8-character ids, highest cost first); `cache_hit_rate` (0 to 1, `null` without input tokens). |
+| `projects` | Every project, highest cost first (ties by name): `name` (the whole folder name); `cost_usd`; `share` (part of the whole cost, 0 to 1, `null` if the whole cost is 0); `week_points` and `five_points` (estimates: the points of the weekly and of the 5h limit that fall to the project); `measured_share` (see `clis`, weighted by cost); `sessions` (count); `session_ids` (the 8-character ids, highest cost first); `cache_hit_rate` (0 to 1, `null` without input tokens). |
 | `max_projects` | How many projects the text shows as rows (5). |
-| `more` | `null`, or the sum of the projects beyond `max_projects`: `projects` (count), `cost_usd`, `share`, `week_points`, `five_points`, `sessions`. |
+| `more` | `null`, or the sum of the projects beyond `max_projects`: `projects` (count), `cost_usd`, `share`, `week_points`, `five_points`, `measured_share`, `sessions`. |
 | `split` | `main_usd` and `subagents_usd` (cost weight of the main sessions and of the subagents) and `top_subagent` (`type`, `cost_usd` and `week_points` (estimate, see `total`) of the subagent type with the highest cost, or `null`). |
 | `models` | `families`: a list of `name` (the first word of the model name in `tools/prices.json`, for example `Opus`) and `cost_usd`, highest first; `unpriced_requests`: how many requests had a model without a price (they are not in any USD figure). |
 | `thinking_share` | Part of the output that was thinking (0 to 1), among the requests that report it; `null` if none does. |
@@ -272,7 +272,10 @@ One entry per session, highest cost first. `id` (8 characters of the session id)
 `start` (time of its first request), `requests`, `cost_usd`, `tokens` (as in `total`), `models` (model name to
 cost in USD), `subagents` (agent type to `requests` and `cost_usd`), `cache_hit_rate`, `cold_starts`, `thinking_tokens`,
 `thinking_share`, `web_searches`, `web_fetches` (as in `total`), `estimated_share` with `five` and `week`: the
-**estimated** points of the 5h and of the weekly limit that fall to this session, and `context`: how the context of
+**estimated** points of the 5h and of the weekly limit that fall to this session, `measured_share` with `five` and
+`week`: the part of its cost (0 to 1, `null` at a cost of 0) that lay in a counted section of that limit (see
+`allocation`), so that `0` there means its points are **not measured**, not zero (the text then writes `-`), and
+`context`: how the context of
 the session was made up after its first answer, or `null` (see the next section).
 
 ### The context split (`clis[].context`)
