@@ -126,17 +126,21 @@ export function registerReport(on: On): void {
 
     // Every surface shows a plain Button's hotkey itself (the terminal as `b: `, the desktop beside the label). The
     // desktop draws its own native button and ignores the colours of the label inside, and its plain button has no
-    // fill: there the open tab sits on a plate of the accent colour with no room around it, so it reads as filled
+    // fill: there the open tab sits on a plate of the accent colour with no room around it, so it reads as filled. Its
+    // key, which would choose what is open already, is written into the label instead of the app's grey key box, so
+    // that it takes the colour of the text
     const isDesktop = e.surface === 'desktop'
+    const keyOf = (hotkey: string, isActive: boolean) => (isDesktop && isActive ? {} : { hotkey })
+    const keyText = (hotkey: string, isActive: boolean) => (isDesktop && isActive ? `${hotkey.toUpperCase()}  ` : '')
     const marked = (key: string, isActive: boolean, button: unknown) => (isDesktop && isActive
       ? <Box key={`tab-${key}`} backgroundColor={LOOK.accent} borderStyle="round" borderColor={LOOK.accent}>{button}</Box>
       : button)
     const viewTab = (id: View, hotkey: string, label: string) => {
       const isActive = id === state.view
       return marked(`view-${id}`, isActive,
-        <Button key={`view-${id}`} hotkey={hotkey} plain onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
+        <Button key={`view-${id}`} {...keyOf(hotkey, isActive)} plain onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
           {isActive
-            ? <Text key={`label-view-${id}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${label} `}</Text>
+            ? <Text key={`label-view-${id}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${keyText(hotkey, isActive)}${label} `}</Text>
             : <Text key={`label-view-${id}`}>{` ${label} `}</Text>}
         </Button>,
       )
@@ -144,9 +148,9 @@ export function registerReport(on: On): void {
     const periodTab = (id: Period, hotkey: string, label: string) => {
       const isActive = id === state.period
       return marked(`period-${id}`, isActive,
-        <Button key={`period-${id}`} hotkey={hotkey} plain onPress={choosePeriod(id)}>
+        <Button key={`period-${id}`} {...keyOf(hotkey, isActive)} plain onPress={choosePeriod(id)}>
           {isActive
-            ? <Text key={`label-period-${id}`} color="claude" weight="bold">{label}</Text>
+            ? <Text key={`label-period-${id}`} color="claude" weight="bold">{`${keyText(hotkey, isActive)}${label}`}</Text>
             : <Text key={`label-period-${id}`} dimColor>{label}</Text>}
         </Button>,
       )
