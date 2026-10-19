@@ -98,3 +98,19 @@ export const REPORT = {
     },
   ],
 }
+
+/** The same report with the sync: the session `aaaaaaaa` ran on the laptop, `bbbbbbbb` on this machine, the desk. */
+export const SYNCED = {
+  ...REPORT,
+  coverage: {
+    ...REPORT.coverage,
+    sync: {
+      mode: 'on', machine: null,
+      machines: [
+        { id: '9c0ffee0-0000-4000-8000-000000000001', name: 'desk', platform: 'linux', own: true, last_success: '2026-10-18T05:56:00Z' },
+        { id: '1aaaaaaa-0000-4000-8000-000000000001', name: 'laptop', platform: 'windows', own: false, last_success: '2026-10-18T03:00:00Z' },
+      ],
+    },
+  },
+  clis: REPORT.clis.map(cli => ({ ...cli, machine: cli.id === 'aaaaaaaa' ? 'laptop' : 'desk' })),
+}

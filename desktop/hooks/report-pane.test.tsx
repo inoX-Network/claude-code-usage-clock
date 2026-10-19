@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { REPORT } from './report-fixture'
+import { REPORT, SYNCED } from './report-fixture'
 
 const COMMAND = '"C:/Python314/python.exe" -X utf8 "C:/Users/you/.claude/hooks/usage-clock/statusline.py"'
 const SCRIPT = 'C:/Users/you/.claude/hooks/usage-clock/usage_report.py'
@@ -262,6 +262,28 @@ for (const surface of SURFACES) {
     }
     await ui.press({ key: 'session-bbbbbbbb' })
     expect(await texts(ui)).toMatch(/blog bbbbbbbb · this session · /)
+    await ui.unmount()
+  })
+
+  test(`${surface}: with the sync Sessions names the machine of each session and marks only one of this machine`, async ($, on) => {
+    // The laptop session has the same first characters as the session the pane was opened from: it is not this one
+    world(on, { own: 'aaaaaaaa-1c2d-4e5f-8a9b-0c1d2e3f4a5b', run: () => ({ exitCode: 0, stdout: JSON.stringify(SYNCED), stderr: '' }) })
+    await start($)
+    await report($)
+    const ui = await mountPane($, surface, 120)
+    await ui.press({ key: 'view-sessions' })
+    if (surface === 'terminal') {
+      expect(await texts(ui)).toMatch(/session\s+started\s+USD\s+~week pts\s+requests\s+machine/)
+      expect((await ui.find({ key: 'session-aaaaaaaa' }))?.text).toMatch(/^webshop aaaaaaaa\s.*\s300\s+laptop$/)
+      expect((await ui.find({ key: 'session-bbbbbbbb' }))?.text).toMatch(/^blog bbbbbbbb\s.*\s40\s+desk$/)
+      expect(await texts(ui)).not.toContain('▶')
+    } else {
+      expect((await ui.find({ key: 'card-aaaaaaaa' }))?.text).toMatch(/on laptop · \S+ 13 Oct \d\d:\d\d · 300 requests/)
+      expect((await ui.find({ key: 'card-bbbbbbbb' }))?.text).toMatch(/on desk · /)
+      expect(await texts(ui)).not.toMatch(/THIS SESSION|LIVE/)
+    }
+    await ui.press({ key: 'session-aaaaaaaa' })
+    expect(await texts(ui)).toMatch(/webshop aaaaaaaa · on laptop · /)
     await ui.unmount()
   })
 

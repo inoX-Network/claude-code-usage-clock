@@ -75,13 +75,13 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 | Cache/Thinking | Cache hit rate, cold starts, thinking tokens and their share of the output. |
 | Tokens | Input, cache write (5 minutes, 1 hour), cache read and output tokens. |
 | Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
-| Sessions | Every session of the period, highest cost first; `▶` marks the session you opened `/report` from. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
+| Sessions | Every session of the period, highest cost first; `▶` marks the session you opened `/report` from. With the [sync](../docs/usage-report.md#other-machines-the-sync) a last column `machine` names the machine each session ran on, and only a session of this machine can carry the mark. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
 
 **In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
 figures (the weekly limit as a half circle with a mark where red starts, the highest 5h window with a column per
 window, the last eight, on a scale up to the highest peak, at least 50 %, and a dashed line where yellow starts, the cost split into main and subagents, the cache hit rate), then the projects, the models, main and the agents
-as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`; `NOTE` for anything else). Sessions shows one card per session; the
-session `/report` was opened from comes first, under "This session", its card toned and framed in the accent colour and
+as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`; `NOTE` for anything else). Sessions shows one card per session (with the sync its line
+under the name starts with `on <machine>`); the session `/report` was opened from comes first, under "This session", its card toned and framed in the accent colour and
 marked `LIVE`; its detail shows cost, requests, cache and thinking as key figures, then tokens, models, subagents and
 what its context held as bars (the ten largest of each, then one bar for the rest). Agents shows main and the
 subagents as key figures and every agent as a bar; Models a key figure per model and the share of the cost; Cache/

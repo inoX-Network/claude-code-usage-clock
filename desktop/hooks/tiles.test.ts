@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { REPORT } from './report-fixture'
+import { REPORT, SYNCED } from './report-fixture'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow } from './tiles'
 
 const LIMITS = { yellowFrom: 50, redFrom: 75 }
@@ -54,6 +54,13 @@ describe('sessionCards', () => {
     expect(cards.map(c => [c.id, c.isOwn])).toEqual([['bbbbbbbb', true], ['aaaaaaaa', false]])
     expect(cards[1]).toMatchObject({ title: 'webshop aaaaaaaa', cost: '60 USD' })
     expect(cards[1]?.meta).toMatch(/^\S+ 13 Oct \d\d:\d\d · 300 requests · cache 90 % · week: ~20\.0 pts$/)
+  })
+
+  test('with the sync each card names its machine; only a session of this machine is the own one', async () => {
+    const cards = sessionCards(SYNCED, 'aaaaaaaa')
+    expect(cards.map(c => [c.id, c.isOwn])).toEqual([['aaaaaaaa', false], ['bbbbbbbb', false]])
+    expect(cards[0]?.meta).toMatch(/^on laptop · \S+ 13 Oct \d\d:\d\d · 300 requests/)
+    expect(sessionCards(SYNCED, 'bbbbbbbb').map(c => [c.id, c.isOwn])).toEqual([['bbbbbbbb', true], ['aaaaaaaa', false]])
   })
 })
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { REPORT } from './report-fixture'
-import { VIEWS, estimate, measuredPts, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, shortPath, toolName, viewLines } from './report'
+import { REPORT, SYNCED } from './report-fixture'
+import { VIEWS, estimate, isOwnSession, machineOf, measuredPts, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, shortPath, toolName, viewLines } from './report'
 import type { View } from './report'
 
 const LINUX = 'python3 /home/you/.claude/hooks/usage-clock/statusline.py'
@@ -279,6 +279,36 @@ describe('Sessions', () => {
       expect(rows.every(row => row.line.parts === undefined)).toBe(true)
     }
     expect(sessionList(REPORT, 100)).toEqual(sessionList(REPORT, 100, null))
+  })
+
+  test('with the sync a last column names the machine of each session', () => {
+    const { head, rows } = sessionList(SYNCED, 120, null)
+    expect(head.text).toMatch(/^session\s+started\s+USD\s+~week pts\s+requests\s+machine$/)
+    expect(rows.map(row => row.line.text)).toEqual([
+      expect.stringMatching(/^webshop aaaaaaaa\s.*\s300\s+laptop$/),
+      expect.stringMatching(/^blog bbbbbbbb\s.*\s40\s+desk$/),
+    ])
+    expect(sessionList(REPORT, 120, null).head.text).not.toMatch(/machine/)
+    expect(sessionDetail(SYNCED, 'aaaaaaaa', 100)[0]?.text).toMatch(/^webshop aaaaaaaa · on laptop · \S+ 13 Oct/)
+  })
+
+  test('the own session stays a session of this machine: the same id on another machine is not marked', () => {
+    expect(sessionList(SYNCED, 120, 'aaaaaaaa').rows.every(row => row.line.parts === undefined)).toBe(true)
+    expect(sessionList(SYNCED, 120, 'aaaaaaaa').head.text).toMatch(/^session/)
+    expect(sessionList(SYNCED, 120, 'bbbbbbbb').rows[1]?.line.text).toMatch(/^▶ blog bbbbbbbb/)
+    expect(sessionDetail(SYNCED, 'aaaaaaaa', 100, 'aaaaaaaa')[0]?.text).not.toMatch(/this session/)
+    expect(sessionDetail(SYNCED, 'bbbbbbbb', 100, 'bbbbbbbb')[0]?.text).toMatch(/^blog bbbbbbbb · this session · on desk · /)
+    // a report that names machines but not which one is this: no session of a machine is the own one
+    const unknown = { ...SYNCED, coverage: REPORT.coverage }
+    expect(isOwnSession(unknown, { id: 'bbbbbbbb', machine: 'desk' }, 'bbbbbbbb')).toBe(false)
+    expect(isOwnSession(unknown, { id: 'bbbbbbbb' }, 'bbbbbbbb')).toBe(true)
+  })
+
+  test('a machine name is drawn as text: control characters become ?, at most 64 characters', () => {
+    expect(machineOf({ machine: 'lap\u001b[2Jtop\u0085' })).toBe('lap?[2Jtop?')
+    expect(machineOf({ machine: 'x'.repeat(80) })).toBe('x'.repeat(64))
+    expect(machineOf({ machine: 7 })).toBeNull()
+    expect(machineOf({})).toBeNull()
   })
 
   test('the detail of the own session says so in its head', () => {

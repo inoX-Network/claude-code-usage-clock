@@ -358,6 +358,23 @@ function projects(report: Report, columns: number): Line[] {
 // --- Sessions ---------------------------------------------------------------------------------------------------
 
 const SESSION_HEAD = ['session', 'started', 'USD', '~week pts', 'requests']
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
+/** The machine a session ran on, with the sync (`clis[].machine`), else null. The name comes from another machine:
+ *  control characters become `?`, at most 64 characters, and it is only ever drawn as text. */
+export function machineOf(cli: Record<string, unknown>): string | null {
+  const name = str(cli.machine)
+  return name === null ? null : name.replace(CONTROL, '?').slice(0, 64)
+}
+
+/** Whether `cli` is the session the pane was opened from (`own`, its first 8 characters): the same id, on this
+ *  machine. With the sync a session of another machine never is, whatever its id (`coverage.sync.machines`). */
+export function isOwnSession(report: Report, cli: Record<string, unknown>, own: string | null): boolean {
+  if (own === null || str(cli.id) !== own) return false
+  const machine = machineOf(cli)
+  const here = list(rec(rec(report.coverage).sync).machines).map(rec).find(entry => entry.own === true)
+  return machine === null || (here !== undefined && machine === machineOf({ machine: here.name }))
+}
 /** A session can reach past its period: what the report counts of it is the part within. */
 export const PERIOD_ONLY = 'Figures of the period shown: requests of the session before or after it are not counted.'
 const TOP = 10
@@ -365,24 +382,29 @@ const OWN_MARK = '▶ '
 
 /** The list of the Sessions view: the head, then one row per session of `clis` (highest cost first, as the report
  *  orders them), each with the id the pane selects it by. The session the pane was opened from (`own`) is marked;
- *  when it is in the list, every row moves two cells right so the columns stay aligned. */
+ *  when it is in the list, every row moves two cells right so the columns stay aligned. With the sync a last column
+ *  names the machine of each session. */
 export function sessionList(report: Report, columns: number, own: string | null = null): { head: Line; rows: { id: string; line: Line }[] } {
   const clis = list(report.clis).map(rec).filter(cli => str(cli.id) !== null)
-  const isMarked = own !== null && clis.some(cli => str(cli.id) === own)
-  const indent = (cli: Record<string, unknown> | null) => (!isMarked ? '' : cli !== null && str(cli.id) === own ? OWN_MARK : '  ')
-  const cells = clis.map(cli => [
-    `${indent(cli)}${str(cli.label) ?? '?'} ${str(cli.id)}`,
+  const marked = clis.map(cli => isOwnSession(report, cli, own))
+  const isMarked = marked.includes(true)
+  const machines = clis.some(cli => machineOf(cli) !== null)
+  const indent = (i: number | null) => (!isMarked ? '' : i !== null && marked[i] ? OWN_MARK : '  ')
+  const cells = clis.map((cli, i) => [
+    `${indent(i)}${str(cli.label) ?? '?'} ${str(cli.id)}`,
     str(cli.start) === null ? '-' : localTime(str(cli.start) as string),
     usd(num(cli.cost_usd)),
     measuredPts(num(rec(cli.estimated_share).week), rec(cli.measured_share).week),
     whole(num(cli.requests)),
+    ...(machines ? [machineOf(cli) ?? '-'] : []),
   ])
-  const [head, ...lines] = table([`${indent(null)}${SESSION_HEAD[0]}`, ...SESSION_HEAD.slice(1)], cells, columns)
+  const head = [`${indent(null)}${SESSION_HEAD[0]}`, ...SESSION_HEAD.slice(1), ...(machines ? ['machine'] : [])]
+  const [top, ...lines] = table(head, cells, columns)
   return {
-    head: head as Line,
+    head: top as Line,
     rows: lines.map((line, i) => {
       const id = str(clis[i]?.id) as string
-      return { id, line: id === own ? pieces([{ text: OWN_MARK, tone: 'claude' }, { text: line.text.slice(OWN_MARK.length) }]) : line }
+      return { id, line: marked[i] ? pieces([{ text: OWN_MARK, tone: 'claude' }, { text: line.text.slice(OWN_MARK.length) }]) : line }
     }),
   }
 }
@@ -453,9 +475,11 @@ export function sessionDetail(report: Report, id: string, columns: number, own: 
   const share = rec(cli.estimated_share)
   const measured = rec(cli.measured_share)
   const start = str(cli.start)
+  const machine = machineOf(cli)
   const out: Line[] = [
     {
-      text: `${str(cli.label) ?? '?'} ${id}${id === own ? ' · this session' : ''} · ${start === null ? '-' : localTime(start)}`
+      text: `${str(cli.label) ?? '?'} ${id}${isOwnSession(report, cli, own) ? ' · this session' : ''}`
+        + `${machine === null ? '' : ` · on ${machine}`} · ${start === null ? '-' : localTime(start)}`
         + ` · ${usd(num(cli.cost_usd))} USD · week: ${estimate(num(share.week), measured.week)} pts`
         + ` · 5h: ${estimate(num(share.five), measured.five)} pts`,
       style: 'heading',

@@ -2,7 +2,7 @@
 // in report.ts. Pure functions of the report, so that the tests need no engine; pane.tsx draws them. The terminal
 // keeps the text views.
 
-import { estimate, localTime, measuredPts, pct, pts, shortPath, toolName, tone, tokens, usd, whole } from './report'
+import { estimate, isOwnSession, localTime, machineOf, measuredPts, pct, pts, shortPath, toolName, tone, tokens, usd, whole } from './report'
 import type { Limits, Report, Tone, View } from './report'
 
 /** The colours of the tiles: a dark ground of their own, so they read the same in a light and a dark app. */
@@ -363,17 +363,19 @@ export function sessionCards(report: Report, own: string | null): SessionCard[] 
     const id = str(cli.id) as string
     const start = str(cli.start)
     const hits = num(cli.cache_hit_rate)
+    const machine = machineOf(cli)
     return {
       id,
       title: `${str(cli.label) ?? '?'} ${id}`,
       cost: `${usd(num(cli.cost_usd))} USD`,
       meta: [
+        machine === null ? null : `on ${machine}`,
         start === null ? null : localTime(start),
         `${num(cli.requests) ?? '-'} requests`,
         hits === null ? null : `cache ${pct(hits)}`,
         `week: ${estimate(num(rec(cli.estimated_share).week), rec(cli.measured_share).week)} pts`,
       ].filter(Boolean).join(' · '),
-      isOwn: id === own,
+      isOwn: isOwnSession(report, cli, own),
     }
   })
   return [...cards.filter(card => card.isOwn), ...cards.filter(card => !card.isOwn)]
