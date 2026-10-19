@@ -48,6 +48,7 @@ sys.path.insert(0, HERE)
 import _config  # noqa: E402
 import _plat  # noqa: E402
 import _spawn_check  # noqa: E402
+import _transcripts  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
 
@@ -63,7 +64,6 @@ MAX_CONTEXT_BYTES = 4_000_000       # a larger context file is not read
 CONTEXT_TEXT_CHARS = 200            # of a name or path in a context file only this much is kept
 MAX_LISTED = 10                     # tools, skills and agents with a row in the context block of --session
 
-KINDS = ('input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output')   # also the order of the prices
 METRICS = ('five', 'week')
 MAX_GAP_S = 3600            # a longer stretch between two measurements is too coarse to share
 RESET_TOLERANCE_S = 60      # reset times closer than this belong to the same window (as in _usage.py)
@@ -82,11 +82,9 @@ MEMORY_CHARS = 25 * 1024
 NOT_ESTIMABLE = ('system prompt', 'built-in tools', 'MCP instructions', 'skills of plugins and other apps',
                  'output of hooks')      # parts of the start that only Claude Code knows
 SCHEMA_VERSION = 1          # of the JSON object; changes when a field is renamed or removed
-FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
 WEEK_S = 7 * 86400
 RECOVERY_S = 900           # a stale number is followed by the real one within this time
 FIVE_HOURS_S = 5 * 3600     # a five hour window cannot span more than this
-MAX_COUNT = 10 ** 12        # a larger token count or percentage is not a measurement: the line is not read
 MAX_TIME = 4_102_444_800    # Unix seconds of 2100-01-01: a later reset time is not a measurement
 MIN_YEAR, MAX_YEAR = 2000, 2999     # the days a period may name
 WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
@@ -96,11 +94,6 @@ MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 
 # the detail (`_n`), its sum, and for thinking the output tokens of those requests (the denominator of its share).
 DETAIL_KEYS = ('thinking_n', 'thinking', 'thinking_out', 'search_n', 'search', 'fetch_n', 'fetch')
 
-NUMBER = r'(\d+(?:\.\d+)?)'
-USAGE_LINES = (re.compile(rf'Usage: 5h {NUMBER} %[^·]*· week {NUMBER} %[^·]*· measured (\d+) min ago'),
-               re.compile(rf'Nutzung: 5h {NUMBER} %[^·]*· 7T {NUMBER} %[^·]*· Messung vor (\d+) min'))
-AGENT_TYPE_KEYS = ('spawnedAgentType', 'customAgentType', 'agentType')     # the first one present is the type
-AGENT_TYPE = re.compile(r'[A-Za-z0-9_.:-]{1,64}')
 MODEL_NAME = re.compile(r'[A-Za-z0-9_.:/-]{1,64}')
 WORD = re.compile(r'[a-z_]{1,20}')
 PERCENT = re.compile(r'\d+(?:\.\d+)? ?%')
@@ -123,11 +116,6 @@ YEAR_TEXT = re.compile(r'[0-9]{4}')
 
 def iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def parse_ts(text) -> float | None:
-    moment = log_summary.parse_time(text)
-    return moment.timestamp() if moment else None
 
 
 def local_day(ts: float) -> date:
@@ -157,19 +145,10 @@ class PriceFileError(Exception):
     pass
 
 
-def _is_number(value) -> bool:
-    if isinstance(value, bool):
-        return False
-    return isinstance(value, int) or (isinstance(value, float) and math.isfinite(value))
-
-
-class BadLine(Exception):
-    """A transcript line that has the shape of a request but cannot be one (a wrong type, an impossible number)."""
-
-
 def _check_rates(rates, where: str) -> None:
-    if not isinstance(rates, dict) or not all(_is_number(rates.get(k)) and rates[k] >= 0 for k in KINDS):
-        raise PriceFileError(f'{where}: needs a number for each of {", ".join(KINDS)}')
+    if not isinstance(rates, dict) or not all(_transcripts.is_number(rates.get(k)) and rates[k] >= 0
+                                              for k in _transcripts.KINDS):
+        raise PriceFileError(f'{where}: needs a number for each of {", ".join(_transcripts.KINDS)}')
 
 
 def load_prices(path: str) -> list[dict]:
@@ -189,7 +168,7 @@ def load_prices(path: str) -> list[dict]:
         tier = entry.get('long_context')
         if tier is not None:
             _check_rates(tier, f'{path}: {entry["name"]} long_context')
-            if not _is_number(tier.get('above_tokens')):
+            if not _transcripts.is_number(tier.get('above_tokens')):
                 raise PriceFileError(f'{path}: {entry["name"]} long_context needs "above_tokens"')
     return models
 
@@ -205,24 +184,10 @@ def request_cost(entry: dict, tokens: tuple) -> float:
     tier = entry.get('long_context')
     if tier is not None and sum(tokens[:4]) > tier['above_tokens']:
         rates = tier
-    return sum(count * rates[kind] for count, kind in zip(tokens, KINDS)) / 1e6
+    return sum(count * rates[kind] for count, kind in zip(tokens, _transcripts.KINDS)) / 1e6
 
 
 # --- Reading the sources ------------------------------------------------------------------------------------------------
-
-class Request(NamedTuple):
-    ts: float
-    session: str
-    sub: bool
-    agent_type: str | None
-    model: str
-    tokens: tuple          # in KINDS order
-    cwd: str | None
-    thinking: int | None = None    # part of the output tokens; None = the transcript does not say
-    searches: int | None = None
-    fetches: int | None = None
-    source: str = ''               # the transcript the request stands in (never shown): its first request is a start
-
 
 class Measurement(NamedTuple):
     t: float
@@ -230,95 +195,6 @@ class Measurement(NamedTuple):
     week: float | None
     five_resets: float | None
     week_resets: float | None
-
-
-def _count(value) -> int:
-    if _is_number(value) and value > MAX_COUNT:
-        raise BadLine('count')
-    return int(value) if _is_number(value) and value > 0 else 0
-
-
-def usage_tokens(usage: dict) -> tuple:
-    total = _count(usage.get('cache_creation_input_tokens'))
-    detail = usage.get('cache_creation') if isinstance(usage.get('cache_creation'), dict) else {}
-    one_hour = _count(detail.get('ephemeral_1h_input_tokens'))
-    if not total:
-        total = one_hour + _count(detail.get('ephemeral_5m_input_tokens'))
-    one_hour = min(one_hour, total)
-    return (_count(usage.get('input_tokens')), total - one_hour, one_hour, _count(usage.get('cache_read_input_tokens')),
-            _count(usage.get('output_tokens')))
-
-
-def _known(value) -> int | None:
-    if _is_number(value) and value > MAX_COUNT:
-        raise BadLine('count')
-    return int(value) if _is_number(value) and value >= 0 else None
-
-
-def usage_details(usage: dict, output: int) -> tuple:
-    """(thinking tokens, web searches, web fetches); None for what the line does not say. Thinking is part of the output."""
-    details = usage.get('output_tokens_details') if isinstance(usage.get('output_tokens_details'), dict) else {}
-    tools = usage.get('server_tool_use') if isinstance(usage.get('server_tool_use'), dict) else {}
-    thinking = _known(details.get('thinking_tokens'))
-    return (None if thinking is None else min(thinking, output), _known(tools.get('web_search_requests')),
-            _known(tools.get('web_fetch_requests')))
-
-
-def parse_request(raw: str) -> tuple | None:
-    """(message id, request id, time, tokens, model, cwd, details) of an assistant line with usage numbers, else None.
-    Raises BadLine for a line that is one but has a request id of the wrong type or an impossible number."""
-    try:
-        line = json.loads(raw)
-    except (ValueError, RecursionError):
-        return None
-    message = line.get('message') if isinstance(line, dict) and line.get('type') == 'assistant' else None
-    usage = message.get('usage') if isinstance(message, dict) else None
-    ts = parse_ts(line.get('timestamp')) if isinstance(usage, dict) else None
-    if ts is None:
-        return None
-    tokens = usage_tokens(usage)
-    if not any(tokens):
-        return None
-    model = message.get('model') if isinstance(message.get('model'), str) else '?'
-    cwd = line.get('cwd') if isinstance(line.get('cwd'), str) else None
-    if line.get('requestId') is not None and not isinstance(line['requestId'], str):
-        raise BadLine('requestId')
-    return message.get('id'), line.get('requestId'), ts, tokens, model, cwd, usage_details(usage, tokens[4])
-
-
-def parse_usage_line(raw: str) -> tuple | None:
-    """(time, five, week) of a fresh usage line of this tool in an attachment, else None."""
-    try:
-        line = json.loads(raw)
-    except (ValueError, RecursionError):
-        return None
-    attachment = line.get('attachment') if isinstance(line, dict) and line.get('type') == 'attachment' else None
-    if not isinstance(attachment, dict) or attachment.get('type') != 'hook_additional_context':
-        return None       # only what a hook added to the prompt: a file shown in the transcript may quote the line
-    ts = parse_ts(line.get('timestamp'))
-    if ts is None:
-        return None
-    text = json.dumps(attachment, ensure_ascii=False)
-    found = next((match for match in (pattern.search(text) for pattern in USAGE_LINES) if match), None)
-    if found is None or float(found.group(3)) > FRESH_MAX_MIN:
-        return None
-    return ts, float(found.group(1)), float(found.group(2))
-
-
-def agent_type_of(transcript: str) -> str:
-    """The type of a subagent from agent-<id>.meta.json next to its transcript: `spawnedAgentType`, else
-    `customAgentType`, else `agentType`, which for a named subagent is only its name: then the type is unknown."""
-    try:
-        with open(transcript[:-len('.jsonl')] + '.meta.json', encoding='utf-8') as f:
-            data = json.loads(f.read(65536))
-    except (OSError, ValueError, RecursionError):
-        return 'unknown'
-    data = data if isinstance(data, dict) else {}
-    key = next((key for key in AGENT_TYPE_KEYS if data.get(key) is not None), None)
-    value = data[key] if key else None
-    if value is None or (key == 'agentType' and value == data.get('name')):
-        return 'unknown'      # without a spawned or custom type, agentType of a named subagent is only its name
-    return value if isinstance(value, str) and AGENT_TYPE.fullmatch(value) else 'other'
 
 
 def _comes_back(measurements: list[Measurement], index: int, metric: str, reference: float) -> bool:
@@ -374,7 +250,7 @@ class Data:
     """Everything read: the requests (sorted by time), the measurements, the log of the gates."""
 
     def __init__(self):
-        self.requests: list[Request] = []
+        self.requests: list[_transcripts.Request] = []
         self.times: list[float] = []
         self.measurements: list[Measurement] = []
         self.measurement_times: list[float] = []
@@ -390,12 +266,10 @@ class Data:
         self.start_times: list[float] = []
         self.price_cache: dict[str, dict | None] = {}
 
-    def set_requests(self, requests: list[Request]) -> None:
+    def set_requests(self, requests: list[_transcripts.Request]) -> None:
         self.requests = sorted(requests, key=lambda r: r.ts)
         self.times = [r.ts for r in self.requests]
-        first_of: dict[str, int] = {}
         for index, request in enumerate(self.requests):
-            first_of.setdefault(request.source, index)
             self.start.setdefault(request.session, request.ts)
             self.session_of.setdefault(request.session[:8], request.session)
             if request.session not in self.label and request.cwd:
@@ -404,7 +278,7 @@ class Data:
                     self.label[request.session] = folder
             if not request.sub:
                 self.first_main.setdefault(request.session, index)
-        self.start_indices = list(first_of.values())
+        self.start_indices = _transcripts.start_indices(self.requests)
         self.start_times = [self.times[index] for index in self.start_indices]
 
     def set_measurements(self, measurements: list[Measurement]) -> None:
@@ -412,66 +286,9 @@ class Data:
         self.measurement_times = [m.t for m in self.measurements]
 
 
-def find_transcripts(projects_dir: str):
-    """(path, session, is_subagent) of every transcript below the folder, links not followed."""
-    for folder, dirs, files in os.walk(projects_dir):
-        dirs.sort()
-        for name in sorted(files):
-            path = os.path.join(folder, name)
-            parts = os.path.relpath(path, projects_dir).split(os.sep)
-            if name.endswith('.jsonl') and len(parts) >= 2 and not os.path.islink(path):
-                yield path, parts[1][:-len('.jsonl')] if len(parts) == 2 else parts[1], len(parts) > 2
-
-
-def read_transcripts(projects_dir: str, modified_since: float,
-                     want_usage_lines: bool) -> tuple[list[Request], dict, int, int]:
-    """(requests, usage-line measurements by time, files read, unreadable request lines). Of the lines of one request (same
-    message id and request id) only the last one counts: it carries the complete output tokens. A request that stands in
-    two transcripts (a continued session) is counted once and belongs to the file modified first (then the one that
-    sorts first). Files not modified since `modified_since` cannot hold anything newer and are not opened."""
-    candidates = []
-    for path, session, sub in find_transcripts(projects_dir):
-        try:
-            modified = os.stat(path).st_mtime
-        except OSError:
-            continue
-        if modified >= modified_since:
-            candidates.append((modified, path, session, sub))
-    best: dict = {}
-    fresh: dict[float, tuple] = {}
-    files = unreadable = 0
-    for _modified, path, session, sub in sorted(candidates):
-        try:
-            handle = open(path, encoding='utf-8', errors='replace')
-        except OSError:
-            continue
-        files += 1
-        agent_type = agent_type_of(path) if sub else None
-        with handle:
-            for number, raw in enumerate(handle):
-                if '"usage"' in raw:
-                    try:
-                        parsed = parse_request(raw)
-                    except BadLine:
-                        unreadable += 1
-                        continue
-                    if parsed is not None:
-                        message_id, request_id, ts, tokens, model, cwd, details = parsed
-                        key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
-                        known = best.get(key)
-                        if known is None or tokens[4] > known[0] or (tokens[4] == known[0] and known[1] == path):
-                            request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path)
-                            best[key] = (tokens[4], path, request)
-                if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
-                    parsed = parse_usage_line(raw)
-                    if parsed is not None:
-                        fresh[parsed[0]] = parsed[1:]
-    return [value[2] for value in best.values()], fresh, files, unreadable
-
-
-def _optional_number(row: dict, key: str, maximum: float = MAX_COUNT):
+def _optional_number(row: dict, key: str, maximum: float = _transcripts.MAX_COUNT):
     value = row.get(key)
-    if value is not None and not (_is_number(value) and abs(value) <= maximum):
+    if value is not None and not (_transcripts.is_number(value) and abs(value) <= maximum):
         raise ValueError(key)
     return value
 
@@ -494,7 +311,7 @@ def read_history(log_dir: str) -> tuple[list[Measurement], int]:
         for raw in read_lines(os.path.join(log_dir, name)):
             try:
                 row = json.loads(raw)
-                ts = parse_ts(row['t'])
+                ts = _transcripts.parse_ts(row['t'])
                 if ts is None:
                     raise ValueError('t')
                 rows.append(Measurement(ts, _optional_number(row, 'five'), _optional_number(row, 'week'),
@@ -511,7 +328,7 @@ def read_guard_log(log_dir: str) -> list[tuple]:
         for raw in read_lines(os.path.join(log_dir, name)):
             try:
                 row = json.loads(raw)
-                ts = parse_ts(row['time'])
+                ts = _transcripts.parse_ts(row['time'])
                 if ts is not None and row['hook'] in ('spawn_gate', 'soft_stop'):
                     decision = _word(row.get('decision'), 'other')
                     entries.append((ts, row['hook'], _word(row.get('mode'), 'unknown'), decision,
@@ -597,7 +414,7 @@ def _context_value(value, kind: str):
     if value is None and kind in ('label', 'flag'):
         return None
     if kind == 'count':
-        if not _is_number(value) or not 0 <= value <= MAX_COUNT:
+        if not _transcripts.is_number(value) or not 0 <= value <= _transcripts.MAX_COUNT:
             raise ValueError(kind)
         return int(value)
     if kind == 'flag':
@@ -682,12 +499,12 @@ def new_sums() -> dict:
 
 
 def new_cli(label: str, start: float) -> dict:
-    return {'label': label, 'start': start, 'requests': 0, 'cost': 0.0, 'tokens': dict.fromkeys(KINDS, 0), 'models': {},
-            'subs': {}, 'cold_starts': 0, 'five_pts': 0.0, 'week_pts': 0.0, 'five_cov': 0.0, 'week_cov': 0.0}
+    return {'label': label, 'start': start, 'requests': 0, 'cost': 0.0, 'tokens': dict.fromkeys(_transcripts.KINDS, 0),
+            'models': {}, 'subs': {}, 'cold_starts': 0, 'five_pts': 0.0, 'week_pts': 0.0, 'five_cov': 0.0, 'week_cov': 0.0}
 
 
 def new_stats() -> dict:
-    return {'requests': 0, 'cost': 0.0, 'cold_starts': 0, 'extra': {}, 'tokens': dict.fromkeys(KINDS, 0),
+    return {'requests': 0, 'cost': 0.0, 'cold_starts': 0, 'extra': {}, 'tokens': dict.fromkeys(_transcripts.KINDS, 0),
             'main': {'requests': 0, 'cost': 0.0},
             'sub': {'requests': 0, 'cost': 0.0}, 'agent_types': {}, 'models': {}, 'unpriced': {}, 'clis': {},
             'points': {'main': dict.fromkeys(METRICS, 0.0), 'types': {}},
@@ -705,7 +522,7 @@ def _add_counts(target: dict, extra) -> None:
     for key, value in extra.items():
         if isinstance(value, dict):
             _add_counts(target.setdefault(key, {}), value)
-        elif _is_number(value):
+        elif _transcripts.is_number(value):
             target[key] = target.get(key, 0) + value
         else:
             raise TypeError(key)
@@ -725,8 +542,8 @@ def _same_window(earlier: dict, later: dict) -> bool:
 def _merge_windows(target: list, extra: list) -> None:
     windows = []
     for window in extra:
-        numbers = all(_is_number(window[k]) for k in WINDOW_KEYS[1:])
-        if not numbers or not (window['resets'] is None or _is_number(window['resets'])):
+        numbers = all(_transcripts.is_number(window[k]) for k in WINDOW_KEYS[1:])
+        if not numbers or not (window['resets'] is None or _transcripts.is_number(window['resets'])):
             raise TypeError('window')
         windows.append({k: window[k] for k in WINDOW_KEYS})
     merged: list[dict] = []
@@ -744,7 +561,7 @@ def _merge_windows(target: list, extra: list) -> None:
 
 
 def _week_point(point) -> dict:
-    if not (_is_number(point['t']) and _is_number(point['value'])):
+    if not (_transcripts.is_number(point['t']) and _transcripts.is_number(point['value'])):
         raise TypeError('week point')
     return {'t': point['t'], 'value': point['value']}
 
@@ -762,7 +579,7 @@ def _merge_weeks(target: list, extra: list) -> None:
     segments = []
     for segment in extra:
         resets = segment['resets']
-        if not (resets is None or _is_number(resets)):
+        if not (resets is None or _transcripts.is_number(resets)):
             raise TypeError('resets')
         segments.append({'start': _week_point(segment['start']), 'end': _week_point(segment['end']), 'resets': resets})
     merged: list[dict] = []
@@ -796,10 +613,11 @@ def _merge_starts(target: list, extra) -> None:
     for start in extra:
         kind, model, session = start['type'], start['model'], start['session']
         counts = [start[key] for key in START_COUNTS]
-        if not (_is_number(start['t']) and 0 < start['t'] < MAX_TIME and isinstance(session, str) and len(session) <= 8
-                and (kind is None or (isinstance(kind, str) and AGENT_TYPE.fullmatch(kind)))
+        if not (_transcripts.is_number(start['t']) and 0 < start['t'] < MAX_TIME and isinstance(session, str)
+                and len(session) <= 8
+                and (kind is None or (isinstance(kind, str) and _transcripts.AGENT_TYPE.fullmatch(kind)))
                 and isinstance(model, str) and START_TEXT.fullmatch(model)
-                and all(_is_number(count) and 0 <= count <= MAX_COUNT for count in counts)):
+                and all(_transcripts.is_number(count) and 0 <= count <= _transcripts.MAX_COUNT for count in counts)):
             raise ValueError('start')
         target.append({'t': start['t'], 'session': session, 'type': kind, 'model': model,
                        **dict(zip(START_COUNTS, counts))})
@@ -822,7 +640,7 @@ def merge_stats(target: dict, extra) -> None:
 
 def _merge_cli(clis: dict, ident: str, cli: dict) -> None:
     """Adds the figures of one CLI to the CLI `ident` of `clis` (made if it is not there)."""
-    if not (isinstance(cli['label'], str) and _is_number(cli['start'])):
+    if not (isinstance(cli['label'], str) and _transcripts.is_number(cli['start'])):
         raise TypeError(ident)
     mine = clis.setdefault(ident, new_cli(cli['label'], cli['start']))
     mine['start'] = min(mine['start'], cli['start'])
@@ -841,7 +659,7 @@ def _price_of(data: Data, prices: list[dict], model: str) -> dict | None:
     return data.price_cache[model]
 
 
-def request_details(request: Request) -> dict:
+def request_details(request: _transcripts.Request) -> dict:
     """The details a request reports, as counts for DETAIL_KEYS; a detail it does not report adds nothing."""
     counts = {}
     if request.thinking is not None:
@@ -864,14 +682,14 @@ def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> N
     cost = request_cost(entry, request.tokens) if entry else 0.0
     name = _model_name(entry, request.model)
     details = request_details(request)
-    tokens = dict(zip(KINDS, request.tokens))
+    tokens = dict(zip(_transcripts.KINDS, request.tokens))
     stats['requests'] += 1
     stats['cost'] += cost
     _add_counts(stats['extra'], details)
     side = stats['sub' if request.sub else 'main']
     side['requests'] += 1
     side['cost'] += cost
-    for kind, count in zip(KINDS, request.tokens):
+    for kind, count in zip(_transcripts.KINDS, request.tokens):
         stats['tokens'][kind] += count
     if entry:
         _add_counts(stats['models'], {name: {'requests': 1, 'cost': cost, 'tokens': tokens, **details}})
@@ -883,7 +701,7 @@ def _count_request(stats: dict, data: Data, prices: list[dict], index: int) -> N
     _add_counts(cli, details)
     cli['requests'] += 1
     cli['cost'] += cost
-    for kind, count in zip(KINDS, request.tokens):
+    for kind, count in zip(_transcripts.KINDS, request.tokens):
         cli['tokens'][kind] += count
     cli['models'][name] = cli['models'].get(name, 0.0) + cost
     if request.sub:
@@ -1092,7 +910,7 @@ def _by_cost(table: dict) -> list:
 
 
 def _hit_rate(tokens: dict) -> float | None:
-    everything = sum(tokens[kind] for kind in KINDS[:4])
+    everything = sum(tokens[kind] for kind in _transcripts.KINDS[:4])
     return tokens['cache_read'] / everything if everything else None
 
 
@@ -1194,7 +1012,7 @@ def _window_note(windows: list[dict], threshold: float) -> list[dict]:
     if not hot:
         return []
     top = max(hot, key=lambda w: w['peak'])
-    day = day_text(parse_ts(top['peak_at']))
+    day = day_text(_transcripts.parse_ts(top['peak_at']))
     text = (f'one 5h window reached {top["peak"]:g} % ({day})' if len(hot) == 1 else
             f'{len(hot)} 5h windows reached {threshold:g} % or more (highest {top["peak"]:g} %, {day})')
     return [{'rule': 'five_hour_window', 'windows': len(hot), 'threshold_percent': threshold,
@@ -1242,7 +1060,7 @@ def _measured_of(rows: list[dict]) -> dict:
 
 
 def _project_row(name: str, clis: list[dict], total: float) -> dict:
-    tokens = {kind: sum(cli['tokens'][kind] for cli in clis) for kind in KINDS}
+    tokens = {kind: sum(cli['tokens'][kind] for cli in clis) for kind in _transcripts.KINDS}
     cost = sum(cli['cost_usd'] for cli in clis)
     return {'name': name, 'cost_usd': cost, 'share': cost / total if total > 0 else None,
             'week_points': sum(cli['estimated_share']['week'] for cli in clis),
@@ -1317,7 +1135,7 @@ def startup_groups(starts: list[dict]) -> dict:
     for start in starts:
         if start['type'] is not None:
             types.setdefault(start['type'], []).append(start)
-        days.setdefault(local_day(parse_ts(start['at'])).isoformat(), []).append(start)
+        days.setdefault(local_day(_transcripts.parse_ts(start['at'])).isoformat(), []).append(start)
     return {'main': _group(main),
             'subagents': {'all': _group(subagents), 'by_type': {kind: _group(found) for kind, found in
                                                                 sorted(types.items(), key=lambda i: (-len(i[1]), i[0]))}},
@@ -1406,7 +1224,7 @@ def tokens_text(count: float) -> str:
 
 
 def _kinds_text(tokens: dict) -> str:
-    return ', '.join(f'{kind.replace("_", " ")} {tokens_text(tokens[kind])}' for kind in KINDS)
+    return ', '.join(f'{kind.replace("_", " ")} {tokens_text(tokens[kind])}' for kind in _transcripts.KINDS)
 
 
 def _costs_text(table: dict, with_points: bool = False) -> str:
@@ -1442,8 +1260,8 @@ def _subscription_lines(abo: dict) -> list[str]:
     lines.append(f'  5h windows: {len(abo["five_windows"])}')
     for window in abo['five_windows']:
         reset = f'reset {clock(window["resets"])}, ' if window['resets'] is not None else ''
-        lines.append(f'    {reset}peak {window["peak"]:g} % at {clock(parse_ts(window["peak_at"]), True)}'
-                     f' (first seen {clock(parse_ts(window["first_seen"]))})')
+        lines.append(f'    {reset}peak {window["peak"]:g} % at {clock(_transcripts.parse_ts(window["peak_at"]), True)}'
+                     f' (first seen {clock(_transcripts.parse_ts(window["first_seen"]))})')
     return lines
 
 
@@ -1503,7 +1321,8 @@ def _cli_block(head: str, cli: dict) -> list[str]:
 def _cli_lines(clis: list[dict]) -> list[str]:
     lines = ['By CLI (main session and its subagents, most expensive first; ~ = estimate)']
     for cli in clis:
-        lines += _cli_block(f'{cli["label"]}  {cli["id"]}  started {clock(parse_ts(cli["start"]), True)}', cli)
+        started = clock(_transcripts.parse_ts(cli['start']), True)
+        lines += _cli_block(f'{cli["label"]}  {cli["id"]}  started {started}', cli)
     return lines
 
 
@@ -1679,7 +1498,8 @@ def render_overview(report: dict) -> str:
         used = (f'weekly limit at {week["used_percent"]:g} % now · +{week["rise_points"]:g} points over '
                 f'{week["windows"]} weekly windows')
     windows = ('none measured' if not five['windows'] else
-               f'{five["windows"]}, highest {five["highest_percent"]:g} % ({clock(parse_ts(five["highest_at"]), True)})')
+               f'{five["windows"]}, highest {five["highest_percent"]:g} % '
+               f'({clock(_transcripts.parse_ts(five["highest_at"]), True)})')
     blocks = [[f'{view["title"]} · {used} · {usd_text(view["cost_usd"])} USD at API prices', f'5h windows: {windows}']]
     blocks += [_table_lines(view), _split_lines(view)] if view['projects'] else [['No requests in this period.']]
     if view['notable']:
@@ -1806,7 +1626,7 @@ def select_clis(report: dict, stats: dict, project: str | None, session: str | N
 def render(report: dict, selection: dict | None = None) -> str:
     """The full report; with a selection (see select_clis) only the blocks of those CLIs and their sum."""
     period, coverage = report['period'], report['coverage']
-    offset = datetime.fromtimestamp(parse_ts(period['start'])).astimezone().strftime('%z')
+    offset = datetime.fromtimestamp(_transcripts.parse_ts(period['start'])).astimezone().strftime('%z')
     sources = [f'{coverage["transcript_files"]} transcript file(s) read']
     if coverage['archive_days']:
         sources.append(f'{len(coverage["archive_days"])} day(s) from the archive: {", ".join(coverage["archive_days"])}')
@@ -2120,7 +1940,7 @@ def usage_file_week_reset(path: str) -> float | None:
     """`seven_day.resets_at` of the usage file, if it has one."""
     block = _usage._read_dict(path).get('seven_day')
     reset = block.get('resets_at') if isinstance(block, dict) else None
-    return reset if _is_number(reset) and 0 < reset < MAX_TIME else None
+    return reset if _transcripts.is_number(reset) and 0 < reset < MAX_TIME else None
 
 
 def _day_arg(parser, text: str, name: str) -> date:
@@ -2200,7 +2020,7 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
     first_history = min((m.t for m in history), default=math.inf)
     requests, fresh = [], {}
     if os.path.isdir(projects_dir):
-        requests, fresh, data.files, data.unreadable_requests = read_transcripts(
+        requests, fresh, data.files, data.unreadable_requests = _transcripts.read_transcripts(
             projects_dir, modified_since, want_usage_lines=start < first_history)
     data.set_requests(requests)
     older = [Measurement(ts, five, week, None, None) for ts, (five, week) in fresh.items() if ts < first_history]

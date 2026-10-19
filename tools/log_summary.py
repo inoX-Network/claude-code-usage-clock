@@ -21,11 +21,12 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'hooks'))
 import _config  # noqa: E402
+import _transcripts  # noqa: E402
 
 STANDARD_CONFIG = '~/.claude/hooks/usage-clock/config.json'
 
@@ -38,20 +39,6 @@ def resolve_log_dir(config: str | None) -> str:
     chosen = config or os.environ.get('CCUC_CONFIG') or os.path.expanduser(STANDARD_CONFIG)
     with mock.patch.dict(os.environ, {'CCUC_CONFIG': chosen}):  # a missing or broken file gives the defaults
         return _config.load(log_problems=False)['log_dir']
-
-
-def parse_time(text) -> datetime | None:
-    """ISO 8601, with or without zone (none = UTC). Python 3.10 does not read a trailing Z itself."""
-    if not isinstance(text, str):
-        return None
-    text = text.strip()
-    if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
-    try:
-        moment = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def read_entries(path: str, since: datetime | None) -> tuple[list[dict], int]:
@@ -69,7 +56,7 @@ def read_entries(path: str, since: datetime | None) -> tuple[list[dict], int]:
             if not isinstance(entry, dict):
                 broken += 1
                 continue
-            moment = parse_time(entry.get('time'))
+            moment = _transcripts.parse_time(entry.get('time'))
             if since is None or (moment is not None and moment >= since):
                 entries.append(entry)
     return entries, broken
@@ -129,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     since = None
     if args.since is not None:
-        since = parse_time(args.since)
+        since = _transcripts.parse_time(args.since)
         if since is None:
             parser.error('--since must be an ISO 8601 time, e.g. 2026-01-14T10:00:00')
     config = os.path.expanduser(args.config) if args.config else None
