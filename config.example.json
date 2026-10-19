@@ -53,5 +53,12 @@
     "apply_to_main_session": true,
     "skill_fork_missing_agent": "warn",
     "model_override_in_call": "warn"
+  },
+  "sync": {
+    "machine_name": "",
+    "project_labels": "plain",
+    "project_aliases": {},
+    "label_salt": "",
+    "keep_request_months": 3
   }
 }

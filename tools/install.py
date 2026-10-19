@@ -72,7 +72,7 @@ DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
 REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_plat.py', '_spawn_check.py',
                   '_usage.py', '_wake.py', 'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py',
-                  'soft_stop.py', 'wake_watcher.py')
+                  'soft_stop.py', 'wake_watcher.py', 'sync_format.py')
 # The usage report from tools/ and everything it loads from beside itself (its other modules come from hooks/).
 REPORT_FILES = ('usage_report.py', 'log_summary.py', 'prices.json')
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
