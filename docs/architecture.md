@@ -12,14 +12,17 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   spawn_gate.py           hook PreToolUse (Agent|Workflow|Skill): usage thresholds + model/effort rules
   soft_stop.py            hook PreToolUse (*): soft stop for subagents near the usage limit
   wake_watcher.py         background task, no hook: wakes an idle session shortly before its prompt cache expires
+  sync.py                 sync across machines: push [--now], pull [--background], the hooks session-start and session-end
   _config.py              loads config.json next to the scripts, falls back to defaults
   _usage.py               reads and merges the shared usage file
   _history.py             appends the merged usage numbers to the measurement history (<log_dir>/usage-history.jsonl)
   _context_state.py       writes the per-session context file (<log_dir>/context/<session_id>.json); the reporter reads it
   _wake.py                what reporter and watcher share: ALIVE_MIN, REST_AFTER_FIRE_MIN, the heartbeat file
   _hookio.py              hook input/output, JSONL log, directory discovery
-  _plat.py                the platform switch: replace, pread, fchmod, path and command spelling, open flags (POSIX or Windows)
+  _plat.py                the platform switch: replace, pread, fchmod, path and command spelling, open flags, detached start
+                          and ending a process tree (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
+  _sync_core.py           the sync core: state, due check, lock, backoff, timeouts, triggers (<log_dir>/sync/)
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
   log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)
@@ -185,6 +188,10 @@ earlier `--week-ok-until` when it is left out (and says so). The command of the 
 may block); the other hooks always end with `|| true`. Every hook entry gets a timeout of 5 s. The status line
 entry gets `refreshInterval: 60`; an update of our own entry adds it only if it is missing, and
 `--replace-statusline` keeps the `refreshInterval` of the replaced status line.
+
+`sync.mode` is `off`, `shadow` or `on` (anything else: `off`); `sync.interval_min`, `sync.backoff_max_h` and
+`sync.pull_timeout_s` must be finite numbers above 0, anything else falls back to the default with the usual log line.
+An interval below 10 minutes is valid in the config and raised by the sync core (see Sync core).
 
 ## Hooks
 
@@ -439,6 +446,57 @@ no UNC path, nothing root- or drive-relative, no `:` after the drive, no part th
 suffix as written and after `realpath` (symlinks and junctions), compared case-sensitively. `_plat` is imported
 inside the check, so a failed import fails open like the imports in `main()`.
 
+## Sync core
+
+`_sync_core.py` decides whether and when this machine pushes its usage data to the sync repo, and gives every run
+its frame. It does not sync: the git work is a function handed in (`Runner`, called with a `Run`: kind, mode, config,
+folders, deadline), the push from 0034-SYNC-PUSH and the pull from 0034-SYNC-REPORT. Until they exist, `sync.py` has
+`git_push` and `git_pull`, which fail with the category `internal`: logged and backed off like any failure, never a
+success. `sync.mode` `off` (the default) makes every entry point do nothing; `shadow` and `on` run the core alike.
+
+- **State** `<log_dir>/sync/state.json`: `{"last_attempt", "last_success", "backoff_level", "next_due",
+  "last_error"}`, times as UTC ISO like `measured_at`, `last_error` null or one of `visibility`, `auth`, `network`,
+  `rejected`, `conflict`, `timeout`, `internal`. The folder is 0700 (`chmod` after creating it, so whatever the umask;
+  a link or a file there is refused), the files 0600 (`fchmod`), written atomically with `_context_state.write_private`.
+  A missing file is an empty state. A broken one (not UTF-8 JSON, not an object, a field of the wrong kind, a time
+  without a time zone, larger than 64 KB, no regular file) counts as empty, with one log line `state_unreadable`.
+- **Triggers.** T1, the status line: with `sync.mode` not `off` (else `_sync_core` is not even imported) it reads
+  `state.json` after printing the line and, if the push is due (`next_due` missing or reached, no `visibility`),
+  starts `sync.py push` detached. No network, no lock, no waiting; an unreadable state is logged at most once an
+  hour (`read-error.logged` holds the time). T2, hook `SessionEnd` (`sync.py session-end`): starts `sync.py push`
+  detached unless a backoff runs (`backoff_level` above 0 and `next_due` ahead) or the push is blocked. The last
+  session before a shutdown has no status line tick left; a push the shutdown cuts off is caught up by T3. T3, hook
+  `SessionStart` (`sync.py session-start`): if there was no success for 24 h or none at all, or `last_attempt` is
+  later than `last_success` (a push that was cut off), it sets `next_due` to now, outside a backoff and the block,
+  and only if the lock is free; then it starts `sync.py pull --background` detached. T4, `sync.py push --now`: past
+  `next_due` and the backoff, never past `visibility` or the lock. Without an installed status line there is no T1:
+  pushes then come from T2 and T4 only (the `next_due` of T3 waits for a status line tick).
+- **Detached start** (`_plat.start_detached`): stdin, stdout and stderr on the null device; POSIX a session of its
+  own, Windows `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`.
+- **Lock** `<log_dir>/sync/sync.lock` through `_usage.locked(file, wait=False)` (flock with `LOCK_NB`; on Windows the
+  msvcrt byte without polling): held elsewhere raises `BlockingIOError` at once. Push and pull share it. A run that
+  finds it held ends with exit 0 and changes nothing.
+- **A push** (`push`): lock; read the state; blocked by `visibility`: exit 1, nothing changed; inside a backoff
+  without `--now`: exit 0, nothing changed; then `last_attempt = now` is written before the runner starts. Success:
+  `last_success = now`, `backoff_level = 0`, `last_error = null`, `next_due = now + interval +- jitter`, log line
+  `success`. Failure: `backoff_level + 1`, `next_due = now + min(interval * 2^level, backoff_max_h) +- jitter`,
+  `last_error`, log line `failure` with `category` and the runner's fixed text (never raw git output); after
+  `visibility` `next_due` stays as it is and the push stays blocked until `clear_visibility` (for the installer's
+  `--sync-repo`). Jitter: uniform +-20 % of the wait. Interval: `sync.interval_min`, at least 10 minutes (a smaller
+  value is raised with a log line `interval_raised`). An exception of the runner that is no `SyncError` is `internal`.
+- **A pull** (`pull`): the same lock, no backoff and no state change; log line `success` or `failure` with
+  `action: pull`.
+- **Timeouts:** a push has 60 s in total, a pull in the background 30 s, in the foreground `sync.pull_timeout_s`
+  (`Deadline`). `run_command` (and `Run.git`) starts each child in a process group of its own (`_plat.GROUP_OPTIONS`);
+  at the deadline it ends the whole tree (`_plat.kill_tree`: SIGKILL to the group, on Windows `taskkill /T`), so a
+  hanging ssh or git-remote-https cannot keep the pipes open, and fails with `timeout`. A program that cannot be
+  started (no git) is `internal`. A runner calls `run.deadline.check()` between its own steps.
+- **Git never asks:** `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `GIT_ASKPASS` empty (git asks an askpass
+  program before the terminal; an empty one skips `core.askPass` and `SSH_ASKPASS` too) and `GIT_SSH_COMMAND` with
+  `-o BatchMode=yes` (appended to the user's own). A `core.sshCommand` of the user is overridden by it.
+- **Exit codes of `sync.py`:** 0 success or nothing to do, 1 failed or blocked, 2 bad arguments; the two hooks print
+  nothing and always exit 0. Log lines have hook `sync`.
+
 ## Log
 
 `<log_dir>/log.jsonl`, rotated to `log.jsonl.1` above 5 MB. One line per decision: UTC time, hook, mode,
@@ -453,7 +511,7 @@ becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log
 (written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
 `<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line), day archive of the usage report in `<log_dir>/usage-days.jsonl` (see Usage report), the context split of each session
-in `<log_dir>/context-breakdown/<session_id>.json` (written by the desktop plugin, read by the usage report). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
+in `<log_dir>/context-breakdown/<session_id>.json` (written by the desktop plugin, read by the usage report). The sync core keeps its state, lock and read-error note in `<log_dir>/sync/` (see Sync core). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
 
 ## Usage report

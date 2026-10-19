@@ -541,6 +541,8 @@ that key and writes one line to the log.
 | `spawn_rules.apply_to_main_session` | `true` | `false`: calls of the main session are not checked at all. |
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
+| `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
+| `sync.interval_min` / `backoff_max_h` / `pull_timeout_s` | `30` / `6` / `5` | Minutes between two pushes (at least 10); the longest wait after failed pushes, in hours; seconds the pull before a report may take. |
 
 The mode and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config file.
 

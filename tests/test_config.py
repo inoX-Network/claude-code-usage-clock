@@ -415,3 +415,28 @@ def test_start_estimate_that_is_not_positive_and_finite_falls_back_and_logs(tmp_
     write_config(tmp_path, '{"start_estimate": {"chars_per_token": %s}}' % json.dumps(value))
     assert _config.load()['start_estimate'] == _config.DEFAULTS['start_estimate']
     assert 'start_estimate.chars_per_token: must be a positive number, using default' in log_lines(tmp_path)[0]['reason']
+
+
+# --- sync -----------------------------------------------------------------------------------------------------------
+
+def test_sync_is_off_by_default_with_the_documented_waits(tmp_path):
+    assert _config.load()['sync'] == {'mode': 'off', 'interval_min': 30, 'backoff_max_h': 6, 'pull_timeout_s': 5}
+    write_config(tmp_path, {'sync': {'mode': 'shadow', 'interval_min': 5, 'backoff_max_h': 0.5, 'pull_timeout_s': 2.5}})
+    assert _config.load()['sync'] == {'mode': 'shadow', 'interval_min': 5, 'backoff_max_h': 0.5, 'pull_timeout_s': 2.5}
+    assert log_lines(tmp_path) == []      # an interval below 10 is valid here; the sync core raises it
+
+
+@pytest.mark.parametrize('value', ['shadow ', 'ON', 'enforce', ''])
+def test_an_unknown_sync_mode_falls_back_to_off_and_logs(tmp_path, value):
+    write_config(tmp_path, {'sync': {'mode': value}})
+    assert _config.load()['sync']['mode'] == 'off'
+    assert 'sync.mode: must be one of off|shadow|on, using default' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('key', ['interval_min', 'backoff_max_h', 'pull_timeout_s'])
+@pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf'), '30', True, None])
+def test_a_broken_sync_number_falls_back_to_its_default_and_logs(tmp_path, key, value):
+    write_config(tmp_path, '{"sync": {"%s": %s, "mode": "on"}}' % (key, json.dumps(value)))
+    cfg = _config.load()['sync']
+    assert cfg[key] == _config.DEFAULTS['sync'][key] and cfg['mode'] == 'on'
+    assert f'sync.{key}: ' in log_lines(tmp_path)[0]['reason']

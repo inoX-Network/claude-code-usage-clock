@@ -654,3 +654,49 @@ def test_the_input_of_the_desktop_plugin_writes_usage_history_and_context_once(t
     state = json.loads((tmp_path / 'log' / 'context' / 'desk-1.json').read_text(encoding='utf-8'))
     assert (state['context_window_size'], state['used_tokens']) == (1_000_000, 340_000)
     assert 'cache_expires_at' not in state           # the app tells no cache expiry: no guessed clock
+
+
+# --- Sync: the due check (T1) after the line --------------------------------------------------------------------------
+
+def sync_config(tmp_path, mode):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'sync': {'mode': mode}}), encoding='utf-8')
+    os.environ['CCUC_CONFIG'] = str(path)
+
+
+def test_a_due_sync_is_started_detached_after_the_line(tmp_path, monkeypatch, capsys):
+    import _plat
+    import _sync_core
+    starts = []
+    monkeypatch.setattr(_plat, 'start_detached', lambda argv: starts.append((argv, capsys.readouterr().out)))
+    sync_config(tmp_path, 'shadow')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert statusline.main() == 0
+    (argv, printed_before), = starts
+    assert argv == _sync_core.command('push') and plain(printed_before).strip() == 'Claude'
+
+
+def test_no_sync_is_started_with_sync_off_or_when_it_is_not_due(tmp_path, monkeypatch):
+    import _plat
+    import _sync_core
+    starts = []
+    monkeypatch.setattr(_plat, 'start_detached', starts.append)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert statusline.main() == 0                                      # the default is off
+    sync_config(tmp_path, 'on')
+    (tmp_path / 'log' / 'sync').mkdir(parents=True)
+    _sync_core.write_state(str(tmp_path / 'log' / 'sync'), _sync_core.State(next_due=time.time() + 600))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert statusline.main() == 0
+    assert starts == []
+
+
+def test_a_failing_sync_check_changes_neither_the_line_nor_the_exit_code(tmp_path, monkeypatch, capsys):
+    import _sync_core
+    def boom(*_args):
+        raise RuntimeError('a bug')
+    monkeypatch.setattr(_sync_core, 'statusline_tick', boom)
+    sync_config(tmp_path, 'shadow')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert statusline.main() == 0
+    assert plain(capsys.readouterr().out).strip() == 'Claude'

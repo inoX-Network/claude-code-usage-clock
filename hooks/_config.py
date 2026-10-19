@@ -67,6 +67,12 @@ DEFAULTS: dict = {
         'skill_fork_missing_agent': 'warn',
         'model_override_in_call': 'warn',
     },
+    'sync': {
+        'mode': 'off',
+        'interval_min': 30,
+        'backoff_max_h': 6,
+        'pull_timeout_s': 5,
+    },
 }
 
 _MISSING = object()  # no file at all, as opposed to a file that contains `null`
@@ -80,6 +86,7 @@ _CHOICES = {
     ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
+    ('sync', 'mode'): ('off', 'shadow', 'on'),
 }
 
 
@@ -192,6 +199,13 @@ def load(log_problems: bool = True) -> dict:
     if not (math.isfinite(estimate['chars_per_token']) and estimate['chars_per_token'] > 0):
         problems.append('start_estimate.chars_per_token: must be a positive number, using default')
         estimate['chars_per_token'] = DEFAULTS['start_estimate']['chars_per_token']
+    sync = cfg['sync']
+    # Zero, negative or infinite would push all the time, never back off or never wait for a pull. An interval
+    # below the minimum is valid here and raised by the sync core (_sync_core.MIN_INTERVAL_MIN), with its own line.
+    for key in ('interval_min', 'backoff_max_h', 'pull_timeout_s'):
+        if not (math.isfinite(sync[key]) and sync[key] > 0):
+            problems.append(f'sync.{key}: must be a positive number, using default')
+            sync[key] = DEFAULTS['sync'][key]
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')
