@@ -108,12 +108,9 @@ export function registerReport(on: On): void {
       })
       if (isNew) await load($, period)
     }
-    // A view chosen by its key takes the focus ring along, so the ring and the highlighted tab do not point apart. The
-    // engine refuses the move while the pane does not hold the keys; the view is chosen all the same
-    const chooseView = (view: View) => async () => {
-      await update($, report, current => ({ ...current, view, session: null }))
-      await $.ui.focus({ requestId: PANE, key: `view-${view}` }).catch(() => undefined)
-    }
+    // The plugin never places the focus ring itself: the engine draws it by inverting the key in white, which reads as
+    // a second, louder tab. It shows only once the person walks the buttons with Tab
+    const chooseView = (view: View) => () => update($, report, current => ({ ...current, view, session: null }))
     const chooseSession = (session: string | null) => () => update($, report, current => ({ ...current, session }))
     const refresh = async () => {
       let period: Period = 'week'
@@ -138,7 +135,7 @@ export function registerReport(on: On): void {
     const viewTab = (id: View, hotkey: string, label: string) => {
       const isActive = id === state.view
       return marked(`view-${id}`, isActive,
-        <Button key={`view-${id}`} {...keyOf(hotkey, isActive)} plain onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
+        <Button key={`view-${id}`} {...keyOf(hotkey, isActive)} plain onPress={chooseView(id)}>
           {isActive
             ? <Text key={`label-view-${id}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${keyText(hotkey, isActive)}${label} `}</Text>
             : <Text key={`label-view-${id}`}>{` ${label} `}</Text>}

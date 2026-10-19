@@ -27,7 +27,7 @@ function world(on: On, options: {
   denyRun?: string
   own?: string
 } = {}) {
-  const seen = { runs: [] as Run[], opened: [] as unknown[], registered: [] as unknown[] }
+  const seen = { runs: [] as Run[], opened: [] as unknown[], registered: [] as unknown[], focused: [] as unknown[] }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }))
@@ -44,7 +44,10 @@ function world(on: On, options: {
     return { value: { command: e.name } }
   })
   // The engine's move of the focus ring, beneath the plugin's ui.focus hook
-  on('ui.focus', () => ({}))
+  on('ui.focus', ($, e) => {
+    seen.focused.push(e.element)
+    return {}
+  })
   on('ui.open', ($, e) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
@@ -161,7 +164,7 @@ for (const surface of SURFACES) {
   })
 
   test(`${surface}: the open view is a highlighted tab, the period in the accent colour, the others plain or dim`, async ($, on) => {
-    world(on)
+    const seen = world(on)
     await start($)
     await report($)
     const ui = await mountPane($, surface)
@@ -183,8 +186,10 @@ for (const surface of SURFACES) {
     expect(await look('view-overview')).toEqual(plain)
     expect(await look('period-year')).toEqual(period)
     expect(await look('period-week')).toEqual(dim)
-    expect((await ui.find({ key: 'view-agents' }))?.props.autoFocus).toBe(true)
+    // The engine draws the focus ring as a white key; the plugin leaves it where the person put it, or nowhere
+    expect((await ui.find({ key: 'view-agents' }))?.props.autoFocus).toBeUndefined()
     expect((await ui.find({ key: 'view-overview' }))?.props.autoFocus).toBeUndefined()
+    expect(seen.focused).toEqual([])
     await ui.unmount()
   })
 
