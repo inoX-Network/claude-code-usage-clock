@@ -96,7 +96,14 @@ test('a reset that is past, missing or broken shows nothing', () => {
   expect(resetText(undefined, NOW, false, ZONE)).toBe('')
   expect(resetText('soon', NOW, true, ZONE)).toBe('')
   expect(resetText('2026-10-17T22:05:00Z', NOW, false, ZONE)).toBe(' ↻00:05')
-  expect(resetText('2026-10-17T22:05:00Z', NOW, true, 'UTC')).toBe(' ↻Sat 22:05')
+  expect(resetText('2026-10-18T22:05:00Z', NOW, true, 'UTC')).toBe(' ↻Sun 22:05')
+})
+
+test('the weekly reset names its weekday only when it is not later today', () => {
+  // NOW is Sat 17 Oct 08:00 in Berlin
+  expect(resetText('2026-10-17T13:00:00Z', NOW, true, ZONE)).toBe(' ↻15:00')
+  expect(resetText('2026-10-17T22:30:00Z', NOW, true, ZONE)).toBe(' ↻Sun 00:30')
+  expect(resetText('2026-10-19T13:00:00Z', NOW, true, ZONE)).toBe(' ↻Mon 15:00')
 })
 
 test('other windows than five hours and a week are left out', () => {

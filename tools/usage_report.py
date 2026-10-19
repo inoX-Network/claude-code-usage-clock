@@ -662,7 +662,7 @@ def new_sums() -> dict:
 
 def new_cli(label: str, start: float) -> dict:
     return {'label': label, 'start': start, 'requests': 0, 'cost': 0.0, 'tokens': dict.fromkeys(KINDS, 0), 'models': {},
-            'subs': {}, 'cold_starts': 0, 'five_pts': 0.0, 'week_pts': 0.0}
+            'subs': {}, 'cold_starts': 0, 'five_pts': 0.0, 'week_pts': 0.0, 'five_cov': 0.0, 'week_cov': 0.0}
 
 
 def new_stats() -> dict:
@@ -805,7 +805,7 @@ def _merge_cli(clis: dict, ident: str, cli: dict) -> None:
         raise TypeError(ident)
     mine = clis.setdefault(ident, new_cli(cli['label'], cli['start']))
     mine['start'] = min(mine['start'], cli['start'])
-    for key in ('requests', 'cost', 'cold_starts', 'five_pts', 'week_pts'):
+    for key in ('requests', 'cost', 'cold_starts', 'five_pts', 'week_pts', 'five_cov', 'week_cov'):
         mine[key] += cli.get(key, 0)
     for key in ('tokens', 'models', 'subs'):
         _add_counts(mine[key], cli.get(key, {}))
@@ -947,7 +947,9 @@ def _count_sections(stats: dict, data: Data, prices: list[dict], start: float, e
                 continue
             alloc['attributed'] += rise
             for ident, cost in costs.items():
-                _cli(stats, data, data.session_of[ident])[metric + '_pts'] += rise * cost / total
+                cli = _cli(stats, data, data.session_of[ident])
+                cli[metric + '_pts'] += rise * cost / total
+                cli[metric + '_cov'] += cost         # the cost that lay in a counted section: its points are measured
             for kind, cost in agents.items():      # the same shares, by agent: the main sessions or a subagent type
                 points = stats['points']['main'] if kind is None else stats['points']['types'].setdefault(
                     kind, dict.fromkeys(METRICS, 0.0))
@@ -1111,7 +1113,14 @@ def _cli_report(ident: str, cli: dict) -> dict:
             'models': dict(sorted(cli['models'].items(), key=lambda item: -item[1])),
             'subagents': _requests_and_cost(cli['subs']),
             'cache_hit_rate': _hit_rate(cli['tokens']), 'cold_starts': cli['cold_starts'],
-            'estimated_share': {'five': cli['five_pts'], 'week': cli['week_pts']}, **_details_report(cli)}
+            'estimated_share': {'five': cli['five_pts'], 'week': cli['week_pts']},
+            'measured_share': {metric: _measured(cli.get(metric + '_cov', 0.0), cli['cost']) for metric in METRICS},
+            **_details_report(cli)}
+
+
+def _measured(covered: float, cost: float) -> float | None:
+    """The part of a cost that lay in a counted section (0 to 1): 0 means its points are not measured, not zero."""
+    return min(1.0, covered / cost) if cost > 0 else None
 
 
 def _allocation(alloc: dict) -> dict:
@@ -1204,12 +1213,20 @@ def _title(period: dict) -> str:
             'range': f'Days {label}'}.get(period['kind'], label[:1].upper() + label[1:])
 
 
+def _measured_of(rows: list[dict]) -> dict:
+    """`measured_share` of several sessions or projects: their parts, weighted by cost."""
+    cost = sum(row['cost_usd'] for row in rows)
+    return {metric: _measured(sum((row['measured_share'][metric] or 0.0) * row['cost_usd'] for row in rows), cost)
+            for metric in METRICS}
+
+
 def _project_row(name: str, clis: list[dict], total: float) -> dict:
     tokens = {kind: sum(cli['tokens'][kind] for cli in clis) for kind in KINDS}
     cost = sum(cli['cost_usd'] for cli in clis)
     return {'name': name, 'cost_usd': cost, 'share': cost / total if total > 0 else None,
             'week_points': sum(cli['estimated_share']['week'] for cli in clis),
-            'five_points': sum(cli['estimated_share']['five'] for cli in clis), 'sessions': len(clis),
+            'five_points': sum(cli['estimated_share']['five'] for cli in clis),
+            'measured_share': _measured_of(clis), 'sessions': len(clis),
             'cache_hit_rate': _hit_rate(tokens), 'session_ids': [cli['id'] for cli in clis]}
 
 
@@ -1228,7 +1245,7 @@ def build_overview(period: dict, report: dict, start_block_5h: float) -> dict:
         more = {'projects': len(rest), 'cost_usd': cost,
                 'share': cost / total['cost_usd'] if total['cost_usd'] > 0 else None,
                 'week_points': sum(p['week_points'] for p in rest), 'five_points': sum(p['five_points'] for p in rest),
-                'sessions': sum(p['sessions'] for p in rest)}
+                'measured_share': _measured_of(rest), 'sessions': sum(p['sessions'] for p in rest)}
     segments, windows = abo['week_segments'], abo['five_windows']
     week = None
     if segments:
@@ -1358,6 +1375,11 @@ def _estimate_text(points: float, decimals: int) -> str:
     return text if text.startswith(('<', '0')) else '~' + text
 
 
+def _share_text(points: float, measured: float | None, decimals: int) -> str:
+    """An estimate of points, or `-` where none of the cost lay in a counted section: not measured, not zero."""
+    return '-' if measured == 0 and points == 0 else _estimate_text(points, decimals)
+
+
 def tokens_text(count: float) -> str:
     return f'{count / 1e6:.1f}M' if count >= 1e6 else f'{count / 1e3:.0f}k' if count >= 1e4 else str(int(count))
 
@@ -1443,9 +1465,10 @@ def _total_lines(total: dict) -> list[str]:
 
 def _cli_block(head: str, cli: dict) -> list[str]:
     """The lines of one CLI (or of a sum of CLIs): the head line, then its tokens, models, output, subagents and cache."""
-    share = cli['estimated_share']
+    share, measured = cli['estimated_share'], cli['measured_share']
     lines = [f'  {head + "  " if head else ""}{cli["cost_usd"]:.2f} USD  {cli["requests"]} requests  '
-             f'{_estimate_text(share["five"], 1)} 5h points  {_estimate_text(share["week"], 2)} week points',
+             f'{_share_text(share["five"], measured["five"], 1)} 5h points  '
+             f'{_share_text(share["week"], measured["week"], 2)} week points',
              f'    tokens {_kinds_text(cli["tokens"])}',
              '    models ' + ', '.join(f'{name} {cost:.2f}' for name, cost in cli['models'].items()),
              f'    output {_details_text(cli)}']
@@ -1583,16 +1606,18 @@ def short_names(names: list[str]) -> list[str]:
 
 def _table_lines(view: dict) -> list[str]:
     shown = view['projects'][:view['max_projects']]
-    rows = [(name, p['cost_usd'], p['share'], p['week_points'], p['sessions'])
+    rows = [(name, p['cost_usd'], p['share'], p['week_points'], p['measured_share']['week'], p['sessions'])
             for name, p in zip(short_names([p['name'] for p in shown]), shown)]
     if view['more']:
         more = view['more']
-        rows.append((f'{more["projects"]} more', more['cost_usd'], more['share'], more['week_points'], more['sessions']))
+        rows.append((f'{more["projects"]} more', more['cost_usd'], more['share'], more['week_points'],
+                     more['measured_share']['week'], more['sessions']))
     width = max(23, 4 + max(len(row[0]) for row in rows))
     lines = [f'{"Where it went":<{width}}{"USD":>5}{"share":>8}{"~week pts":>11}{"sessions":>10}']
-    for name, cost, share, points, sessions in rows:
+    for name, cost, share, points, measured, sessions in rows:
         percent = '<1 %' if share is not None and 0 < share < 0.01 else _percent(share)
-        lines.append(f'  {name:<{width - 2}}{usd_text(cost):>5}{percent:>8}{points_text(points):>11}{sessions:>10}')
+        shown_points = '-' if measured == 0 and points == 0 else points_text(points)
+        lines.append(f'  {name:<{width - 2}}{usd_text(cost):>5}{percent:>8}{shown_points:>11}{sessions:>10}')
     return lines
 
 

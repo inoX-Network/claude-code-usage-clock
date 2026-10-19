@@ -493,6 +493,16 @@ def test_the_weekly_reset_time_is_shown_only_from_yellow_on_with_the_weekday(wee
     assert (f'↻{day_hhmm(reset)}' in line) is shown
 
 
+def test_a_weekly_reset_later_today_has_no_weekday_one_tomorrow_has():
+    # the desktop app cuts its footer: the weekday only where it says something
+    today = time.localtime(NOW)
+    later_today = time.mktime((today.tm_year, today.tm_mon, today.tm_mday, 23, 59, 0, 0, 0, -1))
+    tomorrow = time.mktime((today.tm_year, today.tm_mon, today.tm_mday + 1, 0, 30, 0, 0, 0, -1))
+    line = plain(statusline.render('M', None, 80, CFG, None, NOW, (None, later_today)))
+    assert f'week 80% ↻{hhmm(later_today)} ' in line and f'↻{day_hhmm(later_today)}' not in line
+    assert f'week 80% ↻{day_hhmm(tomorrow)}' in plain(statusline.render('M', None, 80, CFG, None, NOW, (None, tomorrow)))
+
+
 def test_the_weekly_reset_follows_the_configured_yellow_and_stands_before_the_marker():
     cfg = json.loads(json.dumps(CFG))
     cfg['statusline']['yellow_from'] = 20

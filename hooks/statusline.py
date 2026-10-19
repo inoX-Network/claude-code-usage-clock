@@ -65,15 +65,16 @@ def _reset_of(source: dict | None, name: str):
 
 
 def _reset_text(reset, now: float, with_day: bool) -> str:
-    """` ↻19:10` in local time, for the week with the weekday (` ↻Mon 15:00`); '' for a reset that is missing,
-    broken or already past: a guessed time would be worse than none."""
+    """` ↻19:10` in local time, for the week with the weekday (` ↻Mon 15:00`) unless the reset is later today; ''
+    for a reset that is missing, broken or already past: a guessed time would be worse than none."""
     if not _usage._number(reset) or reset <= now:
         return ''
     try:
         moment = time.localtime(reset)
     except (OverflowError, OSError, ValueError):
         return ''
-    day = f'{WEEKDAYS[moment.tm_wday]} ' if with_day else ''
+    # the desktop app cuts its footer: a weekday only where it says something
+    day = f'{WEEKDAYS[moment.tm_wday]} ' if with_day and moment[:3] != time.localtime(now)[:3] else ''
     return f' ↻{day}{moment.tm_hour:02d}:{moment.tm_min:02d}'
 
 

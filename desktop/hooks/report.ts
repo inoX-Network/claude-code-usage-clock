@@ -100,6 +100,15 @@ export const pct = (x: number | null, none = '-'): string =>
 /** Points of a limit, an estimate: `<1` is more than 0 and less than one point. */
 export const pts = (x: number | null): string => (x === null ? '-' : x === 0 ? '0' : x < 1 ? '<1' : x.toFixed(1))
 export const whole = (x: number | null): string => (x === null ? '-' : String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
+/** Points of a limit where the report says how much of the cost was measured (`measured_share`): `-` if none of it
+ *  lay in a counted section and so the points are not measured, not zero. A report without the field shows the figure. */
+export const measuredPts = (points: number | null, measured: unknown): string =>
+  num(measured) === 0 && (points ?? 0) === 0 ? '-' : pts(points)
+/** The same with `~` before a figure, as an estimate stands in running text; `0`, `<1` and `-` stay without. */
+export const estimate = (points: number | null, measured?: unknown): string => {
+  const text = measuredPts(points, measured)
+  return /^[\d.]+$/.test(text) && text !== '0' ? `~${text}` : text
+}
 /** A number with at most one decimal, without a trailing zero. */
 const plain = (x: number): string => String(Number(x.toFixed(1)))
 /** Tokens, with `k` for thousands from 10 000 on. */
@@ -123,6 +132,21 @@ function fit(text: string, width: number): string {
   if (text.length <= width) return text
   if (width <= 1) return '…'.slice(0, width)
   const head = Math.ceil((width - 1) / 2)
+  return `${text.slice(0, head)}…${text.slice(text.length - (width - 1 - head))}`
+}
+
+/** An MCP tool as its server lists it: `computer`, not `mcp__claude-in-chrome__computer` under `claude-in-chrome`. */
+export function toolName(server: string, name: string): string {
+  const prefix = `mcp__${server}__`
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name
+}
+
+/** A file path, short: the home folder as `~`, then cut to `width` by a `…`, the end keeping two thirds of the room:
+ *  it is the part that tells two files apart. */
+export function shortPath(path: string, width = 48): string {
+  const text = path.replace(/^(?:[A-Za-z]:[\\/]Users[\\/][^\\/]+|\/home\/[^/]+|\/Users\/[^/]+)(?=[\\/]|$)/, '~')
+  if (text.length <= width) return text
+  const head = Math.floor((width - 1) / 3)
   return `${text.slice(0, head)}…${text.slice(text.length - (width - 1 - head))}`
 }
 
@@ -157,7 +181,8 @@ const none = (text: string): Line[] => [{ text, style: 'dim' }]
 const PROJECT_HEAD = ['project', 'USD', 'share', '~week pts', 'sessions']
 
 function projectRow(name: string, entry: Record<string, unknown>): string[] {
-  return [name, usd(num(entry.cost_usd)), pct(num(entry.share)), pts(num(entry.week_points)), whole(num(entry.sessions))]
+  return [name, usd(num(entry.cost_usd)), pct(num(entry.share)), measuredPts(num(entry.week_points), rec(entry.measured_share).week),
+    whole(num(entry.sessions))]
 }
 
 function overview(report: Report, columns: number, limits: Limits): Line[] {
@@ -333,6 +358,8 @@ function projects(report: Report, columns: number): Line[] {
 // --- Sessions ---------------------------------------------------------------------------------------------------
 
 const SESSION_HEAD = ['session', 'started', 'USD', '~week pts', 'requests']
+/** A session can reach past its period: what the report counts of it is the part within. */
+export const PERIOD_ONLY = 'Figures of the period shown: requests of the session before or after it are not counted.'
 const TOP = 10
 const OWN_MARK = '▶ '
 
@@ -347,7 +374,7 @@ export function sessionList(report: Report, columns: number, own: string | null 
     `${indent(cli)}${str(cli.label) ?? '?'} ${str(cli.id)}`,
     str(cli.start) === null ? '-' : localTime(str(cli.start) as string),
     usd(num(cli.cost_usd)),
-    pts(num(rec(cli.estimated_share).week)),
+    measuredPts(num(rec(cli.estimated_share).week), rec(cli.measured_share).week),
     whole(num(cli.requests)),
   ])
   const [head, ...lines] = table([`${indent(null)}${SESSION_HEAD[0]}`, ...SESSION_HEAD.slice(1)], cells, columns)
@@ -396,11 +423,14 @@ function contextLines(context: Record<string, unknown>, columns: number): Line[]
     const label = (name: string, sum: { tools: number; deferred: number }) =>
       `${name} (${sum.tools} tool${sum.tools === 1 ? '' : 's'}${sum.deferred === 0 ? '' : sum.deferred === sum.tools ? ', deferred' : `, ${sum.deferred} deferred`})`
     out.push(BLANK, ...tokenTable('MCP server', [...servers].map(([name, sum]) => [label(name, sum), sum.tokens]), columns))
-    out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => [`${str(tool.server) ?? '?'} ${str(tool.name) ?? '?'}`, num(tool.tokens) ?? 0]), columns))
+    out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => {
+      const server = str(tool.server) ?? '?'
+      return [`${server} ${toolName(server, str(tool.name) ?? '?')}`, num(tool.tokens) ?? 0]
+    }), columns))
   }
   const memory = list(context.memory_files).map(rec)
   if (memory.length > 0) {
-    out.push(BLANK, ...tokenTable('memory file', memory.map(file => [str(file.path) ?? '?', num(file.tokens) ?? 0]), columns))
+    out.push(BLANK, ...tokenTable('memory file', memory.map(file => [shortPath(str(file.path) ?? '?'), num(file.tokens) ?? 0]), columns))
   }
   const skills = context.skills === null || context.skills === undefined ? null : rec(context.skills)
   if (skills !== null) {
@@ -421,11 +451,13 @@ export function sessionDetail(report: Report, id: string, columns: number, own: 
   const cli = list(report.clis).map(rec).find(entry => str(entry.id) === id)
   if (cli === undefined) return none('This session is not in the report any more. Press q for the list.')
   const share = rec(cli.estimated_share)
+  const measured = rec(cli.measured_share)
   const start = str(cli.start)
   const out: Line[] = [
     {
       text: `${str(cli.label) ?? '?'} ${id}${id === own ? ' · this session' : ''} · ${start === null ? '-' : localTime(start)}`
-        + ` · ${usd(num(cli.cost_usd))} USD · ~${pts(num(share.week))} week pts, ~${pts(num(share.five))} 5h pts`,
+        + ` · ${usd(num(cli.cost_usd))} USD · week: ${estimate(num(share.week), measured.week)} pts`
+        + ` · 5h: ${estimate(num(share.five), measured.five)} pts`,
       style: 'heading',
     },
     {
@@ -436,6 +468,7 @@ export function sessionDetail(report: Report, id: string, columns: number, own: 
         num(cli.thinking_share) === null ? null : `thinking ${pct(num(cli.thinking_share))} of output`,
       ].filter(Boolean).join(' · '),
     },
+    { text: PERIOD_ONLY, style: 'dim' },
   ]
   const t = rec(cli.tokens)
   out.push(BLANK, ...facts([

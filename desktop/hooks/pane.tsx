@@ -8,7 +8,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { ReportSlot, ReportState } from '../types/index'
 import { DEFAULTS } from './config'
-import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
+import { PERIODS, PERIOD_ONLY, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
@@ -209,7 +209,7 @@ export function registerReport(on: On): void {
       const caption = (key: string, text: string) => <Text key={key} size="caption" color={LOOK.muted}>{text.toUpperCase()}</Text>
       const bar = (key: string, length: number, color: string) => (
         <Box key={key} flexDirection="row" width="100%" backgroundColor={LOOK.border}>
-          <Box width={`${Math.max(2, Math.round(length * 100))}%`} backgroundColor={color}><Text size="caption"> </Text></Box>
+          {length > 0 ? <Box width={`${Math.max(1, Math.round(length * 100))}%`} backgroundColor={color}><Text size="caption"> </Text></Box> : null}
         </Box>
       )
       const barRows = (prefix: string, bars: Bar[]) => bars.map((b, i) => (
@@ -295,6 +295,7 @@ export function registerReport(on: On): void {
         body = [
           ...(own.length === 0 ? [] : [caption('own-label', 'This session'), ...own.map(sessionCard)]),
           caption('all-label', own.length === 0 ? 'Sessions · highest cost first' : 'All sessions · highest cost first'),
+          muted('period-only', PERIOD_ONLY),
           ...cards.filter(c => !c.isOwn).map(sessionCard),
         ]
       } else if (state.view === 'sessions' && state.session !== null) {
@@ -303,6 +304,7 @@ export function registerReport(on: On): void {
           <Button key="back" hotkey="q" plain onPress={chooseSession(null)}><Text key="label-back" dimColor>Back to the list</Text></Button>,
           ...(heading === undefined ? [] : [<Text key="detail-title" size="heading" weight="semibold" color={LOOK.text}>{heading.text}</Text>]),
           ...(figures === undefined || figures.text === '' ? [] : [muted('detail-figures', figures.text)]),
+          muted('detail-period-only', PERIOD_ONLY),
           ...sessionTiles(slot.report, state.session).map(drawTile),
         ]
       } else {

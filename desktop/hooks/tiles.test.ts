@@ -53,7 +53,7 @@ describe('sessionCards', () => {
     const cards = sessionCards(REPORT, 'bbbbbbbb')
     expect(cards.map(c => [c.id, c.isOwn])).toEqual([['bbbbbbbb', true], ['aaaaaaaa', false]])
     expect(cards[1]).toMatchObject({ title: 'webshop aaaaaaaa', cost: '60 USD' })
-    expect(cards[1]?.meta).toMatch(/^\S+ 13 Oct \d\d:\d\d · 300 requests · cache 90 % · ~20\.0 week pts$/)
+    expect(cards[1]?.meta).toMatch(/^\S+ 13 Oct \d\d:\d\d · 300 requests · cache 90 % · week: ~20\.0 pts$/)
   })
 })
 
@@ -78,6 +78,29 @@ describe('sessionTiles', () => {
   test('a session from before the plugin says it has no context; one not in the report says so', async () => {
     expect(sessionTiles(REPORT, 'bbbbbbbb').at(-1)).toMatchObject({ kind: 'note', key: 'no-context' })
     expect(sessionTiles(REPORT, 'cccccccc')).toEqual([expect.objectContaining({ kind: 'note', key: 'gone' })])
+  })
+})
+
+describe('points that are not measured', () => {
+  const unmeasured = {
+    ...REPORT,
+    overview: { ...REPORT.overview, projects: REPORT.overview.projects.map(p => (p.name === 'blog'
+      ? { ...p, week_points: 0, five_points: 0, measured_share: { five: 0, week: 0 } }
+      : { ...p, measured_share: { five: 1, week: 1 } })) },
+    clis: REPORT.clis.map(c => (c.id === 'bbbbbbbb'
+      ? { ...c, estimated_share: { five: 0, week: 0 }, measured_share: { five: 0, week: 0 } }
+      : { ...c, measured_share: { five: 1, week: 1 } })),
+  }
+
+  test('show a dash, a measured zero stays 0, a report without the field shows the figure', async () => {
+    expect(overviewTiles(unmeasured, LIMITS).projects.find(b => b.label === 'blog')?.value).toBe('9.0 · -')
+    expect(sessionCards(unmeasured, null).find(c => c.id === 'bbbbbbbb')?.meta).toMatch(/· week: - pts$/)
+    expect(sessionTiles(unmeasured, 'bbbbbbbb')[0]).toMatchObject({ kind: 'kpis' })
+    const figures = sessionTiles(unmeasured, 'bbbbbbbb')[0]
+    expect(figures?.kind === 'kpis' && figures.kpis[0]?.lines).toEqual(['week: - pts', '5h: - pts'])
+    const zero = { ...unmeasured, clis: unmeasured.clis.map(c => ({ ...c, measured_share: { five: 1, week: 1 } })) }
+    expect(sessionCards(zero, null).find(c => c.id === 'bbbbbbbb')?.meta).toMatch(/· week: 0 pts$/)
+    expect(sessionCards(REPORT, null).find(c => c.id === 'bbbbbbbb')?.meta).toMatch(/· week: ~3\.0 pts$/)
   })
 })
 
