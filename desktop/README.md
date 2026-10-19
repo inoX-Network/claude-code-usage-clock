@@ -62,7 +62,9 @@ the terminal in front of it (`b: Agents`), the desktop app beside the label. The
 Claude Code has no tab element and a mod cannot bind the arrow keys: Tab walks the buttons and opens the view it lands
 on, Up and Down scroll a long view, a period is chosen by its key or with Enter (Tab does not read every period it
 passes). The share of the weekly limit and the highest 5h window are yellow or red from the `statusline` thresholds of
-the usage-clock `config.json`, as in the status line. Esc closes the pane. Tab past the last button hands the keys back
+the usage-clock `config.json`, as in the status line. The pane never places the focus ring itself, neither on opening nor
+when a key chooses a view: Claude Code draws it by inverting the key in white, and it appears only once Tab walks the
+buttons. Esc closes the pane. Tab past the last button hands the keys back
 to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane again.
 
 | View | Shows |
