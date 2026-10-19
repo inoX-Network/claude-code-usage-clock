@@ -346,6 +346,76 @@ def test_a_day_line_of_an_earlier_version_keeps_its_rules(world, synced):
     assert report['total']['requests'] == 9 and report['startup']['starts'] == []
 
 
+# --- Criterion: a hostile day line of another machine is skipped and counted, never a crash -----------------------
+
+def hostile(world, synced, change):
+    """This machine's day line (5 requests, 2 USD) and a laptop line for the same day changed by `change`."""
+    world.projects.mkdir()
+    own_archive(world, ('2026-10-11', archive_line(5, 2.0, 'aaaaaaaa', 'proj-a', 3, peak=40)))
+    synced.clone.machine(LAPTOP)
+    line = archive_line(7, 4.0, 'bbbbbbbb', 'proj-b', 4, peak=60)
+    change(line)
+    synced.clone.days(LAPTOP, [('2026-10-11', line)])
+
+
+def set_in(path, value):
+    def change(line):
+        target = line
+        for key in path[:-1]:
+            target = target.setdefault(key, {})
+        target[path[-1]] = value
+    return change
+
+
+@pytest.mark.parametrize('change', [
+    set_in(('cost',), 10 ** 400),                                            # no float can hold it
+    set_in(('requests',), -1000),                                            # negative
+    set_in(('cost',), -500.0),
+    set_in(('tokens', 'output'), 10 ** 13),                                  # above any real count
+    set_in(('agent_types',), {'reviewer': 7}),                               # not the shape the report reads
+    set_in(('models',), {'Opus 5.5': {'requests': 1, 'cost': 1.0}}),         # a model without its tokens
+    set_in(('unpriced',), {'x': {'requests': 1}}),
+    set_in(('clis',), {'bbbbbbbb': 7}),
+    set_in(('clis',), {'not an id!': report_module.new_cli('proj-b', 1.0)}),
+    set_in(('clis', 'bbbbbbbb', 'models'), {'Opus 5.5': {'cost': 1}}),
+    set_in(('clis', 'bbbbbbbb', 'subs'), {'reviewer': 7}),
+    set_in(('clis', 'bbbbbbbb', 'label'), 'proj-\x1b[2J\x1b]0;pwned\x07'),     # control characters
+    set_in(('agent_types',), {'agent\x1b[5m': {'requests': 7, 'cost': 4.0}}),
+    set_in(('models',), {'evil\x1b[31mmodel': {'requests': 7, 'cost': 4.0, 'tokens': {}}}),
+    set_in(('guard_reasons', 'soft_stop', 'enforce', 'deny'), {'why\x07': 1}),
+    set_in(('abo',), {'five_windows': [{'resets': None, 'first': 1.0, 'peak': 1, 'peak_at': 10 ** 12, 'last': 2.0,
+                                        'first_value': 1, 'last_value': 1}]}),   # passes the checks, fails the report
+], ids=['huge', 'negative-count', 'negative-cost', 'too-many-tokens', 'agent-types-shape', 'models-shape',
+        'unpriced-shape', 'cli-shape', 'cli-id', 'cli-models', 'cli-subs', 'label-escape', 'agent-type-escape',
+        'model-escape', 'reason-escape', 'probe'])
+def test_a_hostile_foreign_day_line_is_skipped_and_counted(world, synced, change):
+    hostile(world, synced, change)
+    report = world.report('--day', '2026-10-11')
+    assert report['total']['requests'] == 5 and report['total']['cost_usd'] == pytest.approx(2.0)
+    assert report['coverage']['sync']['unreadable_day_lines'] == 1
+    for args in (('--full',), (), ('--json',)):
+        text = world.overview('--day', '2026-10-11', *args)
+        assert not report_module.CONTROL_CHARS.search(text.replace('\n', ''))
+
+
+def test_a_foreign_day_line_with_a_number_json_does_not_know_is_skipped(world, synced):
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP)
+    good = json.dumps({'v': 1, 'day': '2026-10-10', 'stats': {'requests': 3}})
+    synced.clone.raw(LAPTOP, 'days/2026-10.jsonl', (good + '\n' + good.replace('3', 'NaN').replace('10-10', '10-11')
+                                                    + '\n').encode('utf-8'))
+    report = world.report('--since', '2026-10-10', '--until', '2026-10-11')
+    assert report['total']['requests'] == 3 and report['coverage']['sync']['unreadable_day_lines'] == 1
+
+
+def test_a_number_no_float_holds_is_no_archive_line_also_locally(world):
+    world.projects.mkdir()
+    bad = archive_line(5, 2.0, 'aaaaaaaa', 'proj-a')
+    bad['cost'] = 10 ** 400
+    own_archive(world, ('2026-10-11', bad))
+    assert world.report('--day', '2026-10-11')['coverage']['unreadable_archive_lines'] == 1
+
+
 # --- Criterion: the pull waits 5 minutes, --sync pulls always ------------------------------------------------------
 
 def test_a_second_report_within_5_minutes_of_a_pull_does_not_pull_and_sync_always_does(world, synced):

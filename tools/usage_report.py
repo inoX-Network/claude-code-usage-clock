@@ -378,7 +378,7 @@ def parse_archive_line(raw: str) -> tuple[str, dict]:
     date.fromisoformat(day)
     try:
         merge_stats(new_stats(), stats)       # figures in another format (or damaged) do not merge: not an archive line
-    except (TypeError, ValueError, KeyError, AttributeError) as error:
+    except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError) as error:
         raise ValueError('figures') from error
     _merge_archived_questions(stats)
     return day, stats
@@ -1924,6 +1924,72 @@ SAME_MEASUREMENT_S = 120    # equal measurements (both values, both reset times)
 STALE_PUSH_S = 24 * 3600    # a machine without a successful push for longer is notable
 NO_START = 'sync:'          # the source of a request of the clone that is not the first of its transcript
 SUBSCRIPTION_KEYS = ('abo', 'alloc', 'cal', 'points')      # the parts of a day line that only one line may give
+CLI_ID = re.compile(r'[A-Za-z0-9_-]{1,8}')      # the first 8 characters of a session id
+TEXT_LENGTH = 64                                  # a key or text of a foreign day line is at most this long
+PROBE_COVERAGE = {'transcript_files': 0, 'archive_days': [], 'archive_days_without_agent_split': [],
+                  'unreadable_history_lines': 0, 'unreadable_archive_lines': 0, 'unreadable_transcript_lines': 0,
+                  'unreadable_context_files': 0}
+
+
+def _figures(value) -> None:
+    """Every number of a foreign day line finite and from 0 to MAX_COUNT, every key and text without control
+    characters and at most TEXT_LENGTH long. ValueError otherwise."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _figures(key)
+            _figures(item)
+    elif isinstance(value, list):
+        for item in value:
+            _figures(item)
+    elif isinstance(value, str):
+        if len(value) > TEXT_LENGTH or CONTROL_CHARS.search(value):
+            raise ValueError('text')
+    elif value is not None and not (_transcripts.is_number(value) and 0 <= value <= _transcripts.MAX_COUNT):
+        raise ValueError('number')
+
+
+def _table(table, names: re.Pattern, needs: tuple = (), counts: bool = False) -> None:
+    """A table of a day line as the report reads it: an object whose keys fit `names`, of objects with the keys
+    `needs` (`tokens` an object with every kind), or with `counts` of numbers."""
+    if not isinstance(table, dict):
+        raise ValueError('table')
+    for name, entry in table.items():
+        if not names.fullmatch(name):
+            raise ValueError('name')
+        if counts:
+            if not _transcripts.is_number(entry):
+                raise ValueError('count')
+        elif not isinstance(entry, dict) or not all(key in entry for key in needs) or (
+                'tokens' in needs and not (isinstance(entry['tokens'], dict)
+                                           and all(kind in entry['tokens'] for kind in _transcripts.KINDS))):
+            raise ValueError('entry')
+
+
+def check_foreign_day(stats: dict) -> None:
+    """The content of a day line of another machine, beyond the rules of the own archive (`parse_archive_line`):
+    numbers, texts, and the shape of `models`, `unpriced`, `agent_types` and `clis` with names after the patterns of
+    the format. Then, as a net, the figures go once through the whole report. ValueError for anything that does not
+    hold: a foreign line never stops the report."""
+    _figures(stats)
+    _table(stats.get('models', {}), START_TEXT, ('requests', 'cost', 'tokens'))
+    _table(stats.get('unpriced', {}), START_TEXT, ('requests', 'tokens'))
+    _table(stats.get('agent_types', {}), _transcripts.AGENT_TYPE, ('requests', 'cost'))
+    clis = stats.get('clis', {})
+    _table(clis, CLI_ID, ('label', 'start'))
+    for cli in clis.values():
+        if not isinstance(cli['label'], str) or not sync_format.LABEL.fullmatch(cli['label']):
+            raise ValueError('label')
+        _table(cli.get('models', {}), START_TEXT, counts=True)
+        _table(cli.get('subs', {}), _transcripts.AGENT_TYPE, ('requests', 'cost'))
+    try:
+        trial = new_stats()
+        merge_stats(trial, stats)
+        report = build_report(trial, {'kind': 'day', 'label': 'probe', 'start': iso(0), 'end': iso(0)},
+                              dict(PROBE_COVERAGE), 100.0)
+        render(report)
+        render_overview(report)
+    except Exception as error:      # the net: whatever the report cannot take is no day line
+        raise ValueError('probe') from error
 
 
 def machine_name(text: str) -> str:
@@ -1972,7 +2038,8 @@ class Machines:
         for row in machine.days:
             try:
                 day, stats = parse_archive_line(json.dumps(row))
-            except (ValueError, TypeError, KeyError, RecursionError):
+                check_foreign_day(stats)
+            except (ValueError, TypeError, KeyError, RecursionError, ArithmeticError):
                 self.broken_days += 1
                 continue
             days.setdefault(day, stats)
@@ -2009,7 +2076,7 @@ class Machines:
             trial = copy.deepcopy(combined)
             try:
                 merge_stats(trial, stats if index == 0 else _usage_only(stats))
-            except (TypeError, ValueError, KeyError, AttributeError):
+            except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
                 self.broken_days += 1
                 continue
             combined = trial
@@ -2471,7 +2538,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         for day in archived:
             try:
                 merge_stats(stats, lines[day.isoformat()])
-            except (TypeError, ValueError, KeyError, AttributeError):
+            except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError):
                 unfit = day       # does not fit the live figures: all is computed again with this day from the transcripts
                 break
             if 'starts' not in lines[day.isoformat()]:      # archived by an earlier version: from the transcripts
