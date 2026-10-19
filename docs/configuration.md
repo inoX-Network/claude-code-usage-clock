@@ -42,6 +42,8 @@ that key and writes one line to the log.
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
 | `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
+| `sync.repo` | `""` | The sync repository on GitHub as `owner/name` (a private one; the installer sets it with `--sync-repo`). Empty: no push. |
+| `sync.transport` | `https` | How the clone reaches it: `https` (`https://github.com/owner/name.git`) or `ssh` (`git@github.com:owner/name.git`). The remote of the clone must be exactly this URL. |
 | `sync.machine_name` | `""` | Name of this machine in the sync repository (letters, digits, spaces, `. + @ = - _`, at most 64). Empty: `machine-` and the first 6 characters of its id; the host name is never used. |
 | `sync.interval_min` / `backoff_max_h` / `pull_timeout_s` | `30` / `6` / `5` | Minutes between two pushes (at least 10); the longest wait after failed pushes, in hours; seconds the pull before a report may take. |
 | `sync.project_labels` | `plain` | How projects are named in the sync repository, in request and day lines: `plain` (the folder name, as in the report), `alias` (from `sync.project_aliases`) or `hash` (needs `sync.label_salt`). |

@@ -8,9 +8,8 @@
     sync.py session-start         hook SessionStart (T3)
     sync.py session-end           hook SessionEnd (T2)
 
-The git work is `git_push` and `git_pull` below. Until 0034-SYNC-PUSH and 0034-SYNC-REPORT bring it, both fail with
-the category `internal`: a run that synced nothing must never look like a success. It is logged and backs off like any
-failure, so the status line does not start a push on every tick (and `sync.mode` is `off` by default).
+The push is `_sync_git.push` (0034-SYNC-PUSH). The pull is `git_pull` below (0034-SYNC-REPORT): the clone brought onto
+the remote with the helper the push uses, never merged; the usage report runs it before a report as well.
 
 Exit codes: 0 success or nothing to do (sync off, not due, lock held by another run), 1 failed, blocked after
 `visibility` or ended by the watchdog, 2 bad arguments. The hooks print nothing and always exit 0. That sync/ cannot be
@@ -27,21 +26,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _config  # noqa: E402
 import _hookio  # noqa: E402
 import _sync_core  # noqa: E402
-
-
-def git_push(run: _sync_core.Run) -> None:
-    """The push itself (0034-SYNC-PUSH). Not built yet."""
-    raise _sync_core.SyncError('internal', 'push is not built yet')
+import _sync_git  # noqa: E402
 
 
 def git_pull(run: _sync_core.Run) -> None:
-    """The pull itself (0034-SYNC-REPORT). Not built yet."""
-    raise _sync_core.SyncError('internal', 'pull is not built yet')
-
-
-def clone_dir(log_dir: str, cfg: dict) -> str | None:
-    """The local clone of the sync repository (0034-SYNC-PUSH); None while there is none. Not built yet."""
-    return None
+    """The pull: the clone checked as for the push, then brought onto the remote (a fast forward, or its own commits
+    rebased onto it); never a merge. A history that went apart while the work tree of the clone has changes leaves the
+    clone as it is: `conflict`, as for a rebase that does not fit."""
+    clone = _sync_git.open_clone(run)
+    run.deadline.check()
+    if _sync_git.update_clone(run, clone) == _sync_git.DIVERGED_DIRTY:
+        raise _sync_core.SyncError('conflict', 'the sync history went apart and the clone has changes: not updated')
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -74,14 +69,14 @@ def _hook(command: str) -> int:
 
 def main(argv: list[str] | None = None, push_runner: _sync_core.Runner | None = None,
          pull_runner: _sync_core.Runner | None = None) -> int:
-    """`push_runner` and `pull_runner` replace git_push and git_pull (tests)."""
+    """`push_runner` and `pull_runner` replace _sync_git.push and git_pull (tests)."""
     args = _parser().parse_args(argv)
     if args.command in ('session-start', 'session-end'):
         return _hook(args.command)
     cfg, log_dir = _config.load(), _hookio.log_dir()
     try:
         if args.command == 'push':
-            return _sync_core.push(log_dir, cfg, push_runner or git_push, forced=args.now, if_due=args.if_due)
+            return _sync_core.push(log_dir, cfg, push_runner or _sync_git.push, forced=args.now, if_due=args.if_due)
         return _sync_core.pull(log_dir, cfg, pull_runner or git_pull, background=args.background)
     except OSError as error:      # no sync folder, no lock file: nothing could be recorded in the state
         _sync_core.log_hourly(log_dir, time.time(), _sync_core.ERROR_NOTE, 'error',

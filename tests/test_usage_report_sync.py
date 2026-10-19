@@ -5,10 +5,12 @@ folder written with hooks/sync_format.py, the git work of the pull and the push 
 of tests/test_usage_report.py."""
 import json
 import os
+import shutil
 
 import pytest
 
 import _sync_core
+import _sync_git
 import sync
 import sync_format
 from test_usage_report import NOW, T, dollars, local_zone, report_module, req, row, spend, world  # noqa: F401
@@ -82,12 +84,11 @@ class Synced:
         world.configure(monkeypatch, sync={'mode': mode, 'machine_name': 'desk'})
         self.world, self.log = world, str(world.log)
         self.own = sync_format.load_machine_id(self.log)
-        self.clone = Clone(tmp_path / 'clone')
+        self.clone = Clone(_sync_git.clone_dir(self.log))
         self.pulls, self.pushes = [], []
         self.pull_error = self.push_error = None
-        monkeypatch.setattr(sync, 'clone_dir', lambda log_dir, cfg: self.clone.root)
         monkeypatch.setattr(sync, 'git_pull', self.pull)
-        monkeypatch.setattr(sync, 'git_push', self.push)
+        monkeypatch.setattr(_sync_git, 'push', self.push)
 
     def pull(self, run):
         self.pulls.append(run)
@@ -418,8 +419,7 @@ def test_a_failed_push_of_sync_is_named_and_the_report_goes_on(world, synced):
 
 def test_a_sync_folder_that_cannot_be_used_fails_push_and_pull_but_not_the_report(world, synced):
     world.projects.mkdir()
-    os.remove(world.log / 'sync' / 'machine_id')
-    os.rmdir(world.log / 'sync')
+    shutil.rmtree(world.log / 'sync')
     (world.log / 'sync').write_text('', encoding='utf-8')
     sync_part = world.report('--sync')['coverage']['sync']
     assert sync_part['push'] == {'status': 'failed', 'category': 'internal'}
@@ -628,9 +628,9 @@ def test_a_machine_that_never_synced_reads_the_clone_by_its_configured_name(worl
     assert report['coverage']['sync']['machines'][0]['name'] == 'this machine' and report['total']['requests'] == 3
 
 
-def test_without_a_clone_only_this_machine_is_shown(world, synced, monkeypatch):
+def test_without_a_clone_only_this_machine_is_shown(world, synced):
     two_machines(world, synced)
-    monkeypatch.setattr(sync, 'clone_dir', lambda log_dir, cfg: None)
+    os.rename(synced.clone.root, world.root / 'elsewhere')
     report = world.report('--day', '2026-10-13')
     assert report['total']['requests'] == 1 and len(report['coverage']['sync']['machines']) == 1
 

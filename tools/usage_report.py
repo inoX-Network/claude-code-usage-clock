@@ -50,6 +50,7 @@ import _config  # noqa: E402
 import _plat  # noqa: E402
 import _spawn_check  # noqa: E402
 import _sync_core  # noqa: E402
+import _sync_git  # noqa: E402
 import _transcripts  # noqa: E402
 import _usage  # noqa: E402
 import log_summary  # noqa: E402
@@ -2041,10 +2042,8 @@ def merge_measurements(measurements: list[Measurement]) -> list[Measurement]:
     return kept
 
 
-def read_clone(root: str | None, machines: Machines) -> None:
+def read_clone(root: str, machines: Machines) -> None:
     """Adds the folders of the other machines in the clone at `root`, and the requests of the own folder."""
-    if root is None:
-        return
     repo = sync_format.read_repo(root, skip=machines.own or None)
     machines.skipped = repo.skipped
     for key, machine in sorted(repo.machines.items()):
@@ -2066,7 +2065,7 @@ def sync_push(log_dir: str, cfg: dict, now: float) -> dict:
     after `visibility` and never past the lock. Its status: `ok`, `failed` (with the category), `blocked`, `locked`."""
     before = _state(log_dir)
     try:
-        code = _sync_core.push(log_dir, cfg, sync_command.git_push, forced=True, clock=lambda: now)
+        code = _sync_core.push(log_dir, cfg, _sync_git.push, forced=True, clock=lambda: now)
     except OSError:
         return {'status': 'failed', 'category': 'internal'}
     after = _state(log_dir)
@@ -2200,8 +2199,9 @@ def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Mach
     configured = cfg['sync']['machine_name']
     name = sync_format.display_name(own, configured) if own else configured or 'this machine'
     machines = Machines(own, machine_name(name), state.last_success)
-    if usable:
-        read_clone(sync_command.clone_dir(log_dir, cfg), machines)
+    root = _sync_git.clone_dir(log_dir)
+    if usable and os.path.isdir(root):
+        read_clone(root, machines)
     chosen = None if args.machine is None else choose_machine(parser, machines, args.machine)
     sync = sync_coverage(machines, pull, push, state, cfg, chosen, now)
     return machines, chosen, sync, sync_notes(sync, state, now)
