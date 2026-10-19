@@ -24,7 +24,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
   _sync_core.py           the sync core: state, due check, lock, backoff, timeouts, triggers (<log_dir>/sync/)
   _sync_export.py         the sync export: the new local data appended to the own folder of the sync clone, with a cursor (<log_dir>/sync/cursor.json)
-  _sync_git.py            the git work of the sync: the push (remote, visibility, export, commit guard, commit, push), the clone and fast-forward the pull uses
+  _sync_git.py            the git work of the sync: the push (remote, visibility, export, commit guard, commit, push), the clone and its update the pull uses
   _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report and the sync export do)
   sync_format.py          the sync repository: layout, line formats, machine id, project labels, writing (allowlist), reading (foreign data), compacting; see docs/report-format.md
 tools/
@@ -582,10 +582,13 @@ run the installer with --sync-repo`).
   Username for 'https://github.com': terminal prompts disabled` is private (noted, on we go; a private and a missing
   repository look alike anonymously, both are not public); anything else (an unknown host, another exit, another
   text, a timeout, no git) is unclear, `network`, no push.
-- **4. Update:** fetch (`--prune --no-tags`, all branches to `refs/remotes/origin/`); behind the remote: `merge
-  --ff-only` (refused by git: `conflict`). Ahead, or apart because commits of an earlier run were not pushed (shadow,
-  a failed push): nothing yet, see 7b. A fetch that fails is `auth` (AUTH_TEXTS: no user name, permission denied,
-  repository not found, 401/403 …) or `network`.
+- **4. Update** (`update_clone`, shared with the pull of the report): fetch (`--prune --no-tags`, all branches to
+  `refs/remotes/origin/`); same or ahead: `up_to_date`; behind: `merge --ff-only`, `fast_forwarded` (refused by git:
+  `conflict`); apart, because commits of an earlier run were not pushed (shadow, a failed push), with a clean work
+  tree: the own commits are rebased onto the remote, `rebased` (a conflict aborts the rebase: `conflict`, the own
+  commits stay); apart with changes in the work tree: nothing, `diverged_dirty` (the push rebases after its commit,
+  see 7b; the report keeps the clone as it is). A fetch that fails is `auth` (AUTH_TEXTS: no user name, permission
+  denied, repository not found, 401/403 …) or `network`.
 - **5. Export** (`_sync_export.export`) and **5b. compacting** (`sync_format.compact`): the request months beyond
   `sync.keep_request_months` with a day line for every day with requests. The months that may go are taken before
   anything is removed and noted in `<log_dir>/sync/compacting.json` (0600) first; without the note nothing is

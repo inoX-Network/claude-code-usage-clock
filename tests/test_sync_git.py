@@ -315,11 +315,30 @@ def test_a_rebase_conflict_ends_in_conflict_with_a_clean_clone_and_the_own_commi
     foreign = remote.head()
     device.cfg['sync']['mode'] = 'on'
     device.request()
-    assert device.push(now=NOW + 120) == 1
+    assert device.push(now=NOW + 120) == 1                          # the rebase of step 4 meets the foreign change
     assert device.failure()['category'] == 'conflict'
     assert device.status() == '' and not os.path.exists(os.path.join(device.clone, '.git', 'rebase-merge'))
-    own_commits = git('log', '--format=%an', f'{foreign}..HEAD', cwd=device.clone).stdout.split()
-    assert own_commits == ['usage-clock', 'usage-clock']              # the shadow commit and the new one
+    base = git('merge-base', 'HEAD', foreign, cwd=device.clone).stdout.strip()
+    assert git('log', '--format=%an', f'{base}..HEAD', cwd=device.clone).stdout.split() == ['usage-clock']
+    assert len(device.worktree_requests()) == 2 and remote.head() == foreign      # the shadow commit stays
+
+
+def test_a_rebase_conflict_after_the_commit_keeps_both_own_commits(device, remote):
+    device.request()
+    assert device.push() == 0
+    device.cfg['sync']['mode'] = 'shadow'
+    device.request()
+    assert device.push(now=NOW + 60) == 0
+    remote.foreign_commit(f'{device.own}/status.json', '{"v":1}\n')
+    foreign = remote.head()
+    with open(os.path.join(device.clone, *device.own.split('/'), 'status.json'), 'w', encoding='utf-8') as f:
+        f.write('{"v":1,"dirty":true}\n')                            # dirty: step 4 leaves the rebase to step 7b
+    device.cfg['sync']['mode'] = 'on'
+    device.request()
+    assert device.push(now=NOW + 120) == 1 and device.failure()['category'] == 'conflict'
+    assert device.status() == '' and not os.path.exists(os.path.join(device.clone, '.git', 'rebase-merge'))
+    base = git('merge-base', 'HEAD', foreign, cwd=device.clone).stdout.strip()
+    assert git('log', '--format=%an', f'{base}..HEAD', cwd=device.clone).stdout.split() == ['usage-clock'] * 2
     assert len(device.worktree_requests()) == 3 and remote.head() == foreign
 
 
@@ -752,26 +771,66 @@ def test_missing_or_refused_credentials_are_auth(device, remote, monkeypatch, er
         'auth', 'the fetch was refused: credentials missing or not accepted')
 
 
-def test_fast_forward_moves_only_a_clone_that_is_behind(device, remote):
+def test_update_clone_fast_forwards_rebases_or_leaves_a_dirty_clone_alone(device, remote):
     run = run_of(device)
     clone = _sync_git.open_clone(run)
-    assert _sync_git.fast_forward(run, clone) is False                   # same
+    assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # same
     remote.foreign_commit('README.md', 'news\n')
-    assert _sync_git.fast_forward(run, clone) is True and device.head() == remote.head()
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded' and device.head() == remote.head()
     git('commit', '--quiet', '--allow-empty', '-m', 'local', cwd=device.clone)
-    assert _sync_git.fast_forward(run, clone) is False                   # ahead
+    assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # ahead
     remote.foreign_commit('README.md', 'more news\n')
-    assert failure_of(_sync_git.fast_forward, run, clone) == (
-        'conflict', 'the history of the sync clone went apart from the remote: it is never merged')
+    with open(os.path.join(device.clone, 'notes.txt'), 'w', encoding='utf-8') as f:
+        f.write('x\n')
+    local = device.head()
+    assert _sync_git.update_clone(run, clone) == 'diverged_dirty' and device.head() == local
+    os.replace(os.path.join(device.clone, 'notes.txt'), device.log.parent / 'notes.txt')
+    assert _sync_git.update_clone(run, clone) == 'rebased'
+    git('merge-base', '--is-ancestor', remote.head(), 'HEAD', cwd=device.clone)
+    assert git('log', '--format=%s', '-1', cwd=device.clone).stdout.strip() == 'local'
+    assert git('log', '--merges', '--oneline', cwd=device.clone).stdout == ''
 
 
-def test_fast_forward_of_an_empty_remote_does_nothing(tmp_path):
+def test_update_clone_with_an_empty_remote_does_nothing(tmp_path):
     bare = tmp_path / 'remotes' / 'owner' / 'name.git'
     bare.parent.mkdir(parents=True)
     git('init', '--bare', '--quiet', '--initial-branch=main', str(bare))
     device = Device(tmp_path / 'a')
     run = run_of(device)
-    assert _sync_git.fast_forward(run, _sync_git.open_clone(run)) is False
+    assert _sync_git.update_clone(run, _sync_git.open_clone(run)) == 'up_to_date'
+
+
+def test_shadow_gathers_commits_while_another_machine_pushes_and_on_sends_them(tmp_path, remote):
+    first, second = Device(tmp_path / 'a', mode='shadow'), Device(tmp_path / 'b')
+    for minute in range(3):
+        first.request()
+        assert first.push(now=NOW + 60 * minute) == 0
+        second.request()
+        assert second.push(now=NOW + 60 * minute + 30) == 0
+    base = git('merge-base', 'HEAD', 'refs/remotes/origin/main', cwd=first.clone).stdout.strip()
+    assert git('log', '--format=%an', f'{base}..HEAD', cwd=first.clone).stdout.split() == ['usage-clock'] * 3
+    first.cfg['sync']['mode'] = 'on'
+    assert first.push(now=NOW + 600) == 0
+    assert first.state().last_error is None and remote.head() == first.head()
+    pushed = [sync_format.decode('request', line)['k'] for line in
+              remote.show(f'{first.own}/requests/2026-10/aaaaaaaa-1.jsonl').splitlines()]
+    assert len(pushed) == 3 and f'{second.own}/status.json' in remote.files()
+    assert git('log', '--merges', '--oneline', 'refs/heads/main', cwd=remote.bare).stdout == ''
+
+
+def test_after_a_failed_push_and_a_push_of_another_machine_the_next_run_succeeds(tmp_path, remote):
+    first, second = Device(tmp_path / 'a'), Device(tmp_path / 'b')
+    first.request()
+    lift = refuse_pushes(remote)
+    assert first.push() == 1 and first.failure()['category'] == 'rejected'   # its commit stays local
+    lift()
+    second.request()
+    assert second.push(now=NOW + 30) == 0
+    first.request()
+    assert first.push(now=NOW + 60) == 0
+    assert first.state().last_error is None and remote.head() == first.head()
+    assert len(remote.show(f'{first.own}/requests/2026-10/aaaaaaaa-1.jsonl').splitlines()) == 2
+    assert f'{second.own}/status.json' in remote.files()
 
 
 def test_the_first_push_into_an_empty_remote(tmp_path):
@@ -802,7 +861,7 @@ def test_a_failing_merge_base_is_internal(device, remote, monkeypatch):
     clone = _sync_git.open_clone(run)
     git('commit', '--quiet', '--allow-empty', '-m', 'local', cwd=device.clone)
     scripted(monkeypatch, {'merge-base': (128, '', 'fatal: bad object')})
-    assert failure_of(_sync_git.fast_forward, run, clone) == ('internal', 'git merge-base failed in the sync clone')
+    assert failure_of(_sync_git.update_clone, run, clone) == ('internal', 'git merge-base failed in the sync clone')
 
 
 def test_a_rebase_that_cannot_start_or_cannot_be_aborted_is_internal(device, remote, monkeypatch):

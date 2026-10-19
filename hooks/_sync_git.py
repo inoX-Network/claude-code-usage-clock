@@ -22,8 +22,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    .netrc), messages in C, 15 s. VISIBILITY_TABLE tells exit code and error text apart: readable is public
    (`visibility`: the core blocks every push until the installer runs again), a request for a user name is private
    (cached), anything else is unclear (`network`, no push).
-4. **Update:** fetch; behind the remote: fast-forward. A local history that went apart from the remote (commits of an
-   earlier run that were not pushed: shadow mode, a failed push) is put onto the remote after the commit (step 7b).
+4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
+   went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
+   onto it if the work tree is clean, else after the commit (step 7b).
 5. **Export** (`_sync_export.export`) and **compacting** (`sync_format.compact`) of the own request months beyond
    `sync.keep_request_months`. The months that may go are taken before anything is removed and noted in
    `<log_dir>/sync/compacting.json` first (no note, no removal); the note is cleared after the commit. A run that
@@ -41,8 +42,7 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    `network`.
 
 Nothing exported is ever thrown away: no reset, checkout, clean or stash, also not after `conflict` or a failed guard
-(the export cursor has moved on). Errors carry a fixed text, never output of
-git.
+(the export cursor has moved on). Errors carry a fixed text, never output of git.
 """
 from __future__ import annotations
 
@@ -103,6 +103,7 @@ AUTH_TEXTS = ('could not read Username', 'could not read Password', 'terminal pr
 BEHIND_REASONS = ('(fetch first)', '(non-fast-forward)')
 
 SAME, AHEAD, BEHIND, APART = 'same', 'ahead', 'behind', 'apart'
+UP_TO_DATE, FAST_FORWARDED, REBASED, DIVERGED_DIRTY = 'up_to_date', 'fast_forwarded', 'rebased', 'diverged_dirty'
 
 Execute = Callable[..., subprocess.CompletedProcess]
 
@@ -317,19 +318,25 @@ def _merge_ff(clone: Clone) -> None:
         raise _fail('conflict', 'the sync clone cannot be fast-forwarded to the remote')
 
 
-def fast_forward(run: _sync_core.Run, clone: Clone) -> bool:
-    """Fetch, then fast-forward to the remote if the clone is behind it: True if it moved. Same or ahead: nothing,
-    False (also for a remote without the branch). A history that went apart, or a fast-forward git refuses:
-    `conflict`; nothing is merged, nothing is thrown away. A fetch that fails: `auth` or `network`."""
+def update_clone(run: _sync_core.Run, clone: Clone) -> str:
+    """Brings the clone onto the remote, for the push (step 4) and the pull of the report. Fetch, then:
+    same or ahead (also a remote without the branch): UP_TO_DATE; behind: fast-forward, FAST_FORWARDED (refused by
+    git: `conflict`); apart with a clean work tree: the own commits rebased onto the remote, REBASED (a conflict
+    aborts the rebase: `conflict`, the own commits stay); apart with changes in the work tree: nothing, DIVERGED_DIRTY
+    (the push rebases after its commit, the report keeps the clone as it is). Never a merge, nothing thrown away. A
+    fetch that fails: `auth` or `network`."""
     _fetch(clone)
     run.deadline.check()
     relation = _relation(clone)
-    if relation == APART:
-        raise _fail('conflict', 'the history of the sync clone went apart from the remote: it is never merged')
-    if relation != BEHIND:
-        return False
-    _merge_ff(clone)
-    return True
+    if relation == BEHIND:
+        _merge_ff(clone)
+        return FAST_FORWARDED
+    if relation != APART:
+        return UP_TO_DATE
+    if _status(clone):
+        return DIVERGED_DIRTY
+    _rebase(clone)
+    return REBASED
 
 
 def _rebase(clone: Clone) -> None:
@@ -563,9 +570,7 @@ def push(run: _sync_core.Run, projects_dir: str | None = None, execute: Execute 
     run.deadline.check()
     _ensure_private(run, run.cfg['sync']['repo'], execute)
     run.deadline.check()
-    _fetch(clone)
-    if _relation(clone) == BEHIND:
-        _merge_ff(clone)
+    update_clone(run, clone)
     run.deadline.check()
     try:
         machine_id = sync_format.load_machine_id(run.log_dir)
