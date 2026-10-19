@@ -308,5 +308,6 @@ Send a message, and after the answer the numbers are fresh again.
 ## Next steps
 
 - The [README](../README.md) explains every part and every setting.
-- [`docs/usage-report.md`](usage-report.md) shows how to see what your usage went into, per day, week or month.
+- [`docs/usage-report.md`](usage-report.md) shows how to see what your usage went into, per day, week, month or year;
+  the [desktop plugin](../desktop/README.md#the-usage-report-report) shows the same in Claude Code with `/report`.
 - On Windows, [`windows/README.md`](../windows/README.md) lists what is different there.

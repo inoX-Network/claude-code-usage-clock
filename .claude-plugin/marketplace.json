@@ -1,6 +1,6 @@
 {
   "name": "usage-clock",
-  "description": "claude-code-usage-clock: the status line for the Claude desktop app.",
+  "description": "claude-code-usage-clock: the status line for the Claude desktop app and /report, a pane with the usage report.",
   "owner": {
     "name": "inoX-Network",
     "url": "https://github.com/inoX-Network"

@@ -29,7 +29,8 @@ What the parts of the overview mean; the example is in the [README](../README.md
   project. A name longer than 30 characters loses its middle for a `…` in the table (`my-company-fron…dmin-dashboard`); the
   JSON, `--full` and the `Details:` line always have the full name, and two projects that would look the same after
   shortening are both shown whole. `~week pts` is the estimated share of the weekly limit, in points (1 point
-  = 1 percentage point of the week); `<1` is less than one point.
+  = 1 percentage point of the week); `<1` is less than one point, `-` is not measured: none of the project's cost lay
+  in a counted section of the week (see **Allocation** below), which is not the same as 0.
 - **Start:** the size of the first request of a session or subagent in tokens, measured: the median over the main
   sessions, and the lowest and highest median among the subagent types (see **Startup context** below). The line is
   left out if the period has no start.

@@ -45,8 +45,8 @@ went into. `/report month` opens it on that period (`day`, `week`, `month` or `y
 another word, it is the week).
 
 ```
-[Overview] Agents  Models  Cache/Thinking  Tokens  Projects     Day  Week  Month  Year  Refresh
- <- keys a b c d e f: the view                                  <- keys 1 2 3 4: the period, r: read again
+[Overview] Agents  Models  Cache/Thinking  Tokens  Projects  Sessions     Day  Week  Month  Year  Refresh
+ <- keys a b c d e f g: the view                                        <- keys 1 2 3 4: the period, r: read again
 
 Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
 5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
@@ -79,8 +79,8 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 
 **In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
 figures (the weekly limit as a half circle with a mark where red starts, the highest 5h window with a column per
-window on a scale up to the highest peak, at least 50 %, and a dashed line where yellow starts, the cost split into main and subagents, the cache hit rate), then the projects, the models, main and the agents
-as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`). Sessions shows one card per session; the
+window, the last eight, on a scale up to the highest peak, at least 50 %, and a dashed line where yellow starts, the cost split into main and subagents, the cache hit rate), then the projects, the models, main and the agents
+as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`; `NOTE` for anything else). Sessions shows one card per session; the
 session `/report` was opened from comes first, under "This session", its card toned and framed in the accent colour and
 marked `LIVE`; its detail shows cost, requests, cache and thinking as key figures, then tokens, models, subagents and
 what its context held as bars (the ten largest of each, then one bar for the rest). Agents shows main and the
@@ -89,6 +89,10 @@ Thinking four key figures; Tokens one per kind and their bars; Projects every pr
 same in a light and a dark app, and the pane can be dragged wider or narrower: one tile per row below 44 columns, two
 up to 95, four from 96 on. A Button of the desktop holds text only, so a session opens by its name, not by a click on
 the whole card.
+
+![The Overview in the desktop app: the weekly limit as a half circle, the 5h windows as columns, cost, cache, projects, models and agents as bars](../docs/images/report-desktop-overview.png)
+
+![The Sessions view in the desktop app: the session /report was opened from on top, marked LIVE, then every session of the week, highest cost first](../docs/images/report-desktop-sessions.png)
 
 Every number is that of `usage_report.py --json`, and [`docs/report-format.md`](../docs/report-format.md) says what it
 means and whether it is measured or an estimate (`~`).
@@ -121,6 +125,8 @@ new session without `session.start`, so the first answer reads `config.json` and
 the file went to a folder named `~` below the working directory). With no home directory known (`HOME`,
 `USERPROFILE`) nothing is written. The plugin cannot set file modes: the file is as private as the log folder, which
 the hooks create with mode `0700`.
+
+![The detail of a session in the desktop app: cost, requests, cache and thinking as key figures, tokens by kind, models, and the context after the first answer](../docs/images/report-desktop-session-detail.png)
 
 ## It writes the usage file, too
 
