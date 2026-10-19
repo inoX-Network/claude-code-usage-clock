@@ -1,5 +1,7 @@
-"""The README must say what the code does: every installer option is in the option table and the other way round,
-and the defaults in the configuration table are the ones in config.example.json."""
+"""The documentation must say what the code does: every installer option is in the option table and the other way
+round, and the defaults in the configuration table are the ones in config.example.json.
+
+The README is the start page; the details live in docs/. Each test reads the page that holds its text."""
 import importlib.util
 import json
 import os
@@ -13,11 +15,47 @@ INSTALL = os.path.join(ROOT, 'tools', 'install.py')
 LOG_SUMMARY = os.path.join(ROOT, 'tools', 'log_summary.py')
 USAGE_REPORT = os.path.join(ROOT, 'tools', 'usage_report.py')
 USAGE_REPORT_DOC = os.path.join(ROOT, 'docs', 'usage-report.md')
+INSTALL_DOC = os.path.join(ROOT, 'docs', 'install.md')
+STATUSLINE_DOC = os.path.join(ROOT, 'docs', 'statusline.md')
+GATES_DOC = os.path.join(ROOT, 'docs', 'gates.md')
+REPORTS_DOC = os.path.join(ROOT, 'docs', 'reports.md')
+CONFIGURATION_DOC = os.path.join(ROOT, 'docs', 'configuration.md')
+SECURITY_DOC = os.path.join(ROOT, 'docs', 'security.md')
+
+
+def read(path):
+    with open(path, encoding='utf-8') as f:
+        return f.read()
 
 
 def readme_text():
-    with open(README, encoding='utf-8') as f:
-        return f.read()
+    return read(README)
+
+
+def install_text():
+    return read(INSTALL_DOC)
+
+
+def statusline_text():
+    return read(STATUSLINE_DOC)
+
+
+def gates_text():
+    return read(GATES_DOC)
+
+
+def reports_text():
+    return read(REPORTS_DOC)
+
+
+def configuration_text():
+    return read(CONFIGURATION_DOC)
+
+
+def all_docs_text():
+    """The README and every page it moved its details to: for "is it mentioned anywhere" checks."""
+    return '\n'.join(read(path) for path in (README, INSTALL_DOC, STATUSLINE_DOC, GATES_DOC, REPORTS_DOC,
+                                             CONFIGURATION_DOC, SECURITY_DOC))
 
 
 def installer_options():
@@ -34,8 +72,8 @@ def usage_report_doc_text():
 
 
 def report_text():
-    """The report section of the README and docs/usage-report.md, which has the details."""
-    return section(readme_text(), '## Reports: what was used') + '\n' + usage_report_doc_text()
+    """The report section of docs/reports.md and docs/usage-report.md, which has the details."""
+    return section(reports_text(), '## Reports: what was used') + '\n' + usage_report_doc_text()
 
 
 def table_after(text, marker):
@@ -70,16 +108,16 @@ def section(text, heading):
 # --- Installer options ------------------------------------------------------------------------------------------
 
 def test_every_installer_option_is_in_the_readme_table_and_the_other_way_round():
-    documented = {option for row in table_after(readme_text(), 'Options:') for option in re.findall(r'--[a-z][a-z-]*', row[0])}
+    documented = {option for row in table_after(install_text(), 'Options:') for option in re.findall(r'--[a-z][a-z-]*', row[0])}
     real = installer_options()
-    assert real - documented == set(), f'missing in the README table: {sorted(real - documented)}'
-    assert documented - real == set(), f'in the README table but not in install.py: {sorted(documented - real)}'
+    assert real - documented == set(), f'missing in the table of docs/install.md: {sorted(real - documented)}'
+    assert documented - real == set(), f'in the table of docs/install.md but not in install.py: {sorted(documented - real)}'
 
 
 def test_the_options_used_in_the_readme_commands_exist():
     real = installer_options()
     used = set()
-    for line in readme_text().splitlines():
+    for line in all_docs_text().splitlines():
         if 'tools/install.py' in line:
             used |= set(re.findall(r'(?<![\w-])--[a-z][a-z-]*', line))
     assert used and used <= real, sorted(used - real)
@@ -89,7 +127,7 @@ def test_every_log_summary_option_is_mentioned_in_the_readme():
     with open(LOG_SUMMARY, encoding='utf-8') as f:
         options = set(re.findall(r"add_argument\('(--[a-z-]+)'", f.read()))
     assert options >= {'--since', '--config'}
-    text = readme_text()
+    text = all_docs_text()
     assert [o for o in sorted(options) if o not in text] == []
 
 
@@ -114,14 +152,14 @@ def parse_default(text):
 
 def readme_defaults():
     found = {}
-    for key_cell, default_cell, _meaning in table_after(readme_text(), '| Key |'):
+    for key_cell, default_cell, _meaning in table_after(configuration_text(), '| Key |'):
         keys = re.findall(r'`([^`]+)`', key_cell)
         prefix = keys[0].rsplit('.', 1)[0] + '.' if '.' in keys[0] else ''
         keys = [keys[0]] + [prefix + k for k in keys[1:]]
         defaults = [part.strip().strip('`') for part in default_cell.split(' / ')]
         assert len(keys) == len(defaults), f'{key_cell!r} has {len(keys)} keys but {len(defaults)} defaults'
         for key, default in zip(keys, defaults):
-            assert key not in found, f'{key} appears twice in the README table'
+            assert key not in found, f'{key} appears twice in the table of docs/configuration.md'
             found[key] = parse_default(default)
     return found
 
@@ -130,10 +168,10 @@ def test_the_readme_configuration_table_matches_config_example_json():
     with open(EXAMPLE, encoding='utf-8') as f:
         real = flatten(json.load(f))
     documented = readme_defaults()
-    assert set(real) - set(documented) == set(), f'not in the README table: {sorted(set(real) - set(documented))}'
+    assert set(real) - set(documented) == set(), f'not in the table of docs/configuration.md: {sorted(set(real) - set(documented))}'
     assert set(documented) - set(real) == set(), f'not in config.example.json: {sorted(set(documented) - set(real))}'
     wrong = {k: (documented[k], real[k]) for k in real if (type(documented[k]), documented[k]) != (type(real[k]), real[k])}
-    assert wrong == {}, f'README default vs config.example.json: {wrong}'
+    assert wrong == {}, f'docs/configuration.md default vs config.example.json: {wrong}'
 
 
 def test_the_table_parser_sees_the_pipe_in_the_model_pattern_and_the_list_defaults():
@@ -146,7 +184,7 @@ def test_the_table_parser_sees_the_pipe_in_the_model_pattern_and_the_list_defaul
 # --- What the text has to explain --------------------------------------------------------------------------------
 
 def test_the_readme_says_that_week_ok_until_is_not_kept_but_the_mode_is():
-    text = readme_text()
+    text = install_text()
     week_row = next(row for row in table_after(text, 'Options:') if '--week-ok-until' in row[0])
     assert 'removes an earlier value' in week_row[1]
     mode_row = next(row for row in table_after(text, 'Options:') if '--mode' in row[0])
@@ -155,7 +193,7 @@ def test_the_readme_says_that_week_ok_until_is_not_kept_but_the_mode_is():
 
 
 def test_the_uninstall_section_names_everything_that_stays():
-    body = section(readme_text(), '### Uninstall completely')
+    body = section(install_text(), '### Uninstall completely')
     for needle in ('--target', 'config.json', '~/.cache/claude-usage-clock', 'rate-limit.json', 'rate-limit.json.lock',
                    'usage-history.jsonl', 'usage-history.jsonl.1', 'usage-days.jsonl',
                    'autoContinueAtUsageLimit', '--replace-statusline', 'settings.json.bak-usage-clock-', 'rm -r'):
@@ -163,7 +201,7 @@ def test_the_uninstall_section_names_everything_that_stays():
 
 
 def test_the_readme_explains_model_pattern_effort_values_and_the_default_exceptions():
-    body = section(readme_text(), '### Model names, effort values and exceptions')
+    body = section(configuration_text(), '### Model names, effort values and exceptions')
     for needle in ('spawn_rules.model_pattern', 'fullmatch', 'spawn_rules.effort_values', 'spawn_rules.exceptions',
                    'claude-code-guide', 'statusline-setup', 'my-proxy'):
         assert needle in body, needle
@@ -173,7 +211,7 @@ def test_the_readme_explains_model_pattern_effort_values_and_the_default_excepti
 
 
 def test_the_readme_describes_what_the_log_contains_and_that_quoted_values_are_masked():
-    body = section(readme_text(), '### From shadow to enforce')
+    body = section(gates_text(), '### From shadow to enforce')
     for needle in ('agent id', 'names* of the input fields', 'reason', 'replaced by `…`', 'never records prompts, commands or script text'):
         assert needle in body, needle
 
@@ -202,7 +240,7 @@ def append_examples(text):
 def test_the_documented_append_examples_are_checkpoint_writes(tmp_path):
     import soft_stop
     target = (tmp_path / 'agent-checkpoints' / 'notes.md').as_posix()   # unquoted in bash: slashes on Windows too
-    readme = append_examples(section(readme_text(), '## The two gates'))
+    readme = append_examples(section(gates_text(), '## The two gates'))
     architecture = append_examples(section(architecture_text(), '### soft_stop.py'))
     assert any(c.startswith('printf ') for c in readme) and any(c.startswith('printf ') for c in architecture)
     for command in readme + architecture:
@@ -213,11 +251,11 @@ def test_the_documented_append_examples_are_checkpoint_writes(tmp_path):
                     f"echo \"$HOME\" >> {target}"):
         assert not soft_stop.is_checkpoint_write('Bash', {'command': command}), command
     for needle in ('`%s`, `%b` and `%%`', 'without options'):
-        assert needle in flat(readme_text()) and needle in flat(architecture_text()), needle
+        assert needle in flat(gates_text()) and needle in flat(architecture_text()), needle
     # flags, width and precision are documented as fine, `*` as not
     assert soft_stop.is_checkpoint_write('Bash', {'command': f"printf '%-8s %.3b\\n' \"a\" \"b\" >> {target}"})
     assert not soft_stop.is_checkpoint_write('Bash', {'command': f"printf '%*s' \"5\" >> {target}"})
-    assert '`%-8s` are fine, `*` is not' in flat(readme_text())
+    assert '`%-8s` are fine, `*` is not' in flat(gates_text())
 
 
 def test_the_log_fields_with_values_are_named_with_their_length_limit():
@@ -226,7 +264,7 @@ def test_the_log_fields_with_values_are_named_with_their_length_limit():
         valued = set(re.findall(r"'(\w+)': _short_text\(", f.read()))
     assert valued == {'tool_name', 'agent_id', 'agent_type', 'permission_mode', 'subagent_type', 'model_in_call'}
     assert _hookio._short_text('x' * 500) == 'x' * 100
-    readme = section(readme_text(), '### From shadow to enforce')
+    readme = section(gates_text(), '### From shadow to enforce')
     architecture = section(architecture_text(), '## Log')
     for name in ('agent_type', 'permission_mode', 'subagent_type', 'model_in_call'):
         assert f'`{name}`' in readme and f'`{name}`' in architecture, name
@@ -243,7 +281,7 @@ def test_the_status_line_sections_name_the_new_keys_the_state_file_and_the_clean
     with open(EXAMPLE, encoding='utf-8') as f:
         keys = [k for k in json.load(f)['statusline'] if k.startswith(('context_', 'cache_'))]
     assert keys == ['context_yellow_from_k', 'context_red_from_k', 'cache_yellow_below_min']
-    readme = section(readme_text(), '## What the status line shows')
+    readme = section(statusline_text(), '## What the status line shows')
     architecture = section(architecture_text(), '## Status line')
     for key in keys:
         assert key in readme and key in architecture, key
@@ -258,7 +296,7 @@ def test_the_weekly_notes_of_the_usage_line_are_documented_word_for_word():
     import usage_clock
     assert set(usage_clock.WEEK_NOTES) == {'warn', 'ask', 'deny'}
     for text in usage_clock.WEEK_NOTES.values():
-        assert text in flat(readme_text()) and text in flat(architecture_text()), text
+        assert text in flat(statusline_text()) and text in flat(architecture_text()), text
 
 
 # --- Context reporter: the text must match the code ------------------------------------------------------------------
@@ -267,7 +305,7 @@ def test_the_documented_context_line_is_exactly_what_the_hook_says():
     import context_reporter
     line = 'Context: 168k/1000k tokens (17%). Measured, not estimated.'
     assert context_reporter.text(1_000_000, 168_000) == line
-    assert line in readme_text()
+    assert line in statusline_text()
     assert 'Context: 168k/1000k tokens (17%). Measured, not estimated.' in architecture_text()
 
 
@@ -275,7 +313,7 @@ def test_the_components_option_names_every_component_the_installer_knows():
     spec = importlib.util.spec_from_file_location('install_for_readme_components', INSTALL)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    row = next(row for row in table_after(readme_text(), 'Options:') if '--components' in row[0])
+    row = next(row for row in table_after(install_text(), 'Options:') if '--components' in row[0])
     assert all(name in row[0] for name in module.COMPONENTS), row[0]
     assert re.findall(r'--components ([\w,-]+)', row[0]) == [','.join(module.COMPONENTS)]
 
@@ -285,7 +323,7 @@ def test_the_readme_lists_the_context_reporter_as_a_part_and_says_what_it_needs_
     row = next(line for line in text.splitlines() if line.startswith('| **Context reporter**'))
     assert '`UserPromptSubmit`' in row and '`PostToolUse`' in row and 'Needs the status line' in row
     assert 'subagents get nothing' in row
-    body = flat(section(text, '### The context window'))
+    body = flat(section(statusline_text(), '### The context window'))
     for needle in ('context_reporter.after_tool_from', '50 %', 'context_reporter.max_age_min', '15 minutes', 'never the transcript',
                    'status line is not installed', 'subagent', 'ctx'):
         assert needle in body, needle
@@ -316,7 +354,7 @@ def test_the_documents_describe_the_history_file_its_fields_and_its_limits():
     import _config
     import _history
     assert _config.DEFAULTS['history'] == {'enabled': True, 'heartbeat_min': 15, 'max_kb': 1024}
-    readme = flat(section(readme_text(), '## What the status line shows'))
+    readme = flat(section(statusline_text(), '## What the status line shows'))
     architecture = flat(section(architecture_text(), '### Measurement history'))
     for text in (readme, architecture):
         for needle in ('usage-history.jsonl', 'history.enabled', 'history.heartbeat_min', 'history.max_kb', 'usage-history.jsonl.1'):
@@ -375,7 +413,7 @@ def usage_report_module():
 
 
 def test_the_readme_explains_the_overview_the_details_and_how_to_ask_an_agent():
-    text = readme_text()
+    text = reports_text()
     body = flat(section(usage_report_doc_text(), '## The overview'))
     for needle in ('name of the folder', 'without a setting', 'no paths', '30 characters', '`my-company-fron…dmin-dashboard`',
                    'both shown whole', 'Where it went', 'Notable', '`~week pts`', '`<1`', 'thresholds.start_block_5h',
