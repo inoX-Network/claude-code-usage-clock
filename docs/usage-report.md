@@ -1,7 +1,7 @@
 # The usage report
 
-The details of `tools/usage_report.py`. What it does, its commands and an example of the overview are in the
-[README](../README.md#reports-what-was-used); every line and JSON field is explained in
+The details of `tools/usage_report.py`. What it does, its commands and an example of the overview are in
+[Usage reports](reports.md#reports-what-was-used); every line and JSON field is explained in
 [`report-format.md`](report-format.md).
 
 ## Running it from the installation
@@ -21,7 +21,7 @@ files. A change to `prices.json` in the checkout reaches the installed copy with
 
 ## The overview
 
-What the parts of the overview mean; the example is in the [README](../README.md#the-overview).
+What the parts of the overview mean; the example is in [Usage reports](reports.md#the-overview).
 
 - **Where it went:** the projects by cost at API prices (the **cost weight**, see below), the five largest as rows and
   the rest as one line. A project is the name of the folder a session ran in, the same for everyone and without a

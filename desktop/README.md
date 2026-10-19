@@ -27,7 +27,7 @@ checkout>` loads the plugin in place, so edits take effect at the next session s
 
 ## What it shows
 
-The parts, texts and colours of the [status line](../README.md#what-the-status-line-shows), with two differences:
+The parts, texts and colours of the [status line](../docs/statusline.md#what-the-status-line-shows), with two differences:
 
 - **Cache clock is an estimate.** A plugin learns when the last answer of the main session came, not when the prompt
   cache expires. The clock counts one hour (the cache of a Claude subscription) from that answer and marks the
