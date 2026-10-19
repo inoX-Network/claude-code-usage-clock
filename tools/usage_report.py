@@ -1984,17 +1984,19 @@ def check_shapes(stats: dict, strict: bool) -> None:
         _table(cli.get('subs', {}), agent, ('requests', 'cost'))
 
 
-def check_foreign_day(stats: dict) -> None:
+def check_foreign_day(day: str, stats: dict) -> None:
     """The content of a day line of another machine, beyond the rules of the own archive (`parse_archive_line`):
     numbers, texts, and the shape of `models`, `unpriced`, `agent_types` and `clis` with names after the patterns of
-    the format. Then, as a net, the figures go once through the whole report. ValueError for anything that does not
-    hold: a foreign line never stops the report."""
+    the format. Then, as a net, the figures go once through the whole report of their `day` (a real day: Windows
+    refuses local times near 1970). ValueError for anything that does not hold: a foreign line never stops the
+    report."""
     _figures(stats)
     check_shapes(stats, strict=True)
     try:
         trial = new_stats()
         merge_stats(trial, stats)
-        report = build_report(trial, {'kind': 'day', 'label': 'probe', 'start': iso(0), 'end': iso(0)},
+        start, end = day_bounds(date.fromisoformat(day))
+        report = build_report(trial, {'kind': 'day', 'label': day, 'start': iso(start), 'end': iso(end)},
                               dict(PROBE_COVERAGE), 100.0)
         render(report)
         render_overview(report)
@@ -2048,7 +2050,7 @@ class Machines:
         for row in machine.days:
             try:
                 day, stats = parse_archive_line(json.dumps(row))
-                check_foreign_day(stats)
+                check_foreign_day(day, stats)
             except (ValueError, TypeError, KeyError, RecursionError, ArithmeticError):
                 self.broken_days += 1
                 continue

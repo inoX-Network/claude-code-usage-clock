@@ -492,6 +492,23 @@ def test_a_hostile_foreign_day_line_is_skipped_and_counted(world, synced, change
         assert not report_module.CONTROL_CHARS.search(text.replace('\n', ''))
 
 
+def test_the_check_of_a_foreign_day_line_runs_on_its_own_day(world, synced, monkeypatch):
+    """Windows refuses local times near 1970 (OSError from fromtimestamp): the net must not use such a time, or it
+    throws every foreign day line away."""
+    class Windows(report_module.datetime):
+        @classmethod
+        def fromtimestamp(cls, ts, tz=None):
+            if ts < 86400 * 365:
+                raise OSError(22, 'Invalid argument')
+            return super().fromtimestamp(ts, tz)
+    monkeypatch.setattr(report_module, 'datetime', Windows)
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP)
+    synced.clone.days(LAPTOP, [('2026-10-11', archive_line(7, 4.0, 'bbbbbbbb', 'proj-b', 4, peak=60))])
+    report = world.report('--day', '2026-10-11')
+    assert report['total']['requests'] == 7 and report['coverage']['sync']['unreadable_day_lines'] == 0
+
+
 def test_a_foreign_day_line_with_a_number_json_does_not_know_is_skipped(world, synced):
     world.projects.mkdir()
     synced.clone.machine(LAPTOP)
