@@ -54,11 +54,12 @@ def test_a_push_without_a_sync_repo_fails_as_internal_and_backs_off_never_a_succ
         'failure', 'internal', 'sync.repo is not set, run the installer with --sync-repo')
 
 
-def test_without_the_git_work_a_pull_fails_as_internal(tmp_path, mode):
+def test_a_pull_without_a_sync_repo_fails_as_internal_and_names_the_installer(tmp_path, mode):
     mode('on')
     assert sync.main(['pull', '--background']) == 1
     line, = sync_lines(tmp_path)
-    assert (line['action'], line['category'], line['reason']) == ('pull', 'internal', 'pull is not built yet')
+    assert (line['action'], line['category'], line['reason']) == (
+        'pull', 'internal', 'sync.repo is not set, run the installer with --sync-repo')
 
 
 def test_push_now_is_the_forced_run_and_pull_background_the_long_one(tmp_path, mode):

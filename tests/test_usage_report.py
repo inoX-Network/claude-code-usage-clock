@@ -1782,8 +1782,8 @@ def test_an_archived_day_in_the_old_window_format_is_unreadable_and_written_agai
 
 def test_an_archived_day_that_does_not_fit_the_live_figures_is_computed_live(world):
     spend(world, ('2026-10-12T10:00:00Z', 1.0), ('2026-10-13T10:00:00Z', 2.0))
-    world.log.mkdir(parents=True)
-    conflict = {'models': {'Opus 5.5': 5}}                 # well formed alone, but the live figures have a dict there
+    world.guard_log([{'time': '2026-10-13T10:00:00Z', 'hook': 'spawn_gate', 'mode': 'enforce', 'decision': 'allow'}])
+    conflict = {'guards': {'spawn_gate': 5}}               # well formed alone, but the live figures have a dict there
     (world.log / ARCHIVE).write_text(json.dumps({'v': 1, 'day': '2026-10-12', 'stats': conflict}) + '\n', encoding='utf-8')
     data = world.report('--since', '2026-10-12', '--until', '2026-10-13')
     assert data['total']['requests'] == 2 and data['total']['cost_usd'] == pytest.approx(3.0)

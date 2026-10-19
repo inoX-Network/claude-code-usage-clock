@@ -224,3 +224,65 @@ deleted by now), so a month stays whole; a line of another format, or one that d
 an archive line (it is counted as unreadable and its day is computed from the transcripts). The
 archive holds the figures only (no text), is private to you (mode 0600, folder 0700) and is opened without
 following links.
+
+## Other machines (the sync)
+
+With the sync on (`sync.mode` `shadow` or `on`, see [`configuration.md`](configuration.md)) the report shows every
+machine of the sync repository: this one from its local files, the others from their folders in the local clone.
+
+```sh
+python3 tools/usage_report.py --week                    # all machines; pulls first if the last pull is 5 min old
+python3 tools/usage_report.py --week --local            # this machine only, no pull: the report as without the sync
+python3 tools/usage_report.py --week --machine laptop   # the requests and sessions of one machine (its name, or the start of it)
+python3 tools/usage_report.py --week --no-pull          # all machines, the clone as it is
+python3 tools/usage_report.py --week --sync             # push this machine now, pull, then the report
+```
+
+- **The pull** before a report is a fast forward with `sync.pull_timeout_s` (default 5 s), at most once in 5 minutes:
+  the `/report` pane reads four periods and waits once. `--sync` first pushes this machine as `sync.py push --now`
+  does (past the wait and the backoff, never after the repository was found public), then pulls without the
+  5 minutes. The pull brings the clone onto the repository as the push does: a fast forward, or, if this machine has
+  commits the repository does not have yet (shadow mode, a failed push) and nothing else changed in the clone, those
+  commits put on top of it. It never merges. If another sync run holds the lock, the report reads the clone as it is.
+  A pull that fails, or a sync history that cannot be brought together (the own commits do not fit, or the clone has
+  changes that are not committed yet: nothing is merged), never fails the report: it uses the last pulled state and
+  says so in `Notable` and in `Sources:`.
+- **Counted once:** a request counts once by its key, wherever it lies: in the local transcripts (also those a file
+  sync of `~/.claude` put there), in the folder of another machine, or in the own folder of the clone. Of two lines
+  of one request the one with more output counts; of lines with the same output the one of the session whose first
+  request is earliest, then the smaller session id, and within one session the local one. So with a file sync of
+  `~/.claude`, which puts the transcripts of one machine on the other, a session counts once and, where both hold it
+  alike, as a session of the machine the report runs on. Measurements of several machines that are equal within
+  2 minutes are one: every machine measures the same subscription. Within a window (the same reset time) a value only
+  rises, and a window that ended does not come back: a lower value of another machine, or one of a window that already
+  ended, is a stale state and counts as the highest value of the newest window so far.
+- **Sharing a rise:** a rise of the subscription is shared by the cost of the requests of all machines, so it is
+  "unexplained" only if no machine made a request in between. "Only one CLI active" for the calibration means on all
+  machines together.
+- **Requests or day line, per machine and day:** a machine counts on a whole day of the period either its requests
+  or its day line (the day archive, `days/` in the repository), never both. The day line counts when the machine has
+  fewer requests of its own on that day than the line names (compacted, or transcripts deleted; a session a file sync
+  put here still counts as one of the machine it ran on); its requests of that day are
+  then left out, also from the sharing of a rise. With one machine this is the report of `--local`. Beside requests of
+  other machines a day line adds only its usage: its sessions get no points (shown as `-`, not measured), the
+  subscription of the day comes from the measurements. On a day without any request that counts, the usage of each
+  machine's line is added, but the subscription (percentages, windows, the sharing of the rise) comes from one line
+  only, the own one first, else that of the machine with the smallest id: a day line shares the rise only among the
+  sessions of its own machine. A day line of another machine is checked before it counts: a number that is not finite,
+  negative or above 10^12, a name or text with control characters or longer than 64 characters, or figures in a shape
+  the report does not read make it skipped and counted (`coverage.sync.unreadable_day_lines`); a line that passes is
+  run through the whole report once more as a net. A day line never stops the report. A machine keeps its requests in the repository for `sync.keep_request_months` (default 3) full months; this machine's
+  requests are also read from its own folder there (only `requests/`: its measurements, gate decisions and day lines
+  come from the local files), so a day stays whole after Claude Code deleted the transcripts. With
+  `sync.project_labels` `alias` or `hash` such older days of this machine show the project labels of the repository
+  instead of the folder names.
+- **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine. Their points are their
+  share of each rise among the requests of all machines, so the subscription and its `allocation` stay those of the
+  account and the points of the machine add up to less than the rise.
+- **What it shows:** `--full` names every machine in `Sources:` with the age of its last successful push and the
+  result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); each CLI says on which machine it
+  ran (`on laptop`). `Notable` names a machine without a push for over 24 hours, this machine's sync backing off after
+  an error or blocked, a pull that failed with its reason, and a machine id of this machine that cannot be used (then
+  the clone is not read). The JSON has `clis[].machine` and `coverage.sync`; without the sync
+  neither is there. What the reader skipped in the clone (a link, a file over 8 MB, a line of an unknown version or a
+  broken one) is counted there and named in `Sources:`.

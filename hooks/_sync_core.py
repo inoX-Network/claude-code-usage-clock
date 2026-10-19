@@ -5,8 +5,9 @@ the pull of 0034-SYNC-REPORT). It runs under the lock with a deadline and raises
 it fails; whatever else it raises counts as `internal`.
 
 - **State** `<log_dir>/sync/state.json`: `last_attempt`, `last_success`, `backoff_level`, `next_due`, `last_error`
-  (times ISO 8601 UTC, `last_error` null or one of CATEGORIES). Folder 0700, files 0600 whatever the umask, written
-  atomically, never through a link. A missing file is an empty state; a broken one, too, with one log line.
+  of the push and `last_pull`, the last successful pull (times ISO 8601 UTC, `last_error` null or one of CATEGORIES).
+  Folder 0700, files 0600 whatever the umask, written atomically, never through a link. A missing file is an empty
+  state; a broken one, too, with one log line.
 - **Triggers:** T1 the status line (`statusline_tick`: no network, no lock, no waiting), T2 the hook SessionEnd
   (`session_end`), T3 the hook SessionStart (`session_start`), T4 a manual `sync.py push --now`. A detached start
   happens only if no push may still be running and no start of the same kind is younger than START_GAP_S (a mark in
@@ -113,6 +114,7 @@ class State:
     backoff_level: int = 0
     next_due: float | None = None
     last_error: str | None = None
+    last_pull: float | None = None          # the last successful pull; the report pulls again after PULL_GAP_S
 
     @property
     def blocked(self) -> bool:
@@ -134,7 +136,7 @@ class State:
     def to_json(self) -> str:
         return json.dumps({'last_attempt': _text(self.last_attempt), 'last_success': _text(self.last_success),
                            'backoff_level': self.backoff_level, 'next_due': _text(self.next_due),
-                           'last_error': self.last_error}, separators=(',', ':'))
+                           'last_error': self.last_error, 'last_pull': _text(self.last_pull)}, separators=(',', ':'))
 
     @classmethod
     def from_json(cls, text: str) -> State:
@@ -149,7 +151,7 @@ class State:
         if error is not None and error not in CATEGORIES:
             raise ValueError('last_error: not a category')
         return cls(_moment(data.get('last_attempt'), 'last_attempt'), _moment(data.get('last_success'), 'last_success'),
-                   level, _moment(data.get('next_due'), 'next_due'), error)
+                   level, _moment(data.get('next_due'), 'next_due'), error, _moment(data.get('last_pull'), 'last_pull'))
 
 
 def max_wait_s(cfg: dict) -> float:
@@ -456,10 +458,28 @@ def _end_children() -> None:
 
 # --- Runs -------------------------------------------------------------------------------------------------------------
 
+@dataclasses.dataclass(frozen=True)
+class Outcome:
+    """How a push or a pull ended: `ok`, `locked` (another run holds the lock, nothing ran), `off` (sync.mode off),
+    for a push also `blocked` (category `visibility`) and `waiting` (not due, or inside a backoff without `forced`),
+    or `failed` with the category and the fixed text of its SyncError."""
+    status: str
+    category: str | None = None
+    detail: str = ''
+
+
 def push(log_dir: str, cfg: dict, runner: Runner, forced: bool = False, if_due: bool = False,
          clock: Callable[[], float] = time.time, rand: Callable[[], float] | None = None,
          timeout_s: float | None = None) -> int:
-    """One push under the lock: 0 success or nothing to do, 1 failed or blocked by `visibility`.
+    """`push_outcome` as an exit code: 0 success or nothing to do, 1 failed or blocked by `visibility`."""
+    outcome = push_outcome(log_dir, cfg, runner, forced, if_due, clock, rand, timeout_s)
+    return 1 if outcome.status in ('failed', 'blocked') else 0
+
+
+def push_outcome(log_dir: str, cfg: dict, runner: Runner, forced: bool = False, if_due: bool = False,
+                 clock: Callable[[], float] = time.time, rand: Callable[[], float] | None = None,
+                 timeout_s: float | None = None) -> Outcome:
+    """One push under the lock, and how it ended (`Outcome`).
 
     `if_due` (T1) runs only if the push is due, so a process that got the lock just after another one pushed ends
     without a change. Without `forced` (T1, T2) a push inside a backoff ends without a change; `forced` (T4, `--now`)
@@ -469,7 +489,7 @@ def push(log_dir: str, cfg: dict, runner: Runner, forced: bool = False, if_due: 
     """
     mode = cfg['sync']['mode']
     if mode == 'off':
-        return 0
+        return Outcome('off')
     if rand is None:
         import random
         rand = random.random
@@ -478,13 +498,13 @@ def push(log_dir: str, cfg: dict, runner: Runner, forced: bool = False, if_due: 
     directory = ensure_dir(log_dir)
     with try_lock(directory) as held:
         if not held:
-            return 0
+            return Outcome('locked')
         now = clock()
         state = bounded(_read_logged(directory, log_dir), now, cfg)
         if state.blocked:
-            return 1
+            return Outcome('blocked', 'visibility')
         if (if_due and not state.due(now)) or (not forced and state.in_backoff(now)):
-            return 0
+            return Outcome('waiting')
         state = dataclasses.replace(state, last_attempt=now)
         write_state(directory, state)
 
@@ -503,22 +523,23 @@ def push(log_dir: str, cfg: dict, runner: Runner, forced: bool = False, if_due: 
         if category is None:
             write_state(directory, succeeded(state, end, interval, rand))
             log(log_dir, 'success', action='push', mode=mode)
-            return 0
+            return Outcome('ok')
         write_state(directory, failed(state, category, end, interval, max_h, rand))
         log(log_dir, 'failure', detail, action='push', mode=mode, category=category)
-        return 1
+        return Outcome('failed', category, detail)
 
 
-def pull(log_dir: str, cfg: dict, runner: Runner, background: bool, clock: Callable[[], float] = time.time) -> int:
-    """One pull under the lock: 30 s in the background (T3), else sync.pull_timeout_s. 0 success or lock held
-    elsewhere, 1 failed. The push state is not touched (no backoff for pulls). The same watchdog as for a push."""
+def pull_outcome(log_dir: str, cfg: dict, runner: Runner, background: bool,
+                 clock: Callable[[], float] = time.time) -> Outcome:
+    """One pull under the lock: 30 s in the background (T3), else sync.pull_timeout_s. A success writes `last_pull`;
+    the push state is not touched otherwise (no backoff for pulls). The same watchdog as for a push."""
     mode = cfg['sync']['mode']
     if mode == 'off':
-        return 0
+        return Outcome('off')
     directory = ensure_dir(log_dir)
     with try_lock(directory) as held:
         if not held:
-            return 0
+            return Outcome('locked')
         seconds = PULL_BACKGROUND_TIMEOUT_S if background else cfg['sync']['pull_timeout_s']
 
         def give_up() -> None:
@@ -528,11 +549,18 @@ def pull(log_dir: str, cfg: dict, runner: Runner, background: bool, clock: Calla
             _exit(1)
         with _watchdog(seconds + KILL_WAIT_S + RUN_SLACK_S, give_up):
             category, detail = _outcome(runner, Run('pull', mode, cfg, log_dir, directory, Deadline(seconds), clock()))
+        if category is None:
+            write_state(directory, dataclasses.replace(_read_logged(directory, log_dir), last_pull=clock()))
     if category is None:
         log(log_dir, 'success', action='pull', mode=mode)
-        return 0
+        return Outcome('ok')
     log(log_dir, 'failure', detail, action='pull', mode=mode, category=category)
-    return 1
+    return Outcome('failed', category, detail)
+
+
+def pull(log_dir: str, cfg: dict, runner: Runner, background: bool, clock: Callable[[], float] = time.time) -> int:
+    """`pull_outcome` as an exit code: 0 success, lock held elsewhere or sync off, 1 failed."""
+    return 1 if pull_outcome(log_dir, cfg, runner, background, clock).status == 'failed' else 0
 
 
 def command(*arguments: str) -> list[str]:

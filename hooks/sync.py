@@ -8,8 +8,8 @@
     sync.py session-start         hook SessionStart (T3)
     sync.py session-end           hook SessionEnd (T2)
 
-The push is `_sync_git.push` (0034-SYNC-PUSH). The pull is `git_pull` below; until 0034-SYNC-REPORT brings it, it
-fails with the category `internal`: a run that synced nothing must never look like a success.
+The push is `_sync_git.push` (0034-SYNC-PUSH). The pull is `git_pull` below (0034-SYNC-REPORT): the clone brought onto
+the remote with the helper the push uses, never merged; the usage report runs it before a report as well.
 
 Exit codes: 0 success or nothing to do (sync off, not due, lock held by another run), 1 failed, blocked after
 `visibility` or ended by the watchdog, 2 bad arguments. The hooks print nothing and always exit 0. That sync/ cannot be
@@ -30,8 +30,13 @@ import _sync_git  # noqa: E402
 
 
 def git_pull(run: _sync_core.Run) -> None:
-    """The pull itself (0034-SYNC-REPORT). Not built yet."""
-    raise _sync_core.SyncError('internal', 'pull is not built yet')
+    """The pull: the clone checked as for the push, then brought onto the remote (a fast forward, or its own commits
+    rebased onto it); never a merge. A history that went apart while the work tree of the clone has changes leaves the
+    clone as it is: `conflict`, as for a rebase that does not fit."""
+    clone = _sync_git.open_clone(run)
+    run.deadline.check()
+    if _sync_git.update_clone(run, clone) == _sync_git.DIVERGED_DIRTY:
+        raise _sync_core.SyncError('conflict', 'the sync history went apart and the clone has changes: not updated')
 
 
 def _parser() -> argparse.ArgumentParser:

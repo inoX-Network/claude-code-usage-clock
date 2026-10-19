@@ -507,12 +507,12 @@ def test_a_missing_state_is_empty_without_a_log_line(tmp_path):
     assert sync_lines(tmp_path) == []
 
 
-def test_the_state_file_holds_the_five_fields_in_iso_utc(tmp_path):
+def test_the_state_file_holds_the_six_fields_in_iso_utc(tmp_path):
     put_state(tmp_path, State(last_attempt=T0, last_success=T0 - 60, backoff_level=2, next_due=T0 + 3600,
-                              last_error='conflict'))
+                              last_error='conflict', last_pull=T0 - 120))
     assert json.loads((sync_dir(tmp_path) / 'state.json').read_text(encoding='utf-8')) == {
         'last_attempt': '2026-01-14T14:13:20Z', 'last_success': '2026-01-14T14:12:20Z', 'backoff_level': 2,
-        'next_due': '2026-01-14T15:13:20Z', 'last_error': 'conflict'}
+        'next_due': '2026-01-14T15:13:20Z', 'last_error': 'conflict', 'last_pull': '2026-01-14T14:11:20Z'}
     put_raw(tmp_path, '{"last_success": "2026-01-14T15:13:20+01:00"}')
     assert state_of(tmp_path) == State(last_success=T0)
 
@@ -677,9 +677,10 @@ def test_the_backoff_cap_comes_from_the_config(tmp_path):
 
 
 @pytest.mark.parametrize('background, seconds', [(True, 30), (False, 5)])
-def test_a_pull_runs_under_the_lock_with_its_timeout_and_leaves_the_push_state_alone(tmp_path, background, seconds):
-    put_state(tmp_path, State(backoff_level=1, next_due=T0 + 60, last_error='network'))
-    before = (sync_dir(tmp_path) / 'state.json').read_bytes()
+def test_a_pull_runs_under_the_lock_with_its_timeout_and_writes_only_last_pull(tmp_path, background, seconds):
+    push_state = State(last_attempt=T0 - 90, last_success=T0 - 100, backoff_level=1, next_due=T0 + 60,
+                       last_error='network')
+    put_state(tmp_path, push_state)
     runs = []
 
     def runner(run):
@@ -688,15 +689,34 @@ def test_a_pull_runs_under_the_lock_with_its_timeout_and_leaves_the_push_state_a
         runs.append(run)
     assert _sync_core.pull(log_dir(tmp_path), cfg(), runner, background, clock=lambda: T0) == 0
     assert runs[0].kind == 'pull' and seconds - 1 < runs[0].deadline.left() <= seconds
-    assert (sync_dir(tmp_path) / 'state.json').read_bytes() == before
+    assert state_of(tmp_path) == dataclasses.replace(push_state, last_pull=T0)
     assert [(r['decision'], r['action']) for r in sync_lines(tmp_path)] == [('success', 'pull')]
 
 
-def test_a_failed_pull_is_logged_with_its_category(tmp_path):
+def test_a_failed_pull_is_logged_with_its_category_and_leaves_last_pull(tmp_path):
+    put_state(tmp_path, State(last_pull=T0 - 600))
     assert _sync_core.pull(log_dir(tmp_path), cfg(), failing('conflict'), background=False) == 1
     line, = sync_lines(tmp_path, 'failure')
     assert (line['action'], line['category'], line['reason']) == ('pull', 'conflict', 'conflict for the test')
-    assert state_of(tmp_path) == State()
+    assert state_of(tmp_path) == State(last_pull=T0 - 600)
+
+
+def test_the_outcome_of_a_pull_names_how_it_ended(tmp_path):
+    outcome = _sync_core.pull_outcome
+    assert outcome(log_dir(tmp_path), cfg(mode='off'), ok, background=False) == _sync_core.Outcome('off')
+    assert outcome(log_dir(tmp_path), cfg(), ok, background=False, clock=lambda: T0) == _sync_core.Outcome('ok')
+    assert outcome(log_dir(tmp_path), cfg(), failing('network'), background=False) == _sync_core.Outcome(
+        'failed', 'network', 'network for the test')
+    with _sync_core.try_lock(str(sync_dir(tmp_path))):
+        assert outcome(log_dir(tmp_path), cfg(), ok, background=False) == _sync_core.Outcome('locked')
+    assert state_of(tmp_path).last_pull == T0
+
+
+def test_a_pull_after_a_broken_state_counts_it_as_empty_and_keeps_its_success(tmp_path):
+    put_raw(tmp_path, '{broken')
+    assert _sync_core.pull(log_dir(tmp_path), cfg(), ok, background=True, clock=lambda: T0) == 0
+    assert state_of(tmp_path) == State(last_pull=T0)
+    assert [r['decision'] for r in sync_lines(tmp_path)] == ['state_unreadable', 'success']
 
 
 def test_the_command_line_runs_sync_py_next_to_the_core_with_this_python():
@@ -921,3 +941,25 @@ def test_a_dangling_link_as_the_sync_folder_is_a_broken_state(tmp_path):
     os.symlink(tmp_path / 'gone', sync_dir(tmp_path))
     with pytest.raises(_sync_core.BrokenState, match='not a folder'):
         state_of(tmp_path)
+
+
+def test_a_push_keeps_the_time_of_the_last_pull(tmp_path):
+    put_state(tmp_path, State(last_pull=T0 - 60))
+    assert push(tmp_path, ok, forced=True) == 0 and state_of(tmp_path).last_pull == T0 - 60
+    assert push(tmp_path, failing('network'), forced=True) == 1 and state_of(tmp_path).last_pull == T0 - 60
+
+
+def test_the_outcome_of_a_push_names_how_it_ended(tmp_path):
+    def outcome(runner=ok, config=None, **kwargs):
+        return _sync_core.push_outcome(log_dir(tmp_path), config or cfg(), runner, clock=lambda: T0,
+                                       rand=lambda: 0.5, **kwargs)
+    assert outcome(config=cfg(mode='off')) == _sync_core.Outcome('off')
+    assert outcome() == _sync_core.Outcome('ok')
+    assert outcome(if_due=True) == _sync_core.Outcome('waiting')               # the success set next_due ahead
+    assert outcome(failing('auth'), forced=True) == _sync_core.Outcome('failed', 'auth', 'auth for the test')
+    assert outcome() == _sync_core.Outcome('waiting')                          # inside the backoff
+    with _sync_core.try_lock(str(sync_dir(tmp_path))):
+        assert outcome(forced=True) == _sync_core.Outcome('locked')
+    put_state(tmp_path, State(backoff_level=1, last_error='visibility'))
+    assert outcome(forced=True) == _sync_core.Outcome('blocked', 'visibility')
+    assert [push(tmp_path, forced=True)] == [1]                                # blocked is a failure as exit code
