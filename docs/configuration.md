@@ -47,6 +47,7 @@ that key and writes one line to the log.
 | `sync.project_labels` | `plain` | How projects are named in the sync repository, in request and day lines: `plain` (the folder name, as in the report), `alias` (from `sync.project_aliases`) or `hash` (needs `sync.label_salt`). |
 | `sync.project_aliases` | `{}` | Folder name to the name used for `alias`. A folder without an entry becomes `unbenannt-` and 8 hex characters. |
 | `sync.label_salt` | `""` | Required for `hash`, the same on every machine. Without it the export stops. |
+| `sync.include_gates` | `true` | Sync the decisions of the spawn gate and the soft stop (time, gate, decision, mode and the kind of the reason). `false`: no gate lines leave this machine. |
 | `sync.keep_request_months` | `3` | Full months (at least 1) whose requests stay in the own folder of the sync repository; older months are compacted to their day lines. |
 
 The mode and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config file.

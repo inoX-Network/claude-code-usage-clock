@@ -76,6 +76,7 @@ DEFAULTS: dict = {
         'project_labels': 'plain',
         'project_aliases': {},
         'label_salt': '',
+        'include_gates': True,
         'keep_request_months': 3,
     },
 }

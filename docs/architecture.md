@@ -23,7 +23,8 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
                           and ending a process tree (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
   _sync_core.py           the sync core: state, due check, lock, backoff, timeouts, triggers (<log_dir>/sync/)
-  _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report does)
+  _sync_export.py         the sync export: the new local data appended to the own folder of the sync clone, with a cursor (<log_dir>/sync/cursor.json)
+  _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report and the sync export do)
   sync_format.py          the sync repository: layout, line formats, machine id, project labels, writing (allowlist), reading (foreign data), compacting; see docs/report-format.md
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
@@ -515,6 +516,35 @@ success. `sync.mode` `off` (the default) makes every entry point do nothing; `sh
 - **Exit codes of `sync.py`:** 0 success or nothing to do, 1 failed, blocked or ended by the watchdog, 2 bad
   arguments; the two hooks print nothing and always exit 0. That `sync/` cannot be used is logged at most once an
   hour (`<log_dir>/sync-error.logged`). Log lines have hook `sync`.
+
+## Sync export
+
+`_sync_export.export(clone_root, log_dir, cfg, projects_dir, now, deadline=None)` appends what is new in the local
+data of this machine to `machines/<own id>/` of the checked-out sync repository; the push (0034-SYNC-PUSH) calls it
+under the sync lock and commits. Every line goes through `sync_format` (`encode`, `encode_day`, `append`), so only
+the fields of the format leave the machine (see docs/report-format.md); nothing is written outside the own folder.
+
+- **Sources:** the transcripts (read with `_transcripts.read_requests_from`, the rules of the usage report: the last
+  line of a request, the agent type, the project folder) as `requests/<YYYY-MM>/<session>.jsonl`, one line per
+  request, `proj` after `sync.project_labels`, the project of a subagent that of its session; the measurement history
+  `usage-history.jsonl` with `.1` as `history/`; the gate decisions of `log.jsonl` with `.1` as `gates/`, only with
+  `sync.include_gates`; the day archive `usage-days.jsonl` as `days/`, its project names after `sync.project_labels`.
+  machine.json is written if it is missing or its name or platform changed.
+- **Cursor** `<log_dir>/sync/cursor.json` (0600, atomic through `_context_state.write_private`): per source file
+  (a transcript by its path below the projects folder) the offset after the last complete line exported, size, id
+  (`st_dev:st_ino`, none if the system gives no inode number), modification time and a hash of the first 1024 bytes;
+  for a transcript also the key of its first request (`first`) and its project folder. Only complete lines from the
+  offset on are read, a half last line waits. A file that got smaller, has another id or other first bytes (without
+  an id: also an older modification time) is read from byte 0; the reader removes doubled requests by `k`. A rotated
+  `.1` is known by id and first bytes and read on from where the old name stopped. An unchanged file (id, size,
+  modification time) is not opened. The cursor of a source changes only after its lines are in the clone; entries of
+  transcripts that are gone are dropped. A cursor that cannot be read counts as empty (log line `cursor_unreadable`).
+- **Request key:** `k` from message id and request id; a line without a message id is a request of its own, its `k`
+  made from its transcript and byte offset (a replaced transcript can then add it twice).
+- **Errors:** `project_labels: hash` without `label_salt`, a machine id that cannot be used, a clone or cursor that
+  cannot be written: `SyncError('internal')`. A source line that does not fit or a file that cannot be read is
+  counted (`Result.skipped`, `Result.unreadable_files`) and left out. With a deadline the export stops at the next
+  file once 30 s are left for commit and push (`Result.complete` false); the next run goes on from there.
 
 ## Log
 

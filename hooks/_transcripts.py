@@ -159,6 +159,17 @@ def agent_type_of(transcript: str) -> str:
     return value if isinstance(value, str) and AGENT_TYPE.fullmatch(value) else 'other'
 
 
+def folder_of(cwd: str) -> str:
+    """The name of the folder a request ran in: its project. Never a path."""
+    return os.path.basename(cwd.rstrip('/'))
+
+
+def replaces(known: tuple | None, output: int, path: str) -> bool:
+    """Whether a line of a request with `output` tokens in transcript `path` replaces the line known so far, given as
+    (output, path, ...): one with more output, or with the same output later in the same transcript."""
+    return known is None or output > known[0] or (output == known[0] and known[1] == path)
+
+
 def find_transcripts(projects_dir: str):
     """(path, session, is_subagent) of every transcript below the folder, links not followed."""
     for folder, dirs, files in os.walk(projects_dir):
@@ -205,8 +216,7 @@ def read_transcripts(projects_dir: str, modified_since: float,
                     if parsed is not None:
                         message_id, request_id, ts, tokens, model, cwd, details = parsed
                         key = (message_id, request_id) if isinstance(message_id, str) and message_id else (path, number)
-                        known = best.get(key)
-                        if known is None or tokens[4] > known[0] or (tokens[4] == known[0] and known[1] == path):
+                        if replaces(best.get(key), tokens[4], path):
                             request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path)
                             best[key] = (tokens[4], path, request)
                 if want_usage_lines and ('Usage: 5h' in raw or 'Nutzung: 5h' in raw) and '"attachment"' in raw:
@@ -214,6 +224,39 @@ def read_transcripts(projects_dir: str, modified_since: float,
                     if parsed is not None:
                         fresh[parsed[0]] = parsed[1:]
     return [value[2] for value in best.values()], fresh, files, unreadable
+
+
+def read_requests_from(path: str, offset: int, session: str, sub: bool) -> tuple[dict, int, int]:
+    """The requests in the complete lines of one transcript from byte `offset` on: ({key: request}, end, unreadable
+    request lines), `end` being the byte after the last line break read. A last line without its line break is still
+    being written: it is left for a later call from `end`. Of the lines of one request the last counts (`replaces`);
+    the key is (message id, request id), for a line without a message id (None, its byte offset): each such line is
+    a request of its own. The requests keep the order in which they first appear. Raises OSError if the file cannot
+    be read."""
+    best: dict = {}
+    unreadable = 0
+    agent_type = agent_type_of(path) if sub else None
+    with open(path, 'rb') as handle:
+        handle.seek(offset)
+        position = offset
+        for raw in handle:
+            if not raw.endswith(b'\n'):
+                break
+            start, position = position, position + len(raw)
+            if b'"usage"' not in raw:
+                continue
+            try:
+                parsed = parse_request(raw.decode('utf-8', errors='replace'))
+            except BadLine:
+                unreadable += 1
+                continue
+            if parsed is not None:
+                message_id, request_id, ts, tokens, model, cwd, details = parsed
+                key = (message_id, request_id) if isinstance(message_id, str) and message_id else (None, start)
+                if replaces(best.get(key), tokens[4], path):
+                    request = Request(ts, session, sub, agent_type, model, tokens, cwd, *details, source=path)
+                    best[key] = (tokens[4], path, request)
+    return {key: value[2] for key, value in best.items()}, position, unreadable
 
 
 def start_indices(requests: list[Request]) -> list[int]:

@@ -273,7 +273,7 @@ class Data:
             self.start.setdefault(request.session, request.ts)
             self.session_of.setdefault(request.session[:8], request.session)
             if request.session not in self.label and request.cwd:
-                folder = re.sub(r'[^\w .+@=-]', '?', os.path.basename(request.cwd.rstrip('/')))[:64]
+                folder = re.sub(r'[^\w .+@=-]', '?', _transcripts.folder_of(request.cwd))[:64]
                 if folder:
                     self.label[request.session] = folder
             if not request.sub:
