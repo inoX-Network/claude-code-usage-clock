@@ -422,7 +422,7 @@ for (const [bodyColumns, width] of [[30, '100%'], [60, '49%'], [120, '24%']] as 
   })
 }
 
-test('desktop: the open view and period are primary buttons on a plate of the accent colour; the plate moves along', async ($, on) => {
+test('desktop: the open view and period sit on a plate of the accent colour, no primary (white) button; the plate moves along', async ($, on) => {
   world(on)
   await start($)
   await report($)
@@ -432,7 +432,7 @@ test('desktop: the open view and period are primary buttons on a plate of the ac
     const frame = await ui.find({ key: `tab-${key}` })
     return { variant: button?.props.variant, plain: button?.props.plain, plate: frame?.props.backgroundColor }
   }
-  const active = { variant: 'primary', plain: undefined, plate: '#c47a3a' }
+  const active = { variant: undefined, plain: true, plate: '#c47a3a' }
   const other = { variant: undefined, plain: true, plate: undefined }
   expect(await look('view-overview')).toEqual(active)
   expect(await look('period-week')).toEqual(active)
