@@ -30,8 +30,14 @@ windows/                  everything Windows-specific, see windows/README.md
   cli/_win.py             file lock, replace retry, path normalisation, Git Bash commands (copied next to the hooks on Windows)
   cli/tests/              the Windows test track (collected on Windows only)
   wsl/                    script that runs the main suite in WSL; cowork/: findings only
+desktop/                  Claude Code plugin (see desktop/README.md): the status line in the desktop app, the usage file from there, /report, the context split
+  hooks/                  the hooks module of the plugin (TypeScript) and its tests
+.claude-plugin/           the marketplace entry of the plugin
 docs/agents.md            how to give agents model and effort, for users and for the model
+docs/getting-started.md   the first install, step by step, for people new to a terminal
+docs/usage-report.md      the details of the usage report: the overview, the full report, the day archive
 docs/report-format.md     what every line of the usage report and every field of its JSON means (units, source, measured or estimated)
+examples/wake-routine.md  a start for the file of wake_watcher.routine_file
 tests/                    pytest, synthetic data only (the main suite, every system)
 .github/check_pytest_output.py   the CI rule: no empty run, no skip (Windows: only the posix_only reason)
 config.example.json       every key with its default
@@ -81,7 +87,8 @@ rather than wrong. Exit code 0 always. The line is written as UTF-8 (the dash in
 - **5h / week:** from `rate_limits`, merged through the shared usage file (see above). Colours
   `statusline.yellow_from` and `red_from`; the marker appears at `thresholds.start_block_week`. With
   `statusline.show_reset` (default true) each part ends with its `resets_at` in local time, in the part's colour:
-  `↻HH:MM` for the five hours, `↻<weekday> HH:MM` for the week, the latter only from `yellow_from` on. The
+  `↻HH:MM` for the five hours, `↻<weekday> HH:MM` for the week (without the weekday when the reset is later today),
+  the latter only from `yellow_from` on. The
   reset comes from the same block as the value shown (merged, or the session's own if the merge failed);
   missing, broken or not in the future: no reset text.
 - **ctx:** from `context_window`. Needs a valid `context_window_size` (at least 1000), otherwise no part.
@@ -445,7 +452,8 @@ The log folder is created 0700 and `log.jsonl` 0600 (`fchmod` on every write, so
 becomes private too), opened with `O_NOFOLLOW`. Per-agent call counters in `<log_dir>/counters/<agent_id>.json`
 (written with `_context_state.write_private`: 0600 in a 0700 folder, never through a link), per-session context state in
 `<log_dir>/context/<session_id>.json` (see Status line), heartbeat of the wake-up watcher in
-`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line), day archive of the usage report in `<log_dir>/usage-days.jsonl` (see Usage report). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
+`<log_dir>/context/<session_id>.watch`, measurement history in `<log_dir>/usage-history.jsonl` (see Status line), day archive of the usage report in `<log_dir>/usage-days.jsonl` (see Usage report), the context split of each session
+in `<log_dir>/context-breakdown/<session_id>.json` (written by the desktop plugin, read by the usage report). The context reporter and the watcher log nothing. A config problem is logged as a line with hook
 `config` and decision `defaults`.
 
 ## Usage report

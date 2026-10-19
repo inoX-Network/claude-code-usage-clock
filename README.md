@@ -27,8 +27,9 @@ repo closes that gap with a status line and four hooks (five parts):
 | **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
 
-On top of these there is one optional helper that needs no settings entry: the [wake-up
-watcher](#the-wake-up-watcher), off by default.
+On top of these there are two optional helpers that need no settings entry: the [wake-up
+watcher](#the-wake-up-watcher), off by default, and the plugin in [`desktop/`](desktop/README.md), which draws the
+status line in the Claude desktop app and adds [`/report`](#the-report-pane), a pane with the usage report.
 
 "Log only" (`shadow` mode) means the gates decide and write their decision to a log, but block nothing. When a
 gate would have denied, asked or warned, the model gets a short note instead ("Spawn gate (shadow mode, information
@@ -216,9 +217,9 @@ spawn gate now starts no new agent blocks until the window resets at 22:40.
   (`start_block_week`) a marker names what the spawn gate now does, by `thresholds.week_action`:
   `<- week gate: agents warn`, `<- week gate: agents ask` or `<- week gate: agents blocked`. The weekly limit itself
   is still ahead then.
-- `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday and appears only
-  from yellow on; below that it is days away. A missing or past reset time is left out
-  (`statusline.show_reset`).
+- `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday (`↻Mon 09:00`), except
+  when it resets later today, and appears only from yellow on; below that it is days away. A missing or past reset
+  time is left out (`statusline.show_reset`).
 - `ctx` is the input context of the session: tokens used, window size, share of the window. It is shown from
   the first prompt on, as soon as Claude Code reports the window size; before the first answer it reads `ctx –/1000k` instead of a made-up zero. The colour
   depends on the absolute tokens, not on the percentage: yellow from 300k, red from 500k
@@ -245,9 +246,11 @@ Two differences: the app tells a plugin no cache expiry, so the cache clock is a
 The plugin also writes the app's numbers into the usage file, through the installed status line, so the hooks and
 gates work in a desktop session as in the terminal ([details](desktop/README.md#it-writes-the-usage-file-too)).
 
-It adds `/report` as well, in the desktop app and in the terminal: a pane with the usage report, the period and the
-view as tabs with keys ([details](desktop/README.md#the-usage-report-report)). It needs the report script that
-`tools/install.py` installs.
+It adds `/report` as well, in the desktop app and in the terminal: a pane with the usage report
+([The /report pane](#the-report-pane)). In the terminal that is all the plugin does, so install it there too if you
+want the pane.
+
+### Files the status line writes
 
 While a context is measured, the status line also writes `<log_dir>/context/<session_id>.json` (window size,
 used tokens, time, and while the prompt cache is warm its lifetime and expiry) for each session, private to you
@@ -351,7 +354,8 @@ The answer to the model is not masked: the model sees the value it has to fix.
 ## Reports: what was used
 
 `tools/usage_report.py` shows what was used in a day, a week or a month, in total and per CLI. It reads the Claude
-Code transcripts (`~/.claude/projects`, or `--projects-dir`), the measurement history and the log of the gates, and
+Code transcripts (`~/.claude/projects`, or `--projects-dir`; `--claude-dir` names another user folder of Claude Code,
+`--config` another `config.json` for the log folder), the measurement history and the log of the gates, and
 never message text: per request only the token counts, the model, the time, the working folder (its last name labels
 the CLI), the ids that tell requests apart and, for a subagent, its agent type.
 
@@ -412,9 +416,33 @@ Notable
 Details: --project 0016 · --session aaaaaaaa · --full
 ```
 
+A `-` in a points column means the points of that row are not measured: none of its cost lay in a counted section of
+that limit, which is not the same as 0 (`measured_share` in [`docs/report-format.md`](docs/report-format.md)).
+
 What every part of the overview and of the full report (`--full`) means, the details switches and the day archive
 are in [`docs/usage-report.md`](docs/usage-report.md); every line and JSON field in
 [`docs/report-format.md`](docs/report-format.md).
+
+### The /report pane
+
+The plugin in [`desktop/`](desktop/README.md) (install it as in [In the Claude desktop app](#in-the-claude-desktop-app))
+adds `/report`, in the desktop app and in the terminal. It opens a pane with the same numbers, read from the report
+script that `tools/install.py` installs.
+
+![/report in the Claude desktop app: the week at 96 % of the weekly limit, the five-hour windows, the cost at API prices, the cache, the projects, the models and the agents](docs/images/report-desktop-overview.png)
+
+- `/report month` opens it on that period (`day`, `week`, `month` or `year`; the default is the week).
+- Seven views, each on a key: `a` Overview, `b` Agents, `c` Models, `d` Cache/Thinking, `e` Tokens, `f` Projects,
+  `g` Sessions. The period is on `1` to `4`, `r` reads it again, Esc closes the pane.
+- The desktop app draws tiles and bars, the terminal the same numbers as text.
+- Sessions lists every session of the period, highest cost first, and marks the one you opened `/report` from: `▶` in
+  the terminal, under "This session" in the app. A session opens into its detail (cost, tokens by kind, models,
+  subagents and [what its context held](#what-a-session-started-with) after the first answer); `q` goes back.
+
+![The Sessions view in the terminal, with the status line below: the session /report was opened from is marked with an arrow](docs/images/report-terminal-sessions.png)
+
+The pane makes no model call, and nothing of it reaches the model or the transcript. Every key, tile and failure
+message: [`desktop/README.md`](desktop/README.md#the-usage-report-report).
 
 ### What a session started with
 
@@ -613,6 +641,10 @@ On Windows: `python -m pytest tests/ windows/cli/tests/ -q -rs`. The tests that 
 symlinks, FIFOs, file modes, user ids or POSIX time zone rules carry `@pytest.mark.posix_only` and are skipped there, with
 one fixed reason that the CI check accepts and no other; on Linux and macOS no test may be skipped
 ([`windows/README.md`](windows/README.md#tests)).
+
+The desktop plugin has tests of its own, run with the Claude Code CLI (no login needed); the CI runs them on Linux and
+Windows (job `plugin`) with the Claude Code version pinned in `.github/workflows/tests.yml`. The commands are in
+[`desktop/README.md`](desktop/README.md#tests).
 
 [`docs/architecture.md`](docs/architecture.md) is the contract between the parts.
 
