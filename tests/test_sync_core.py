@@ -417,7 +417,10 @@ def test_the_child_really_sees_the_non_interactive_environment():
 @pytest.mark.parametrize('content', ['{broken', '[]', '"text"', '{"backoff_level": -1}', '{"backoff_level": true}',
                                      '{"backoff_level": "2"}', '{"last_error": "bogus"}', '{"last_error": ["network"]}',
                                      '{"next_due": 5}', '{"next_due": "2026-01-14T10:00:00"}',
-                                     '{"last_success": "yesterday"}', '[' * 100000])
+                                     '{"last_success": "yesterday"}',
+                                     # an id of its own: as the test id, 100000 characters would not fit into the
+                                     # environment variable PYTEST_CURRENT_TEST on Windows (32767 at most)
+                                     pytest.param('[' * 100000, id='deeply-nested')])
 def test_a_broken_state_file_counts_as_empty_with_exactly_one_log_line(tmp_path, content):
     put_raw(tmp_path, content)
     assert push(tmp_path) == 0
