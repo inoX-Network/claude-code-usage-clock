@@ -269,8 +269,7 @@ def archive_line(requests, cost, ident, label, five_pts=0.0, peak=None):
 def own_archive(world, *lines):
     world.log.mkdir(parents=True, exist_ok=True)
     with open(world.log / 'usage-days.jsonl', 'a', encoding='utf-8') as f:
-        for day, stats in lines:
-            f.write(json.dumps({'v': 1, 'day': day, 'stats': stats}) + '\n')
+        f.writelines(json.dumps({'v': 1, 'day': day, 'stats': stats}) + '\n' for day, stats in lines)
 
 
 def test_on_a_day_with_requests_the_figures_come_from_the_requests_and_the_subscription_once(world, synced):
@@ -372,7 +371,8 @@ def test_the_pane_reading_four_periods_pulls_once(world, synced):
 def test_no_pull_and_sync_off_do_not_pull(world, synced, monkeypatch):
     world.projects.mkdir()
     sync_part = world.report('--no-pull')['coverage']['sync']
-    assert synced.pulls == [] and sync_part['pull'] == {'status': 'skipped', 'category': None, 'last_pull': None}
+    assert synced.pulls == [] and sync_part['pull'] == {'status': 'skipped', 'category': None, 'detail': None,
+                                                         'last_pull': None}
     world.configure(monkeypatch, sync={'mode': 'off'})
     assert 'sync' not in world.report('--no-pull')['coverage'] and synced.pulls == []
 
@@ -456,9 +456,10 @@ def test_a_failed_pull_uses_the_clone_as_it_was_and_names_the_reason(world, sync
     report = world.report('--day', '2026-10-13')
     assert report['total']['requests'] == 3
     assert report['coverage']['sync']['pull'] == {'status': 'failed', 'category': 'network',
+                                                  'detail': 'could not reach the remote',
                                                   'last_pull': '2026-10-14T10:00:00Z'}
     note = next(n for n in report['overview']['notable'] if n['rule'] == 'sync_pull')
-    assert note['text'] == 'pull failed (network): the other machines as of 2 h ago'
+    assert note['text'] == 'pull failed (network: could not reach the remote): the other machines as of 2 h ago'
     text = world.overview('--day', '2026-10-13', '--full')
     assert 'pull failed (network), last pull 2 h ago' in text
     assert synced.read_state().last_pull == NOW - 7200
@@ -468,7 +469,7 @@ def test_a_pull_that_never_succeeded_says_so(world, synced):
     world.projects.mkdir()
     synced.pull_error = ('timeout', 'the run took too long')
     note = next(n for n in world.report()['overview']['notable'] if n['rule'] == 'sync_pull')
-    assert note['text'] == 'pull failed (timeout): the other machines not pulled yet'
+    assert note['text'] == 'pull failed (timeout: the run took too long): the other machines not pulled yet'
 
 
 # --- Criterion: without a fast forward nothing is merged, and the report says so ------------------------------------
@@ -480,9 +481,9 @@ def test_without_a_fast_forward_the_report_names_the_differing_history(world, sy
     report = world.report('--day', '2026-10-13')
     assert report['coverage']['sync']['pull']['status'] == 'diverged' and report['total']['requests'] == 3
     note = next(n for n in report['overview']['notable'] if n['rule'] == 'sync_pull')
-    assert note['text'] == ('no fast forward, the sync history differs, nothing was merged: the other machines as of '
-                            '10 min ago')
-    assert 'no fast forward, the sync history differs: nothing merged, last pull 10 min ago' in \
+    assert note['text'] == ('the sync history could not be brought together (no fast forward), nothing was merged: '
+                            'the other machines as of 10 min ago')
+    assert 'sync history not brought together, nothing merged, last pull 10 min ago' in \
         report['coverage']['sync']['text']
 
 
@@ -556,7 +557,7 @@ def test_the_json_carries_the_machine_of_every_cli_and_the_sync_coverage(world, 
         {'id': synced.own, 'name': 'desk', 'platform': sync_format.platform_name(), 'own': True,
          'last_success': '2026-10-14T11:59:00Z'},
         {'id': LAPTOP, 'name': 'laptop', 'platform': 'linux', 'own': False, 'last_success': '2026-10-14T11:00:00Z'}]
-    assert sync_part['pull'] == {'status': 'ok', 'category': None, 'last_pull': '2026-10-14T12:00:00Z'}
+    assert sync_part['pull'] == {'status': 'ok', 'category': None, 'detail': None, 'last_pull': '2026-10-14T12:00:00Z'}
     assert sync_part['skipped'] == dict.fromkeys(sync_format.COUNTERS, 0) and sync_part['unreadable_day_lines'] == 0
     assert sync_part['text'] == 'Sync: 2 devices · desk 1 min ago · laptop 1 h ago · pull ok'
 

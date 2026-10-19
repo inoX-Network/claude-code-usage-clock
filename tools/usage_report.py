@@ -2077,20 +2077,22 @@ def sync_push(log_dir: str, cfg: dict, now: float) -> dict:
 
 def sync_pull(log_dir: str, cfg: dict, now: float, wanted: bool, forced: bool) -> dict:
     """The pull before a report: none with --no-pull (`skipped`), none within PULL_GAP_S of the last successful one
-    unless `forced` (`recent`), else a fast forward with sync.pull_timeout_s: `ok`, `locked` (another run holds the
-    lock: the clone as it is), `diverged` (no fast forward possible: nothing merged) or `failed` with its category."""
+    unless `forced` (`recent`), else `sync.py pull` with sync.pull_timeout_s: `ok`, `locked` (another run holds the
+    lock: the clone as it is), `diverged` (the history could not be brought together: nothing merged) or `failed`
+    with its category. `detail` is the fixed text of the error (never output of git)."""
     if not wanted:
-        return {'status': 'skipped', 'category': None}
+        return {'status': 'skipped', 'category': None, 'detail': None}
     last = _state(log_dir).last_pull
     if not forced and last is not None and 0 <= now - last < PULL_GAP_S:
-        return {'status': 'recent', 'category': None}
+        return {'status': 'recent', 'category': None, 'detail': None}
     try:
         outcome = _sync_core.pull_outcome(log_dir, cfg, sync_command.git_pull, background=False, clock=lambda: now)
     except OSError:
-        return {'status': 'failed', 'category': 'internal'}
+        return {'status': 'failed', 'category': 'internal', 'detail': 'the sync folder cannot be used'}
     if outcome.status == 'failed':
-        return {'status': 'diverged' if outcome.category == 'conflict' else 'failed', 'category': outcome.category}
-    return {'status': outcome.status, 'category': None}
+        return {'status': 'diverged' if outcome.category == 'conflict' else 'failed', 'category': outcome.category,
+                'detail': outcome.detail}
+    return {'status': outcome.status, 'category': None, 'detail': None}
 
 
 def age_text(seconds: float) -> str:
@@ -2107,7 +2109,7 @@ def _when(moment: float | None, now: float, never: str = 'never') -> str:
 
 PULL_TEXTS = {'ok': 'pull ok', 'skipped': 'no pull (--no-pull)', 'locked': 'no pull, another sync run holds the lock',
               'failed': 'pull failed ({category}), last pull {last}',
-              'diverged': 'no fast forward, the sync history differs: nothing merged, last pull {last}',
+              'diverged': 'sync history not brought together, nothing merged, last pull {last}',
               'recent': 'last pull {last}'}
 PUSH_TEXTS = {'ok': 'push ok', 'failed': 'push failed ({category})', 'locked': 'no push, another sync run holds the lock',
               'blocked': 'no push: the sync repository is public (visibility)'}
@@ -2165,8 +2167,8 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
     if pull['status'] in ('failed', 'diverged'):
         last = 'not pulled yet' if pull['last_pull'] is None else \
             f'as of {age_text(now - _transcripts.parse_ts(pull["last_pull"]))}'
-        cause = (f'pull failed ({pull["category"]})' if pull['status'] == 'failed'
-                 else 'no fast forward, the sync history differs, nothing was merged')
+        cause = (f'pull failed ({pull["category"]}: {pull["detail"]})' if pull['status'] == 'failed'
+                 else f'the sync history could not be brought together ({pull["detail"]}), nothing was merged')
         notes.append({'rule': 'sync_pull', 'status': pull['status'], 'category': pull['category'],
                       'text': f'{cause}: the other machines {last}'})
     return notes
