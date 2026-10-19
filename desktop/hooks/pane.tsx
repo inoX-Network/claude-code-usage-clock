@@ -126,10 +126,10 @@ export function registerReport(on: On): void {
 
     // Every surface shows a plain Button's hotkey itself (the terminal as `b: `, the desktop beside the label). The
     // desktop draws its own native button and ignores the colours of the label inside: there the open tab is its
-    // primary button, framed in the accent colour, and the others are plain
+    // primary button on a plate of the accent colour, and the others are plain
     const isDesktop = e.surface === 'desktop'
     const marked = (key: string, isActive: boolean, button: unknown) => (isDesktop && isActive
-      ? <Box key={`tab-${key}`} backgroundColor={LOOK.ownCard} borderStyle="round" borderColor={LOOK.accent}>{button}</Box>
+      ? <Box key={`tab-${key}`} backgroundColor={LOOK.accent} borderStyle="round" borderColor={LOOK.accent} paddingX="xs">{button}</Box>
       : button)
     const look = (isActive: boolean) => (isDesktop && isActive ? { variant: 'primary' as const } : { plain: true as const })
     const viewTab = (id: View, hotkey: string, label: string) => {
