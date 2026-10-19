@@ -118,6 +118,7 @@ def test_a_growing_transcript_appends_only_its_new_requests_and_a_changed_one_ag
     added = [json.loads(line) for line in after[name][len(before[name]):].decode('utf-8').splitlines()]
     assert [(r['k'], r['out']) for r in added] == [(sync_format.request_key('m2', 'r2'), 25),
                                                    (sync_format.request_key('m3', 'r3'), 30)]
+    assert [r['first'] for r in added] == [False, False]      # the first request of the transcript was m1
     assert result.lines['request'] == 2
     assert {p: c for p, c in after.items() if p != name} == {p: c for p, c in before.items() if p != name}
     assert other.exists()
@@ -224,6 +225,10 @@ def test_the_exported_requests_sum_up_like_the_local_report(world, clone, monkey
     counts, costs = export_sums(requests, report_module.load_prices(prices_file))
     expected_counts, expected_costs = report_sums(report)
     assert counts == expected_counts and costs == pytest.approx(expected_costs, abs=1e-9)
+    by_session = {}
+    for request in requests:      # a request in two transcripts belongs to the session it came from, as in the report
+        by_session[request['sid'][:8]] = by_session.get(request['sid'][:8], 0) + 1
+    assert by_session == {cli['id']: cli['requests'] for cli in report['clis']}
     assert result.skipped == report['coverage']['unreadable_transcript_lines'] == 2
 
 
@@ -663,3 +668,85 @@ def test_the_deadline_stops_the_export_at_the_next_file_and_the_next_run_goes_on
     total = {kind: stopped.lines[kind] + rest.lines[kind] for kind in _sync_export.KINDS}
     assert total == {'request': 1, 'history': 1, 'gate': 1, 'day': 1}
     assert run(world, clone, deadline=Deadline(7)).complete
+
+
+# --- Gegenprüfung #63 -------------------------------------------------------------------------------------------------
+
+def test_requests_are_in_the_clone_before_the_cursor_of_their_transcript_moves(world, clone):
+    world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', out=10)])
+    machine = f'machines/{own_id(world)}'
+    os.makedirs(clone / machine)
+    (clone / machine / 'requests').write_text('in the way', encoding='utf-8')
+    with pytest.raises(_sync_core.SyncError):
+        run(world, clone)
+    cursor = _sync_export.read_cursor(str(world.log / 'sync'), str(world.log))
+    assert not any(key.startswith(_sync_export.TRANSCRIPTS) for key in cursor)
+    (clone / machine / 'requests').unlink()
+    assert run(world, clone).lines['request'] == 1
+    assert [r['out'] for r in exported(world, clone).requests] == [10]
+
+
+class Left:
+    """A deadline with always the same time left."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+
+    def left(self):
+        return self.seconds
+
+
+@pytest.mark.parametrize('left, complete', [(31, True), (30, False), (29, False)])
+def test_the_export_keeps_30_seconds_for_commit_and_push(world, clone, left, complete):
+    world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', out=10)])
+    result = run(world, clone, deadline=Left(left))
+    assert result.complete is complete and result.lines['request'] == (1 if complete else 0)
+
+
+def test_the_cursor_is_saved_after_each_group_of_sources(world, clone, monkeypatch):
+    """A run the watchdog ends (os._exit: no finally) repeats at most the group it was in: before a group starts, the
+    cursor of the groups before it is on disk."""
+    world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', out=10)])
+    write_lines(world.log / 'usage-history.jsonl', [history_row(0, 1)])
+    gates(world, [GATE])
+    write_lines(world.log / 'usage-days.jsonl', ['{"v":1,"day":"2026-10-13","stats":{}}'])
+    events = []
+    real_write, real_line_file = _sync_export.write_cursor, _sync_export._Export.line_file
+
+    def write(directory, entries):
+        events.append(('saved', sorted(entries)))
+        real_write(directory, entries)
+
+    def line_file(self, key, *args):
+        events.append(('reads', key))
+        real_line_file(self, key, *args)
+    monkeypatch.setattr(_sync_export, 'write_cursor', write)
+    monkeypatch.setattr(_sync_export._Export, 'line_file', line_file)
+    run(world, clone)
+    transcript = _sync_export.TRANSCRIPTS + f'{PROJECT}/{SESSION}.jsonl'
+    assert events == [('saved', [transcript]),
+                      ('reads', 'usage-history.jsonl.1'), ('reads', 'usage-history.jsonl'),
+                      ('saved', [transcript, 'usage-history.jsonl']),
+                      ('reads', 'log.jsonl.1'), ('reads', 'log.jsonl'),
+                      ('saved', ['log.jsonl', transcript, 'usage-history.jsonl']),
+                      ('reads', 'usage-days.jsonl'),
+                      ('saved', ['log.jsonl', transcript, 'usage-days.jsonl', 'usage-history.jsonl'])]
+
+
+def test_a_transcript_shortened_and_then_grown_past_the_old_offset_loses_nothing(world, clone):
+    """Larger than the 1024 bytes of the hash, with a first line longer than that: only the size tells the shortened
+    file from the old one."""
+    path = transcript_path(world)
+    write_lines(path, [req('2026-10-13T08:00:00Z', 'm1', request='r1', out=10, text='x' * 2000),
+                       req('2026-10-13T08:01:00Z', 'm2', request='r2', out=20),
+                       req('2026-10-13T08:02:00Z', 'm3', request='r3', out=30)])
+    run(world, clone)
+    old_size = path.stat().st_size
+    shorten_file(path, path.read_bytes())       # only the first line is left
+    run(world, clone)
+    write_lines(path, [req('2026-10-13T08:03:00Z', f'n{number}', request=f'q{number}', out=100 + number)
+                       for number in range(6)], mode='a')
+    assert path.stat().st_size > old_size
+    run(world, clone)
+    outs = {r['out'] for r in exported(world, clone).requests}
+    assert outs == {10, 20, 30} | {100 + number for number in range(6)}

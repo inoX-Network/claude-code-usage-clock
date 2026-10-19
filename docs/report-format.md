@@ -386,9 +386,10 @@ Every line and file has `v`, the version of its format (now `1`). A reader skips
 
 One line per request of a transcript, made by the same rules as in the local report (of the lines of one request the
 last counts; the type of a subagent; the first request of a transcript). A request that changes later is appended again
-with the same `k`: a reader keeps, per `k`, the line with the most output tokens (`out`), of lines with the same `out`
-the one it read last. That is the rule of the local report, so the sums do not depend on the order in which files are
-read (a request copied into a continued session stands in two files, possibly with different output).
+with the same `k`: a reader keeps, per `k`, the line with the most output tokens (`out`), as the local report does. Of
+lines with the same `out` it keeps the one of the session whose first request is earliest (a request copied into a
+continued session belongs to the session it came from), then the one of the smaller session id, and within one session
+the one it read last. So neither the sums nor the session of a request depend on the order in which files are read.
 
 | Field | Meaning |
 |---|---|

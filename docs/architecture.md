@@ -537,8 +537,10 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
   offset on are read, a half last line waits. A file that got smaller, has another id or other first bytes (without
   an id: also an older modification time) is read from byte 0; the reader removes doubled requests by `k`. A rotated
   `.1` is known by id and first bytes and read on from where the old name stopped. An unchanged file (id, size,
-  modification time) is not opened. The cursor of a source changes only after its lines are in the clone; entries of
-  transcripts that are gone are dropped. A cursor that cannot be read counts as empty (log line `cursor_unreadable`).
+  modification time) is not opened. The cursor of a source changes only after its lines are in the clone, and it is
+  saved after each group of sources (transcripts, history, gates, day archive): a run the watchdog of the push ends
+  repeats at most the group it was in. Entries of transcripts that are gone are dropped. A cursor that cannot be read
+  counts as empty (log line `cursor_unreadable`).
 - **Request key:** `k` from message id and request id; a line without a message id is a request of its own, its `k`
   made from its transcript and byte offset (a replaced transcript can then add it twice). Gate lines have no key
   either: a log file replaced without a rotation is read from byte 0 and its gate lines are appended twice.

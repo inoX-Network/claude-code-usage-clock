@@ -21,8 +21,10 @@ modification time and a hash of its first bytes. Only complete lines from the of
 waits for the next run. A file that got smaller, has another id or other first bytes (without an id: also an older
 modification time) is read from byte 0 again; the reader removes the doubled requests by `k`. A rotated file is
 known by its id and first bytes under its new name and read on from where its old name stopped. The cursor of a source
-changes only once its lines are in the clone; a run that ends early (an error, the deadline) keeps what it finished.
-A cursor that cannot be read counts as empty, with one log line.
+changes only once its lines are in the clone. It is saved after each group of sources (the transcripts, the history,
+the gates, the day archive), so a run the watchdog of the push ends repeats at most the group it was in; a run that
+ends early (an error, the deadline) keeps what it finished. A cursor that cannot be read counts as empty, with one log
+line.
 """
 from __future__ import annotations
 
@@ -170,6 +172,7 @@ class _Export:
     def __init__(self, root: str, machine_id: str, old: dict, sync: dict):
         self.root, self.machine_id, self.old, self.sync = root, machine_id, old, sync
         self.new = dict(old)
+        self.saved = old
         self.result = Result()
 
     def label(self, folder: str) -> str:
@@ -321,16 +324,21 @@ def export(clone_root: str, log_dir: str, cfg: dict, projects_dir: str, now: flo
             'schema': sync_format.SCHEMA, 'created': sync_format.iso_time(now)})
     except (sync_format.FormatError, OSError) as error:
         raise _sync_core.SyncError('internal', f'machine.json cannot be written ({type(error).__name__})') from error
-    try:
-        _export_sources(run, log_dir, projects_dir, sync['include_gates'], deadline)
-    finally:
-        if run.new != run.old:
+
+    def save() -> None:
+        if run.new != run.saved:
             write_cursor(directory, run.new)
+            run.saved = dict(run.new)
+    try:
+        _export_sources(run, log_dir, projects_dir, sync['include_gates'], deadline, save)
+    finally:
+        save()
     return run.result
 
 
 def _export_sources(run: _Export, log_dir: str, projects_dir: str, include_gates: bool,
-                    deadline: _sync_core.Deadline | None) -> None:
+                    deadline: _sync_core.Deadline | None, save: Callable[[], None]) -> None:
+    """The sources in groups; `save` writes the cursor after each group."""
     seen = set()
     for path, session, sub in _transcripts.find_transcripts(projects_dir):
         if _out_of_time(deadline):
@@ -342,6 +350,7 @@ def _export_sources(run: _Export, log_dir: str, projects_dir: str, include_gates
         run.transcript(key, path, session, sub, f'{TRANSCRIPTS}{relative.split("/")[0]}/{session}.jsonl')
     for key in [key for key in run.new if key.startswith(TRANSCRIPTS) and key not in seen]:
         del run.new[key]      # Claude Code removed the transcript
+    save()
     sources = [(HISTORY_FILE, 'history', run.history)] + ([(LOG_FILE, 'gate', run.gate)] if include_gates else [])
     for name, kind, convert in sources:
         for key, earlier in ((name + '.1', (name,)), (name, ())):       # the older lines first
@@ -349,6 +358,7 @@ def _export_sources(run: _Export, log_dir: str, projects_dir: str, include_gates
                 run.result.complete = False
                 return
             run.line_file(key, os.path.join(log_dir, key), kind, convert, earlier)
+        save()
     if _out_of_time(deadline):
         run.result.complete = False
         return

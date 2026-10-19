@@ -729,6 +729,33 @@ def test_of_the_lines_with_one_key_the_one_read_last_counts():
     assert sf.latest_by_key([first, other, second]) == {'0' * 16: second, '1' * 16: other}
 
 
+@pytest.mark.parametrize('order', [list, lambda lines: lines[::-1]], ids=['as-read', 'reversed'])
+def test_of_lines_with_the_same_output_the_session_that_began_first_keeps_a_copied_request(order):
+    """A continued session copies a request of the old one with the same output: in any order of reading it stays
+    with the old session (whose first request is earlier), whatever the session ids."""
+    old, new = 'ffffffff-old', '00000000-new'
+    lines = [request('2026-10-13T10:00:00Z', '1' * 16, old), request('2026-10-13T10:30:00.500Z', '0' * 16, old),
+             request('2026-10-13T10:30:00.500Z', '0' * 16, new), request('2026-10-13T11:00:00Z', '2' * 16, new)]
+    assert sf.latest_by_key(order(lines))['0' * 16]['sid'] == old
+
+
+@pytest.mark.parametrize('order', [list, lambda lines: lines[::-1]], ids=['as-read', 'reversed'])
+def test_of_sessions_that_began_at_the_same_time_the_smaller_id_keeps_the_request(order):
+    lines = [request('2026-10-13T10:00:00Z', '0' * 16, 'bbbb'), request('2026-10-13T10:00:00Z', '0' * 16, 'aaaa')]
+    assert sf.latest_by_key(order(lines))['0' * 16]['sid'] == 'aaaa'
+
+
+def test_append_never_writes_into_a_file_with_a_second_link(tmp_path):
+    root = str(tmp_path / 'repo')
+    outside = write_file(str(tmp_path / 'outside.jsonl'), b'')
+    folder = os.path.join(root, 'machines', OWN, 'history')
+    os.makedirs(folder)
+    os.link(outside, os.path.join(folder, '2026-10.jsonl'))
+    with pytest.raises(sf.FormatError, match='a second link'):
+        sf.append(root, OWN, sf.history_path(OWN, HISTORY['t']), [sf.encode('history', HISTORY)])
+    assert os.path.getsize(outside) == 0
+
+
 def test_of_the_lines_with_one_key_the_one_with_the_most_output_counts_in_any_order():
     small, large = ({**request('2026-10-13T12:30:00Z', '0' * 16), 'out': out} for out in (5, 9))
     assert sf.latest_by_key([small, large]) == sf.latest_by_key([large, small]) == {'0' * 16: large}
