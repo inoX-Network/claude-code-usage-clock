@@ -1,0 +1,706 @@
+{
+  "schema_version": 1,
+  "period": {
+    "kind": "day",
+    "label": "2026-10-13",
+    "start": "2026-10-12T22:00:00Z",
+    "end": "2026-10-13T22:00:00Z"
+  },
+  "coverage": {
+    "transcript_files": 10,
+    "archive_days": [],
+    "archive_days_without_agent_split": [],
+    "unreadable_history_lines": 0,
+    "unreadable_archive_lines": 0,
+    "unreadable_transcript_lines": 2,
+    "unreadable_context_files": 0
+  },
+  "overview": {
+    "title": "Day 2026-10-13",
+    "cost_usd": 7.0933765,
+    "week": {
+      "used_percent": 42,
+      "rise_points": 22.0,
+      "windows": 1,
+      "reset_at": 1792393200.0
+    },
+    "five_hour": {
+      "windows": 2,
+      "highest_percent": 56,
+      "highest_at": "2026-10-13T11:50:00Z"
+    },
+    "projects": [
+      {
+        "name": "proj-a",
+        "cost_usd": 5.2153765,
+        "share": 0.7352459720698598,
+        "week_points": 5.151515151515151,
+        "five_points": 20.303030303030305,
+        "measured_share": {
+          "five": 1.0,
+          "week": 1.0
+        },
+        "sessions": 1,
+        "cache_hit_rate": 0.6781221359614333,
+        "session_ids": [
+          "aaaaaaaa"
+        ]
+      },
+      {
+        "name": "proj-b",
+        "cost_usd": 1.8780000000000001,
+        "share": 0.2647540279301402,
+        "week_points": 1.8484848484848486,
+        "five_points": 7.696969696969697,
+        "measured_share": {
+          "five": 1.0,
+          "week": 1.0
+        },
+        "sessions": 2,
+        "cache_hit_rate": 0.8297872340425532,
+        "session_ids": [
+          "bbbbbbbb",
+          "cccccccc"
+        ]
+      }
+    ],
+    "max_projects": 5,
+    "more": null,
+    "split": {
+      "main_usd": 5.3431524999999995,
+      "subagents_usd": 1.7502240000000002,
+      "top_subagent": {
+        "type": "unknown",
+        "cost_usd": 0.825116,
+        "week_points": 0.5352612801063772
+      }
+    },
+    "models": {
+      "families": [
+        {
+          "name": "Opus",
+          "cost_usd": 6.622376
+        },
+        {
+          "name": "Sonnet",
+          "cost_usd": 0.416
+        },
+        {
+          "name": "Haiku",
+          "cost_usd": 0.0550005
+        }
+      ],
+      "unpriced_requests": 1
+    },
+    "thinking_share": 0.2,
+    "cache_hit_rate": 0.7203863405263267,
+    "startup": {
+      "main_median_tokens": 80000,
+      "subagent_type_median_tokens": {
+        "min": 20005,
+        "max": 25010
+      }
+    },
+    "notable": [
+      {
+        "rule": "gate_denied",
+        "gate": "spawn_gate",
+        "mode": "enforce",
+        "count": 1,
+        "reasons": {
+          "week at N %": 1
+        },
+        "text": "spawn gate denied 1 agent start (week at N %: 1)"
+      },
+      {
+        "rule": "cache_hits_low",
+        "threshold": 0.9,
+        "projects": [
+          {
+            "name": "proj-a",
+            "cache_hit_rate": 0.6781221359614333
+          },
+          {
+            "name": "proj-b",
+            "cache_hit_rate": 0.8297872340425532
+          }
+        ],
+        "text": "cache hits under 90 %: proj-a 67 %, proj-b 82 %"
+      },
+      {
+        "rule": "project_dominates",
+        "project": "proj-a",
+        "share": 0.7352459720698598,
+        "cost_usd": 5.2153765,
+        "text": "proj-a made 74 % of the cost (5.2 USD)"
+      },
+      {
+        "rule": "unexplained_rise",
+        "week_points": 14.0,
+        "five_points": 38.0,
+        "text": "unexplained rise (no request with a price in between): week 14.0 points, 5h 38.0 points"
+      }
+    ],
+    "details": {
+      "project": "proj-a",
+      "session": "aaaaaaaa"
+    }
+  },
+  "subscription": {
+    "week_segments": [
+      {
+        "start": {
+          "at": "2026-10-13T06:00:00Z",
+          "value": 20.0
+        },
+        "end": {
+          "at": "2026-10-13T15:00:00Z",
+          "value": 42
+        },
+        "reset_at": 1792393200.0
+      }
+    ],
+    "five_windows": [
+      {
+        "resets": 1791892800.0,
+        "first_seen": "2026-10-13T06:00:00Z",
+        "peak": 56,
+        "peak_at": "2026-10-13T11:50:00Z"
+      },
+      {
+        "resets": 1791910800.0,
+        "first_seen": "2026-10-13T12:00:00Z",
+        "peak": 19,
+        "peak_at": "2026-10-13T15:00:00Z"
+      }
+    ]
+  },
+  "total": {
+    "requests": 29,
+    "tokens": {
+      "input": 100595,
+      "cache_write_5m": 301000,
+      "cache_write_1h": 70000,
+      "cache_read": 1215000,
+      "output": 259400
+    },
+    "cost_usd": 7.0933765,
+    "main": {
+      "requests": 15,
+      "cost_usd": 5.3431524999999995,
+      "week_points": 4.421465504878266,
+      "five_points": 16.842931009756533
+    },
+    "subagents": {
+      "requests": 14,
+      "cost_usd": 1.7502240000000002,
+      "by_type": {
+        "unknown": {
+          "requests": 6,
+          "cost_usd": 0.825116,
+          "week_points": 0.5352612801063772,
+          "five_points": 5.070522560212754
+        },
+        "other": {
+          "requests": 2,
+          "cost_usd": 0.265036,
+          "week_points": 0.6162538714087742,
+          "five_points": 1.2325077428175484
+        },
+        "Explore": {
+          "requests": 2,
+          "cost_usd": 0.23502800000000001,
+          "week_points": 0.32371754257411567,
+          "five_points": 0.6474350851482313
+        },
+        "python-meister": {
+          "requests": 2,
+          "cost_usd": 0.220024,
+          "week_points": 0.10330180103246708,
+          "five_points": 1.587626723232039
+        },
+        "arbeiter-bauen": {
+          "requests": 2,
+          "cost_usd": 0.20502,
+          "week_points": 1.0,
+          "five_points": 2.6189768788328953
+        }
+      }
+    },
+    "models": {
+      "Opus 5.5": {
+        "requests": 26,
+        "cost_usd": 6.622376,
+        "tokens": {
+          "input": 94,
+          "cache_write_5m": 301000,
+          "cache_write_1h": 0,
+          "cache_read": 1135000,
+          "output": 244500
+        },
+        "cache_hit_rate": 0.7903382369120684,
+        "thinking_tokens": 4000,
+        "thinking_share": 0.2,
+        "web_searches": 2,
+        "web_fetches": 1
+      },
+      "Sonnet 5.x": {
+        "requests": 1,
+        "cost_usd": 0.416,
+        "tokens": {
+          "input": 0,
+          "cache_write_5m": 0,
+          "cache_write_1h": 70000,
+          "cache_read": 80000,
+          "output": 12000
+        },
+        "cache_hit_rate": 0.5333333333333333,
+        "thinking_tokens": null,
+        "thinking_share": null,
+        "web_searches": null,
+        "web_fetches": null
+      },
+      "Haiku 5.5": {
+        "requests": 1,
+        "cost_usd": 0.0550005,
+        "tokens": {
+          "input": 100001,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_read": 0,
+          "output": 2000
+        },
+        "cache_hit_rate": 0.0,
+        "thinking_tokens": null,
+        "thinking_share": null,
+        "web_searches": null,
+        "web_fetches": null
+      }
+    },
+    "unpriced": {
+      "claude-mystery-1": {
+        "requests": 1,
+        "tokens": {
+          "input": 500,
+          "cache_write_5m": 0,
+          "cache_write_1h": 0,
+          "cache_read": 0,
+          "output": 900
+        },
+        "cache_hit_rate": 0.0,
+        "thinking_tokens": null,
+        "thinking_share": null,
+        "web_searches": null,
+        "web_fetches": null
+      }
+    },
+    "cache_hit_rate": 0.7203863405263267,
+    "cold_starts": 1,
+    "thinking_tokens": 4000,
+    "thinking_share": 0.2,
+    "web_searches": 2,
+    "web_fetches": 1
+  },
+  "startup": {
+    "starts": [
+      {
+        "at": "2026-10-13T06:01:02Z",
+        "session": "aaaaaaaa",
+        "type": null,
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 10,
+          "cache_write": 60000,
+          "cache_read": 0,
+          "total": 60010
+        }
+      },
+      {
+        "at": "2026-10-13T09:00:00Z",
+        "session": "aaaaaaaa",
+        "type": "arbeiter-bauen",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 5,
+          "cache_write": 20000,
+          "cache_read": 0,
+          "total": 20005
+        }
+      },
+      {
+        "at": "2026-10-13T09:08:00Z",
+        "session": "aaaaaaaa",
+        "type": "python-meister",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 6,
+          "cache_write": 21000,
+          "cache_read": 0,
+          "total": 21006
+        }
+      },
+      {
+        "at": "2026-10-13T09:16:00Z",
+        "session": "aaaaaaaa",
+        "type": "Explore",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 7,
+          "cache_write": 22000,
+          "cache_read": 0,
+          "total": 22007
+        }
+      },
+      {
+        "at": "2026-10-13T09:24:00Z",
+        "session": "aaaaaaaa",
+        "type": "unknown",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 8,
+          "cache_write": 23000,
+          "cache_read": 0,
+          "total": 23008
+        }
+      },
+      {
+        "at": "2026-10-13T09:32:00Z",
+        "session": "aaaaaaaa",
+        "type": "other",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 9,
+          "cache_write": 24000,
+          "cache_read": 0,
+          "total": 24009
+        }
+      },
+      {
+        "at": "2026-10-13T09:40:00Z",
+        "session": "aaaaaaaa",
+        "type": "unknown",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 10,
+          "cache_write": 25000,
+          "cache_read": 0,
+          "total": 25010
+        }
+      },
+      {
+        "at": "2026-10-13T09:48:00Z",
+        "session": "aaaaaaaa",
+        "type": "unknown",
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 11,
+          "cache_write": 26000,
+          "cache_read": 0,
+          "total": 26011
+        }
+      },
+      {
+        "at": "2026-10-13T10:00:00Z",
+        "session": "bbbbbbbb",
+        "type": null,
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 0,
+          "cache_write": 80000,
+          "cache_read": 0,
+          "total": 80000
+        }
+      },
+      {
+        "at": "2026-10-13T10:30:00Z",
+        "session": "cccccccc",
+        "type": null,
+        "model": "Opus 5.5",
+        "tokens": {
+          "input": 0,
+          "cache_write": 0,
+          "cache_read": 90000,
+          "total": 90000
+        }
+      }
+    ],
+    "main": {
+      "starts": 3,
+      "median_tokens": 80000,
+      "min_tokens": 60010,
+      "max_tokens": 90000,
+      "warm_starts": 1,
+      "warm_share": 0.3333333333333333
+    },
+    "subagents": {
+      "all": {
+        "starts": 7,
+        "median_tokens": 23008,
+        "min_tokens": 20005,
+        "max_tokens": 26011,
+        "warm_starts": 0,
+        "warm_share": 0.0
+      },
+      "by_type": {
+        "unknown": {
+          "starts": 3,
+          "median_tokens": 25010,
+          "min_tokens": 23008,
+          "max_tokens": 26011,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        },
+        "Explore": {
+          "starts": 1,
+          "median_tokens": 22007,
+          "min_tokens": 22007,
+          "max_tokens": 22007,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        },
+        "arbeiter-bauen": {
+          "starts": 1,
+          "median_tokens": 20005,
+          "min_tokens": 20005,
+          "max_tokens": 20005,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        },
+        "other": {
+          "starts": 1,
+          "median_tokens": 24009,
+          "min_tokens": 24009,
+          "max_tokens": 24009,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        },
+        "python-meister": {
+          "starts": 1,
+          "median_tokens": 21006,
+          "min_tokens": 21006,
+          "max_tokens": 21006,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        }
+      }
+    },
+    "per_day": [
+      {
+        "day": "2026-10-13",
+        "main": {
+          "starts": 3,
+          "median_tokens": 80000,
+          "min_tokens": 60010,
+          "max_tokens": 90000,
+          "warm_starts": 1,
+          "warm_share": 0.3333333333333333
+        },
+        "subagents": {
+          "starts": 7,
+          "median_tokens": 23008,
+          "min_tokens": 20005,
+          "max_tokens": 26011,
+          "warm_starts": 0,
+          "warm_share": 0.0
+        }
+      }
+    ],
+    "estimate": null
+  },
+  "clis": [
+    {
+      "id": "aaaaaaaa",
+      "label": "proj-a",
+      "start": "2026-10-13T06:01:02Z",
+      "requests": 24,
+      "cost_usd": 5.2153765,
+      "tokens": {
+        "input": 100595,
+        "cache_write_5m": 221000,
+        "cache_write_1h": 70000,
+        "cache_read": 825000,
+        "output": 189400
+      },
+      "models": {
+        "Opus 5.5": 4.744376,
+        "Sonnet 5.x": 0.416,
+        "Haiku 5.5": 0.0550005,
+        "claude-mystery-1": 0.0
+      },
+      "subagents": {
+        "unknown": {
+          "requests": 6,
+          "cost_usd": 0.825116
+        },
+        "other": {
+          "requests": 2,
+          "cost_usd": 0.265036
+        },
+        "Explore": {
+          "requests": 2,
+          "cost_usd": 0.23502800000000001
+        },
+        "python-meister": {
+          "requests": 2,
+          "cost_usd": 0.220024
+        },
+        "arbeiter-bauen": {
+          "requests": 2,
+          "cost_usd": 0.20502
+        }
+      },
+      "cache_hit_rate": 0.6781221359614333,
+      "cold_starts": 1,
+      "estimated_share": {
+        "five": 20.303030303030305,
+        "week": 5.151515151515151
+      },
+      "measured_share": {
+        "five": 1.0,
+        "week": 1.0
+      },
+      "thinking_tokens": 4000,
+      "thinking_share": 0.2,
+      "web_searches": 2,
+      "web_fetches": 1,
+      "context": null
+    },
+    {
+      "id": "bbbbbbbb",
+      "label": "proj-b",
+      "start": "2026-10-13T10:00:00Z",
+      "requests": 3,
+      "cost_usd": 1.298,
+      "tokens": {
+        "input": 0,
+        "cache_write_5m": 80000,
+        "cache_write_1h": 0,
+        "cache_read": 190000,
+        "output": 43000
+      },
+      "models": {
+        "Opus 5.5": 1.298
+      },
+      "subagents": {},
+      "cache_hit_rate": 0.7037037037037037,
+      "cold_starts": 0,
+      "estimated_share": {
+        "five": 4.696969696969697,
+        "week": 1.8484848484848486
+      },
+      "measured_share": {
+        "five": 1.0,
+        "week": 1.0
+      },
+      "thinking_tokens": null,
+      "thinking_share": null,
+      "web_searches": null,
+      "web_fetches": null,
+      "context": null
+    },
+    {
+      "id": "cccccccc",
+      "label": "proj-b",
+      "start": "2026-10-13T10:30:00Z",
+      "requests": 2,
+      "cost_usd": 0.5800000000000001,
+      "tokens": {
+        "input": 0,
+        "cache_write_5m": 0,
+        "cache_write_1h": 0,
+        "cache_read": 200000,
+        "output": 27000
+      },
+      "models": {
+        "Opus 5.5": 0.5800000000000001
+      },
+      "subagents": {},
+      "cache_hit_rate": 1.0,
+      "cold_starts": 0,
+      "estimated_share": {
+        "five": 3.0,
+        "week": 0.0
+      },
+      "measured_share": {
+        "five": 1.0,
+        "week": 1.0
+      },
+      "thinking_tokens": null,
+      "thinking_share": null,
+      "web_searches": null,
+      "web_fetches": null,
+      "context": null
+    }
+  ],
+  "allocation": {
+    "five": {
+      "counted_points": 66.0,
+      "attributed_points": 28.0,
+      "unexplained_points": 38.0,
+      "skipped_sections": 2,
+      "skipped_points": 6.0
+    },
+    "week": {
+      "counted_points": 21.0,
+      "attributed_points": 7.0,
+      "unexplained_points": 14.0,
+      "skipped_sections": 1,
+      "skipped_points": 1.0
+    }
+  },
+  "calibration": {
+    "five": {
+      "status": "not calibrated yet",
+      "sections": 15,
+      "usd_per_point": null,
+      "per_day": {
+        "2026-10-13": {
+          "sections": 15,
+          "usd_per_point": 0.35344974290561665
+        }
+      },
+      "per_model": {}
+    },
+    "week": {
+      "status": "not calibrated yet",
+      "sections": 15,
+      "usd_per_point": null,
+      "per_day": {
+        "2026-10-13": {
+          "sections": 15,
+          "usd_per_point": 1.758338980008916
+        }
+      },
+      "per_model": {}
+    }
+  },
+  "guards": {
+    "spawn_gate": {
+      "enforce": {
+        "allow": 1,
+        "deny": 1
+      }
+    },
+    "soft_stop": {
+      "shadow": {
+        "warn": 1
+      }
+    }
+  },
+  "guard_reasons": {
+    "spawn_gate": {
+      "enforce": {
+        "deny": {
+          "week at N %": 1
+        }
+      }
+    },
+    "soft_stop": {
+      "shadow": {
+        "warn": {
+          "5h window at N %": 1
+        }
+      }
+    }
+  }
+}

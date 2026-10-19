@@ -1,0 +1,14 @@
+{
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing (retrieved 2026-10-01); Haiku 5.5: https://www.anthropic.com/claude-haiku-5-5 (retrieved 2026-10-13)",
+  "note": "The cache write and cache read prices were checked on 2026-10-13 against the cost Claude Code itself reports for a session. A model that matches no entry is not priced: the report shows its tokens as 'no price' and never guesses.",
+  "unit": "USD per million tokens",
+  "models": [
+    {"name": "Opus 5.5", "match": "opus-5-5", "input": 4, "cache_write_5m": 5, "cache_write_1h": 8, "cache_read": 0.20, "output": 20},
+    {"name": "Opus 4.x", "match": "opus-4", "input": 5, "cache_write_5m": 6.25, "cache_write_1h": 10, "cache_read": 0.50, "output": 25},
+    {"name": "Sonnet 5.x", "match": "sonnet-5", "input": 2, "cache_write_5m": 2.5, "cache_write_1h": 4, "cache_read": 0.20, "output": 10},
+    {"name": "Haiku 4.5", "match": "haiku-4-5", "input": 1, "cache_write_5m": 1.25, "cache_write_1h": 2, "cache_read": 0.10, "output": 5},
+    {"name": "Haiku 5.5", "match": "haiku-5-5", "input": 0.10, "cache_write_5m": 0.125, "cache_write_1h": 0.20, "cache_read": 0.01, "output": 0.50,
+     "long_context": {"above_tokens": 100000, "input": 0.50, "cache_write_5m": 0.625, "cache_write_1h": 1.0, "cache_read": 0.05, "output": 2.50}},
+    {"name": "Fable", "match": "fable", "input": 10, "cache_write_5m": 12.5, "cache_write_1h": 20, "cache_read": 0.25, "output": 50}
+  ]
+}
