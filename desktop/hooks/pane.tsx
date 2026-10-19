@@ -10,7 +10,7 @@ import type { ReportSlot, ReportState } from '../types/index'
 import { DEFAULTS } from './config'
 import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
-import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
+import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
 
 const PANE = 'usage-report'
@@ -223,7 +223,7 @@ export function registerReport(on: On): void {
               <Text key="unit" size="footnote" color={LOOK.muted}>{` ${k.unit}`}</Text>
             </Text>,
         ...(k.peaks === undefined ? [] : [
-          <Svg key={`kpi-${k.id}-peaks`} source={peaksSvg(k.peaks)} alt={`Peaks of the 5h windows: ${k.peaks.join(', ')} %`} width={120} height={46} />,
+          <Svg key={`kpi-${k.id}-peaks`} source={peaksSvg(k.peaks, limits)} alt={`Peaks of the 5h windows: ${k.peaks.join(', ')} %, scale to ${peakScale(k.peaks)} %`} width={120} height={46} />,
         ]),
         ...(k.split === undefined ? [] : [
           <Box key={`kpi-${k.id}-split`} flexDirection="row" width="100%">

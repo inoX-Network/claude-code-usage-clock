@@ -416,7 +416,7 @@ for (const [bodyColumns, width] of [[30, '100%'], [60, '49%'], [120, '24%']] as 
     const ui = await mountPane($, 'desktop', bodyColumns)
     for (const id of ['week', 'five', 'cost', 'cache']) expect((await ui.find({ key: `kpi-${id}` }))?.props.width).toBe(width)
     const drawings = await ui.findAll({ type: 'Svg' })
-    expect(drawings.map(found => found.props.alt)).toEqual(['39 % of the weekly limit used', 'Peaks of the 5h windows: 82, 20 %'])
+    expect(drawings.map(found => found.props.alt)).toEqual(['39 % of the weekly limit used', 'Peaks of the 5h windows: 82, 20 %, scale to 90 %'])
     await ui.unmount()
   })
 }

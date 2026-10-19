@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { REPORT } from './report-fixture'
-import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, sessionTiles, tilesPerRow } from './tiles'
+import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow } from './tiles'
 
 const LIMITS = { yellowFrom: 50, redFrom: 75 }
 
@@ -101,8 +101,24 @@ describe('the drawings', () => {
   })
 
   test('the columns: one per window, the highest in the accent colour', async () => {
-    const svg = peaksSvg([22, 27, 7])
+    const svg = peaksSvg([22, 27, 7], LIMITS)
     expect(svg.match(/<rect/g)).toHaveLength(3)
     expect(svg.match(new RegExp(`fill="${LOOK.accent}"`, 'g'))).toHaveLength(1)
+  })
+
+  test('the scale ends at the highest peak rounded up to ten, at least 50 %, at most 100 %', async () => {
+    expect(peakScale([22, 27, 7])).toBe(50)
+    expect(peakScale([3, 61])).toBe(70)
+    expect(peakScale([82, 20])).toBe(90)
+    expect(peakScale([100])).toBe(100)
+    expect(peakScale([])).toBe(50)
+    // 27 % on a scale to 50 % is more than half the height, not a quarter of it
+    const height = Number(/height="([\d.]+)" rx="2" fill="#c47a3a"/.exec(peaksSvg([22, 27, 7], LIMITS))?.[1])
+    expect(Math.round(height)).toBe(24)
+  })
+
+  test('a dashed line where yellow starts, when it lies on the scale', async () => {
+    expect(peaksSvg([22, 27], LIMITS)).toContain(`stroke="${LOOK.warning}" stroke-width="1" stroke-dasharray="3 3"`)
+    expect(peaksSvg([22, 27], { yellowFrom: 60, redFrom: 80 })).not.toContain('stroke-dasharray')
   })
 })

@@ -398,16 +398,28 @@ export function gaugeSvg(percent: number, limits: Limits): string {
     + '</svg>'
 }
 
-/** The peaks of the 5h windows as columns on a scale of 0 to 100 %, the highest in the accent colour. */
-export function peaksSvg(peaks: number[]): string {
+/** The top of the column scale: the highest peak rounded up to ten, at least 50 % and at most 100 %, so that low
+ *  windows still differ from each other. */
+export function peakScale(peaks: number[]): number {
+  return Math.min(100, Math.max(50, Math.ceil(Math.max(0, ...peaks) / 10) * 10))
+}
+
+/** The peaks of the 5h windows as columns, the highest in the accent colour. The scale ends at `peakScale`; a dashed
+ *  line marks where yellow starts, when it lies on the scale. */
+export function peaksSvg(peaks: number[], limits: Limits): string {
   const shown = peaks.slice(-8)
   const step = 120 / Math.max(shown.length, 1)
   const highest = Math.max(...shown)
+  const scale = peakScale(shown)
+  const y = (percent: number) => 45 - (Math.min(Math.max(percent, 0), scale) / scale) * 44
   const columns = shown.map((peak, i) => {
-    const height = Math.max(1.5, (Math.min(Math.max(peak, 0), 100) / 100) * 44)
+    const height = Math.max(1.5, 45 - y(peak))
     return `<rect x="${(i * step + step * 0.15).toFixed(2)}" y="${(45 - height).toFixed(2)}" width="${(step * 0.7).toFixed(2)}" `
       + `height="${height.toFixed(2)}" rx="2" fill="${peak === highest ? LOOK.accent : LOOK.accentMuted}"/>`
   }).join('')
+  const yellow = limits.yellowFrom <= scale
+    ? `<line x1="0" y1="${y(limits.yellowFrom).toFixed(2)}" x2="120" y2="${y(limits.yellowFrom).toFixed(2)}" stroke="${LOOK.warning}" stroke-width="1" stroke-dasharray="3 3"/>`
+    : ''
   return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 46" width="120" height="46">'
-    + `<line x1="0" y1="45.5" x2="120" y2="45.5" stroke="${LOOK.border}" stroke-width="1"/>${columns}</svg>`
+    + `<line x1="0" y1="45.5" x2="120" y2="45.5" stroke="${LOOK.border}" stroke-width="1"/>${yellow}${columns}</svg>`
 }
