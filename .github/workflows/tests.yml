@@ -39,6 +39,36 @@ jobs:
         shell: bash
         run: python .github/check_pytest_output.py pytest.txt
 
+  # The desktop plugin (desktop/): its manifest and module as Claude Code reads them, and its tests, on the two systems
+  # it is used on. Claude Code is pinned: the plugin API and its test engine come with it. No login is needed, the
+  # tests start no model; an empty config folder keeps the runner's state out.
+  plugin:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      CLAUDE_CODE_VERSION: "2.1.303"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+        shell: bash
+
+      - name: Validate the plugin
+        run: CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-config" claude plugin validate desktop
+        shell: bash
+
+      - name: Run the plugin tests
+        run: CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-config" claude plugin test desktop
+        shell: bash
+
   # The hooks run in Git Bash under the `python` that the installer writes into the commands (windows/README.md).
   windows:
     runs-on: windows-latest
