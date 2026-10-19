@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { REPORT } from './report-fixture'
-import { VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
+import { VIEWS, estimate, measuredPts, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, shortPath, toolName, viewLines } from './report'
 import type { View } from './report'
 
 const LINUX = 'python3 /home/you/.claude/hooks/usage-clock/statusline.py'
@@ -12,6 +12,33 @@ function lines(view: View, columns = 100): string[] {
   if ('error' in report) throw new Error(report.error)
   return viewLines(view, report.report, columns).map(line => line.text)
 }
+
+describe('names and points', () => {
+  test('an MCP tool loses the prefix of its own server, another name stays', async () => {
+    expect(toolName('claude-in-chrome', 'mcp__claude-in-chrome__computer')).toBe('computer')
+    expect(toolName('context7', 'query-docs')).toBe('query-docs')
+    expect(toolName('a', 'mcp__b__x')).toBe('mcp__b__x')
+  })
+
+  test('a path: the home folder as ~, a long one cut in the middle so that its end stays', async () => {
+    expect(shortPath('C:\\Users\\you\\.claude\\CLAUDE.md')).toBe('~\\.claude\\CLAUDE.md')
+    expect(shortPath('/home/you/.claude/CLAUDE.md')).toBe('~/.claude/CLAUDE.md')
+    expect(shortPath('/Users/you/x.md')).toBe('~/x.md')
+    expect(shortPath('/etc/claude/CLAUDE.md')).toBe('/etc/claude/CLAUDE.md')
+    const long = shortPath('/home/you/Projekte/some/very/deep/folder/structure/of/a/project/memory/MEMORY.md', 30)
+    expect(long).toHaveLength(30)
+    expect(long.endsWith('memory/MEMORY.md')).toBe(true)
+    expect(long.startsWith('~/')).toBe(true)
+  })
+
+  test('points: - where nothing was measured, a measured 0 stays 0, ~ only before a figure', async () => {
+    expect(measuredPts(0, 0)).toBe('-')
+    expect(measuredPts(0, 1)).toBe('0')
+    expect(measuredPts(0, undefined)).toBe('0')
+    expect(measuredPts(2.5, 0)).toBe('2.5')
+    expect([estimate(2.5, 1), estimate(0.4, 1), estimate(0, 1), estimate(0, 0), estimate(null)]).toEqual(['~2.5', '<1', '0', '-', '-'])
+  })
+})
 
 describe('parsePeriod', () => {
   test('takes the four periods, in any case and with blanks', async () => {

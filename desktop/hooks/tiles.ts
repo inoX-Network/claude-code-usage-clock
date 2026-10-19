@@ -2,7 +2,7 @@
 // in report.ts. Pure functions of the report, so that the tests need no engine; pane.tsx draws them. The terminal
 // keeps the text views.
 
-import { estimate, localTime, measuredPts, pct, pts, tone, tokens, usd, whole } from './report'
+import { estimate, localTime, measuredPts, pct, pts, shortPath, toolName, tone, tokens, usd, whole } from './report'
 import type { Limits, Report, Tone, View } from './report'
 
 /** The colours of the tiles: a dark ground of their own, so they read the same in a light and a dark app. */
@@ -337,10 +337,13 @@ export function sessionTiles(report: Report, id: string): Tile[] {
     const label = (name: string, sum: { tools: number; deferred: number }) =>
       `${name} (${sum.tools} tool${sum.tools === 1 ? '' : 's'}${sum.deferred === 0 ? '' : sum.deferred === sum.tools ? ', deferred' : `, ${sum.deferred} deferred`})`
     out.push({ kind: 'bars', key: 'mcp-servers', label: 'MCP servers · tokens', bars: topBars([...servers].map(([name, sum]) => [label(name, sum), sum.tokens])) })
-    out.push({ kind: 'bars', key: 'mcp-tools', label: 'MCP tools · tokens', bars: topBars(tools.map(tool => [`${str(tool.server) ?? '?'} ${str(tool.name) ?? '?'}`, num(tool.tokens) ?? 0])) })
+    out.push({ kind: 'bars', key: 'mcp-tools', label: 'MCP tools · tokens', bars: topBars(tools.map(tool => {
+      const server = str(tool.server) ?? '?'
+      return [`${server} ${toolName(server, str(tool.name) ?? '?')}`, num(tool.tokens) ?? 0]
+    })) })
   }
   const memory = list(context.memory_files).map(rec)
-  if (memory.length > 0) out.push({ kind: 'bars', key: 'memory', label: 'Memory files · tokens', bars: topBars(memory.map(file => [str(file.path) ?? '?', num(file.tokens) ?? 0])) })
+  if (memory.length > 0) out.push({ kind: 'bars', key: 'memory', label: 'Memory files · tokens', bars: topBars(memory.map(file => [shortPath(str(file.path) ?? '?'), num(file.tokens) ?? 0])) })
   const skills = context.skills === null || context.skills === undefined ? null : rec(context.skills)
   if (skills !== null) {
     out.push({ kind: 'bars', key: 'skills', label: 'Skills · tokens',

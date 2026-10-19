@@ -203,7 +203,8 @@ for (const surface of SURFACES) {
       /MCP tools\s+12,400/,
       /context7 \(2 tools\)\s+1,500/,
       /playwright navigate\s+450/,
-      /\/home\/you\/\.claude\/CLAUDE\.md\s+2,200/,
+      /~\/\.claude\/CLAUDE\.md\s+2,200/,
+      /requests of the session before or after it are not counted/,
       /Skills: 5,600 tokens, 38 of 40 listed/,
       /arbeiter-bauen\s+120/,
     ]) expect(detail).toMatch(pattern)
@@ -443,6 +444,19 @@ test('desktop: the open view and period are primary buttons on a plate of the ac
   expect(await look('period-year')).toEqual(active)
   expect(await look('view-overview')).toEqual(other)
   expect(await look('period-week')).toEqual(other)
+  await ui.unmount()
+})
+
+test('desktop: a bar of 0 is an empty track, no stub', async ($, on) => {
+  const zero = { ...REPORT, total: { ...REPORT.total, tokens: { ...REPORT.total.tokens, cache_write_5m: 0 } } }
+  world(on, { run: () => ({ exitCode: 0, stdout: JSON.stringify(zero), stderr: '' }) })
+  await start($)
+  await report($)
+  const ui = await mountPane($, 'desktop')
+  await ui.press({ key: 'view-tokens' })
+  // Sorted by count, the 0 comes last: its track holds nothing, the one before it a filled part
+  expect((await ui.find({ key: 'kinds-bar-4' }))?.children.filter(child => child !== null && child !== undefined)).toHaveLength(0)
+  expect((await ui.find({ key: 'kinds-bar-3' }))?.children.filter(child => child !== null && child !== undefined)).toHaveLength(1)
   await ui.unmount()
 })
 

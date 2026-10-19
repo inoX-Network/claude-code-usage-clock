@@ -135,6 +135,21 @@ function fit(text: string, width: number): string {
   return `${text.slice(0, head)}…${text.slice(text.length - (width - 1 - head))}`
 }
 
+/** An MCP tool as its server lists it: `computer`, not `mcp__claude-in-chrome__computer` under `claude-in-chrome`. */
+export function toolName(server: string, name: string): string {
+  const prefix = `mcp__${server}__`
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name
+}
+
+/** A file path, short: the home folder as `~`, then cut to `width` by a `…`, the end keeping two thirds of the room:
+ *  it is the part that tells two files apart. */
+export function shortPath(path: string, width = 48): string {
+  const text = path.replace(/^(?:[A-Za-z]:[\\/]Users[\\/][^\\/]+|\/home\/[^/]+|\/Users\/[^/]+)(?=[\\/]|$)/, '~')
+  if (text.length <= width) return text
+  const head = Math.floor((width - 1) / 3)
+  return `${text.slice(0, head)}…${text.slice(text.length - (width - 1 - head))}`
+}
+
 const GAP = '  '
 const MIN_FIRST = 6
 
@@ -343,6 +358,8 @@ function projects(report: Report, columns: number): Line[] {
 // --- Sessions ---------------------------------------------------------------------------------------------------
 
 const SESSION_HEAD = ['session', 'started', 'USD', '~week pts', 'requests']
+/** A session can reach past its period: what the report counts of it is the part within. */
+export const PERIOD_ONLY = 'Figures of the period shown: requests of the session before or after it are not counted.'
 const TOP = 10
 const OWN_MARK = '▶ '
 
@@ -406,11 +423,14 @@ function contextLines(context: Record<string, unknown>, columns: number): Line[]
     const label = (name: string, sum: { tools: number; deferred: number }) =>
       `${name} (${sum.tools} tool${sum.tools === 1 ? '' : 's'}${sum.deferred === 0 ? '' : sum.deferred === sum.tools ? ', deferred' : `, ${sum.deferred} deferred`})`
     out.push(BLANK, ...tokenTable('MCP server', [...servers].map(([name, sum]) => [label(name, sum), sum.tokens]), columns))
-    out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => [`${str(tool.server) ?? '?'} ${str(tool.name) ?? '?'}`, num(tool.tokens) ?? 0]), columns))
+    out.push(BLANK, ...tokenTable('MCP tool', tools.map(tool => {
+      const server = str(tool.server) ?? '?'
+      return [`${server} ${toolName(server, str(tool.name) ?? '?')}`, num(tool.tokens) ?? 0]
+    }), columns))
   }
   const memory = list(context.memory_files).map(rec)
   if (memory.length > 0) {
-    out.push(BLANK, ...tokenTable('memory file', memory.map(file => [str(file.path) ?? '?', num(file.tokens) ?? 0]), columns))
+    out.push(BLANK, ...tokenTable('memory file', memory.map(file => [shortPath(str(file.path) ?? '?'), num(file.tokens) ?? 0]), columns))
   }
   const skills = context.skills === null || context.skills === undefined ? null : rec(context.skills)
   if (skills !== null) {
@@ -448,6 +468,7 @@ export function sessionDetail(report: Report, id: string, columns: number, own: 
         num(cli.thinking_share) === null ? null : `thinking ${pct(num(cli.thinking_share))} of output`,
       ].filter(Boolean).join(' · '),
     },
+    { text: PERIOD_ONLY, style: 'dim' },
   ]
   const t = rec(cli.tokens)
   out.push(BLANK, ...facts([
