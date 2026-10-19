@@ -489,6 +489,20 @@ def test_a_foreign_day_line_with_a_number_json_does_not_know_is_skipped(world, s
     assert report['total']['requests'] == 3 and report['coverage']['sync']['unreadable_day_lines'] == 1
 
 
+@pytest.mark.parametrize('field, value', [('agent_types', {'reviewer': 7}), ('models', {'x': {'requests': 1}}),
+                                          ('clis', {'aaaaaaaa': {**report_module.new_cli('p', 1.0), 'subs': {'x': 7}}})])
+def test_an_own_archive_line_with_a_table_the_report_cannot_read_is_skipped(world, synced, field, value):
+    world.projects.mkdir()
+    bad = archive_line(5, 2.0, 'aaaaaaaa', 'proj-a')
+    bad[field] = value
+    own_archive(world, ('2026-10-11', bad))
+    synced.clone.machine(LAPTOP)
+    synced.clone.days(LAPTOP, [('2026-10-11', archive_line(7, 4.0, 'bbbbbbbb', 'proj-b', 4, peak=60))])
+    assert world.report('--day', '2026-10-11', '--local')['coverage']['unreadable_archive_lines'] == 1
+    report = world.report('--day', '2026-10-11')
+    assert report['coverage']['unreadable_archive_lines'] == 1 and report['total']['requests'] == 7
+
+
 def test_a_number_no_float_holds_is_no_archive_line_also_locally(world):
     world.projects.mkdir()
     bad = archive_line(5, 2.0, 'aaaaaaaa', 'proj-a')

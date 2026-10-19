@@ -380,6 +380,7 @@ def parse_archive_line(raw: str) -> tuple[str, dict]:
     date.fromisoformat(day)
     try:
         merge_stats(new_stats(), stats)       # figures in another format (or damaged) do not merge: not an archive line
+        check_shapes(stats, strict=False)     # nor do tables the report could not read
     except (TypeError, ValueError, KeyError, AttributeError, ArithmeticError) as error:
         raise ValueError('figures') from error
     _merge_archived_questions(stats)
@@ -1928,6 +1929,7 @@ NO_START = 'sync:'          # the source of a request of the clone that is not t
 SUBSCRIPTION_KEYS = ('abo', 'alloc', 'cal', 'points')      # the parts of a day line that only one line may give
 CLI_ID = re.compile(r'[A-Za-z0-9_-]{1,8}')      # the first 8 characters of a session id
 TEXT_LENGTH = 64                                  # a key or text of a foreign day line is at most this long
+ANY_NAME = re.compile(r'.*', re.S)                # the names of an own day line: the report made them itself
 PROBE_COVERAGE = {'transcript_files': 0, 'archive_days': [], 'archive_days_without_agent_split': [],
                   'unreadable_history_lines': 0, 'unreadable_archive_lines': 0, 'unreadable_transcript_lines': 0,
                   'unreadable_context_files': 0}
@@ -1967,22 +1969,30 @@ def _table(table, names: re.Pattern, needs: tuple = (), counts: bool = False) ->
             raise ValueError('entry')
 
 
+def check_shapes(stats: dict, strict: bool) -> None:
+    """`models`, `unpriced`, `agent_types` and `clis` (with their `models` and `subs`) of a day line in the shape the
+    report reads; with `strict` (a line of another machine) their names and labels after the patterns of the format.
+    ValueError otherwise."""
+    model, agent, ident = (START_TEXT, _transcripts.AGENT_TYPE, CLI_ID) if strict else (ANY_NAME, ANY_NAME, ANY_NAME)
+    _table(stats.get('models', {}), model, ('requests', 'cost', 'tokens'))
+    _table(stats.get('unpriced', {}), model, ('requests', 'tokens'))
+    _table(stats.get('agent_types', {}), agent, ('requests', 'cost'))
+    clis = stats.get('clis', {})
+    _table(clis, ident, ('label', 'start'))
+    for cli in clis.values():
+        if strict and not (isinstance(cli['label'], str) and sync_format.LABEL.fullmatch(cli['label'])):
+            raise ValueError('label')
+        _table(cli.get('models', {}), model, counts=True)
+        _table(cli.get('subs', {}), agent, ('requests', 'cost'))
+
+
 def check_foreign_day(stats: dict) -> None:
     """The content of a day line of another machine, beyond the rules of the own archive (`parse_archive_line`):
     numbers, texts, and the shape of `models`, `unpriced`, `agent_types` and `clis` with names after the patterns of
     the format. Then, as a net, the figures go once through the whole report. ValueError for anything that does not
     hold: a foreign line never stops the report."""
     _figures(stats)
-    _table(stats.get('models', {}), START_TEXT, ('requests', 'cost', 'tokens'))
-    _table(stats.get('unpriced', {}), START_TEXT, ('requests', 'tokens'))
-    _table(stats.get('agent_types', {}), _transcripts.AGENT_TYPE, ('requests', 'cost'))
-    clis = stats.get('clis', {})
-    _table(clis, CLI_ID, ('label', 'start'))
-    for cli in clis.values():
-        if not isinstance(cli['label'], str) or not sync_format.LABEL.fullmatch(cli['label']):
-            raise ValueError('label')
-        _table(cli.get('models', {}), START_TEXT, counts=True)
-        _table(cli.get('subs', {}), _transcripts.AGENT_TYPE, ('requests', 'cost'))
+    check_shapes(stats, strict=True)
     try:
         trial = new_stats()
         merge_stats(trial, stats)
