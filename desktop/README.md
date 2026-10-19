@@ -57,7 +57,7 @@ webshop                    60   60 %       20.0         1
 ```
 
 The open view is a highlighted tab, the period is in the accent colour; the desktop app, which draws its own buttons
-and not the colours of their labels, shows both as its primary button on a plate of the accent colour. Each surface shows the key of a button itself:
+and not the colours of their labels, shows both on a plate of the accent colour. Each surface shows the key of a button itself:
 the terminal in front of it (`b: Agents`), the desktop app beside the label. The tabs are a row of buttons, because
 Claude Code has no tab element and a mod cannot bind the arrow keys: Tab walks the buttons and opens the view it lands
 on, Up and Down scroll a long view, a period is chosen by its key or with Enter (Tab does not read every period it

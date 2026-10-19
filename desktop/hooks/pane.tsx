@@ -125,17 +125,16 @@ export function registerReport(on: On): void {
     }
 
     // Every surface shows a plain Button's hotkey itself (the terminal as `b: `, the desktop beside the label). The
-    // desktop draws its own native button and ignores the colours of the label inside: there the open tab is its
-    // primary button on a plate of the accent colour, and the others are plain
+    // desktop draws its own native button and ignores the colours of the label inside, and its plain button has no
+    // fill: there the open tab sits on a plate of the accent colour with no room around it, so it reads as filled
     const isDesktop = e.surface === 'desktop'
     const marked = (key: string, isActive: boolean, button: unknown) => (isDesktop && isActive
-      ? <Box key={`tab-${key}`} backgroundColor={LOOK.accent} borderStyle="round" borderColor={LOOK.accent} paddingX="xs">{button}</Box>
+      ? <Box key={`tab-${key}`} backgroundColor={LOOK.accent} borderStyle="round" borderColor={LOOK.accent}>{button}</Box>
       : button)
-    const look = (isActive: boolean) => (isDesktop && isActive ? { variant: 'primary' as const } : { plain: true as const })
     const viewTab = (id: View, hotkey: string, label: string) => {
       const isActive = id === state.view
       return marked(`view-${id}`, isActive,
-        <Button key={`view-${id}`} hotkey={hotkey} {...look(isActive)} onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
+        <Button key={`view-${id}`} hotkey={hotkey} plain onPress={chooseView(id)} {...(isActive ? { autoFocus: true as const } : {})}>
           {isActive
             ? <Text key={`label-view-${id}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${label} `}</Text>
             : <Text key={`label-view-${id}`}>{` ${label} `}</Text>}
@@ -145,7 +144,7 @@ export function registerReport(on: On): void {
     const periodTab = (id: Period, hotkey: string, label: string) => {
       const isActive = id === state.period
       return marked(`period-${id}`, isActive,
-        <Button key={`period-${id}`} hotkey={hotkey} {...look(isActive)} onPress={choosePeriod(id)}>
+        <Button key={`period-${id}`} hotkey={hotkey} plain onPress={choosePeriod(id)}>
           {isActive
             ? <Text key={`label-period-${id}`} color="claude" weight="bold">{label}</Text>
             : <Text key={`label-period-${id}`} dimColor>{label}</Text>}
