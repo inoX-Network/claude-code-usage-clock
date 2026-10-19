@@ -1,11 +1,15 @@
 """Tests for hooks/_plat.py, the platform switch. The Windows side is tested in windows/cli/tests/."""
+import json
 import os
 import stat
+import subprocess
+import sys
 
 import pytest
 
 import _plat
 import _usage
+import _win
 from conftest import lock_is_held
 
 
@@ -93,3 +97,55 @@ def test_the_script_command_is_python3_and_a_shell_quoted_path():
         "python3 '/home/u/my hooks/x.py' sess-1 --mode=enforce")
     assert _plat.quote_path("/tmp/it's here") == "'/tmp/it'\"'\"'s here'"
 
+
+
+# --- The sync core: a lock without waiting, a detached start, ending a process tree ---------------------------------
+
+def test_the_usage_lock_without_waiting_raises_at_once_while_another_handle_holds_it(tmp_path):
+    path = tmp_path / 'sync.lock'
+    path.write_bytes(b'')
+    with open(path, 'r+b') as first, open(path, 'r+b') as second:
+        with _usage.locked(first, wait=False):
+            with pytest.raises(BlockingIOError):
+                with _usage.locked(second, wait=False):
+                    pass
+        with _usage.locked(second, wait=False):
+            assert lock_is_held(str(path))
+    assert not lock_is_held(str(path))
+
+
+# The child reports its session, what it reads on stdin and whether its stdout is the null device.
+DETACHED_CHILD = '''
+import json, os, sys
+out = os.fstat(1)
+null = os.stat(os.devnull)
+with open(sys.argv[1], 'w') as f:
+    json.dump({'sid': os.getsid(0), 'stdin': sys.stdin.read(),
+               'null_out': (out.st_dev, out.st_ino) == (null.st_dev, null.st_ino)}, f)
+'''
+
+
+@pytest.mark.posix_only
+def test_a_detached_start_has_a_session_of_its_own_and_the_null_device_for_its_streams(tmp_path):
+    report = tmp_path / 'report.json'
+    process = _plat.start_detached([sys.executable, '-c', DETACHED_CHILD, str(report)])
+    assert process.wait(timeout=30) == 0
+    seen = json.loads(report.read_text())
+    assert seen == {'sid': process.pid, 'stdin': '', 'null_out': True}
+
+
+@pytest.mark.posix_only
+def test_ending_the_tree_of_a_process_that_is_gone_raises_nothing():
+    process = subprocess.Popen([sys.executable, '-c', 'pass'], **_plat.GROUP_OPTIONS)
+    process.wait(timeout=30)
+    _plat.kill_tree(process)
+
+
+def test_the_windows_start_uses_the_three_flags_and_the_null_device():
+    calls = []
+    _win.start_detached(['python', 'sync.py', 'push'], popen=lambda *args, **kwargs: calls.append((args, kwargs)))
+    (args, kwargs), = calls
+    assert args == (['python', 'sync.py', 'push'],)
+    assert kwargs['creationflags'] == 0x00000008 | 0x00000200 | 0x08000000   # DETACHED, NEW_PROCESS_GROUP, NO_WINDOW
+    assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+    assert _win.GROUP_FLAGS == 0x00000200 | 0x08000000
