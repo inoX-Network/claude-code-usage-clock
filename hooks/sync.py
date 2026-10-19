@@ -8,9 +8,8 @@
     sync.py session-start         hook SessionStart (T3)
     sync.py session-end           hook SessionEnd (T2)
 
-The git work is `git_push` and `git_pull` below. Until 0034-SYNC-PUSH and 0034-SYNC-REPORT bring it, both fail with
-the category `internal`: a run that synced nothing must never look like a success. It is logged and backs off like any
-failure, so the status line does not start a push on every tick (and `sync.mode` is `off` by default).
+The push is `_sync_git.push` (0034-SYNC-PUSH). The pull is `git_pull` below; until 0034-SYNC-REPORT brings it, it
+fails with the category `internal`: a run that synced nothing must never look like a success.
 
 Exit codes: 0 success or nothing to do (sync off, not due, lock held by another run), 1 failed, blocked after
 `visibility` or ended by the watchdog, 2 bad arguments. The hooks print nothing and always exit 0. That sync/ cannot be
@@ -27,11 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _config  # noqa: E402
 import _hookio  # noqa: E402
 import _sync_core  # noqa: E402
-
-
-def git_push(run: _sync_core.Run) -> None:
-    """The push itself (0034-SYNC-PUSH). Not built yet."""
-    raise _sync_core.SyncError('internal', 'push is not built yet')
+import _sync_git  # noqa: E402
 
 
 def git_pull(run: _sync_core.Run) -> None:
@@ -69,14 +64,14 @@ def _hook(command: str) -> int:
 
 def main(argv: list[str] | None = None, push_runner: _sync_core.Runner | None = None,
          pull_runner: _sync_core.Runner | None = None) -> int:
-    """`push_runner` and `pull_runner` replace git_push and git_pull (tests)."""
+    """`push_runner` and `pull_runner` replace _sync_git.push and git_pull (tests)."""
     args = _parser().parse_args(argv)
     if args.command in ('session-start', 'session-end'):
         return _hook(args.command)
     cfg, log_dir = _config.load(), _hookio.log_dir()
     try:
         if args.command == 'push':
-            return _sync_core.push(log_dir, cfg, push_runner or git_push, forced=args.now, if_due=args.if_due)
+            return _sync_core.push(log_dir, cfg, push_runner or _sync_git.push, forced=args.now, if_due=args.if_due)
         return _sync_core.pull(log_dir, cfg, pull_runner or git_pull, background=args.background)
     except OSError as error:      # no sync folder, no lock file: nothing could be recorded in the state
         _sync_core.log_hourly(log_dir, time.time(), _sync_core.ERROR_NOTE, 'error',

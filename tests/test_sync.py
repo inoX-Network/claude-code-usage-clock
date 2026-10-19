@@ -1,4 +1,5 @@
-"""Tests for hooks/sync.py: the commands, the two session hooks and the honest placeholder until the git work exists."""
+"""Tests for hooks/sync.py: the commands, the two session hooks and the honest placeholder of the pull (the push is
+tested in test_sync_git.py)."""
 import io
 import json
 import os
@@ -43,13 +44,14 @@ def sync_lines(tmp_path):
     return [r for r in lines if r.get('hook') == 'sync']
 
 
-def test_without_the_git_work_a_push_fails_as_internal_and_backs_off_never_a_success(tmp_path, mode):
+def test_a_push_without_a_sync_repo_fails_as_internal_and_backs_off_never_a_success(tmp_path, mode):
     mode('shadow')
     assert sync.main(['push']) == 1
     state = state_of(tmp_path)
     assert (state.last_error, state.backoff_level, state.last_success) == ('internal', 1, None)
     line, = sync_lines(tmp_path)
-    assert (line['decision'], line['category'], line['reason']) == ('failure', 'internal', 'push is not built yet')
+    assert (line['decision'], line['category'], line['reason']) == (
+        'failure', 'internal', 'sync.repo is not set, run the installer with --sync-repo')
 
 
 def test_without_the_git_work_a_pull_fails_as_internal(tmp_path, mode):

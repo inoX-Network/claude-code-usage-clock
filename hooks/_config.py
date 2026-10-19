@@ -69,6 +69,8 @@ DEFAULTS: dict = {
     },
     'sync': {
         'mode': 'off',
+        'repo': '',
+        'transport': 'https',
         'machine_name': '',
         'interval_min': 30,
         'backoff_max_h': 6,
@@ -89,6 +91,10 @@ _MAPS = ('sync.project_aliases',)
 # The name of the machine in the sync repository: the characters a project label may have, at most 64.
 _MACHINE_NAME = re.compile(r'[\w .+@=-]{0,64}')
 
+# The sync repository on GitHub as `owner/name`, in the characters GitHub allows: one slash, no `..` (nothing that
+# could make another URL of it).
+_SYNC_REPO = re.compile(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}')
+
 # Keys whose value is a filesystem path: "~" is expanded in the loaded result (not in DEFAULTS).
 _PATH_KEYS = ('usage_file', 'log_dir')
 
@@ -99,8 +105,14 @@ _CHOICES = {
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
     ('sync', 'mode'): ('off', 'shadow', 'on'),
+    ('sync', 'transport'): ('https', 'ssh'),
     ('sync', 'project_labels'): ('plain', 'alias', 'hash'),
 }
+
+
+def valid_sync_repo(value: str) -> bool:
+    """`owner/name` as `sync.repo` takes it (_SYNC_REPO, no `..`, not the name `.`)."""
+    return bool(_SYNC_REPO.fullmatch(value)) and '..' not in value and not value.endswith('/.')
 
 
 def config_path() -> str:
@@ -234,6 +246,9 @@ def load(log_problems: bool = True) -> dict:
     if not _MACHINE_NAME.fullmatch(sync['machine_name']):
         problems.append('sync.machine_name: at most 64 letters, digits, spaces and . + @ = - _, using default')
         sync['machine_name'] = DEFAULTS['sync']['machine_name']
+    if sync['repo'] and not valid_sync_repo(sync['repo']):
+        problems.append('sync.repo: must be owner/name as on GitHub, using default')
+        sync['repo'] = DEFAULTS['sync']['repo']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')

@@ -56,6 +56,8 @@
   },
   "sync": {
     "mode": "off",
+    "repo": "",
+    "transport": "https",
     "machine_name": "",
     "interval_min": 30,
     "backoff_max_h": 6,
