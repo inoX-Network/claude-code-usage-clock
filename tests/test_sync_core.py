@@ -892,3 +892,32 @@ def test_session_start_with_a_broken_state_and_a_held_lock_still_pulls(tmp_path)
     with _sync_core.try_lock(str(sync_dir(tmp_path))):
         _sync_core.session_start(log_dir(tmp_path), cfg(), T0, starts)
     assert starts.calls == [_sync_core.command('pull', '--background')]
+
+
+def test_the_end_of_the_run_waits_for_a_watchdog_that_fired():
+    order, fired = [], threading.Event()
+
+    def give_up():
+        fired.set()
+        order.append('watchdog starts')
+        threading.Event().wait(0.3)      # time for the run to try to get past the block
+        order.append('watchdog ends')
+    with _sync_core._watchdog(0.01, give_up):
+        assert fired.wait(10)
+    order.append('block ends')
+    assert order == ['watchdog starts', 'watchdog ends', 'block ends']
+
+
+def test_a_file_as_the_sync_folder_is_a_broken_state_on_every_system(tmp_path):
+    (tmp_path / 'log').mkdir()
+    sync_dir(tmp_path).write_text('', encoding='utf-8')
+    with pytest.raises(_sync_core.BrokenState, match='not a folder|NotADirectoryError'):
+        state_of(tmp_path)
+
+
+@pytest.mark.posix_only
+def test_a_dangling_link_as_the_sync_folder_is_a_broken_state(tmp_path):
+    (tmp_path / 'log').mkdir()
+    os.symlink(tmp_path / 'gone', sync_dir(tmp_path))
+    with pytest.raises(_sync_core.BrokenState, match='not a folder'):
+        state_of(tmp_path)

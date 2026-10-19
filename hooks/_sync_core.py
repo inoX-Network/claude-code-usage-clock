@@ -186,6 +186,12 @@ def read_state(directory: str) -> State:
     try:
         return State.from_json(_read_small(os.path.join(directory, STATE_FILE)).decode('utf-8'))
     except FileNotFoundError:
+        # Windows says the same for a path through a file (sync/ as a file), Linux says NotADirectoryError
+        try:
+            if not stat.S_ISDIR(os.lstat(directory).st_mode):
+                raise BrokenState(f'{directory} is not a folder') from None
+        except FileNotFoundError:
+            pass
         return State()
     except (OSError, ValueError, RecursionError) as error:    # UnicodeDecodeError and json errors are ValueErrors
         raise BrokenState(f'{type(error).__name__}: {error}') from error
@@ -413,14 +419,26 @@ def _outcome(runner: Runner, run: Run) -> tuple[str | None, str]:
 @contextlib.contextmanager
 def _watchdog(seconds: float, give_up: Callable[[], None]) -> Iterator[None]:
     """Calls `give_up` in a thread of its own if the block is still running after `seconds`. A runner that hangs
-    outside a child process (the deadline ends only those) must not hold the lock for good."""
+    outside a child process (the deadline ends only those) must not hold the lock for good.
+
+    `give_up` and the end of the block exclude each other: once it fired, the caller gets past the block only after
+    it (never, as it ends the process), so both never write the state at once (same process, same temporary file);
+    once the block ended, a late timer does nothing."""
     import threading
-    timer = threading.Timer(seconds, give_up)
+    guard, finished = threading.Lock(), []
+
+    def fire() -> None:
+        with guard:
+            if not finished:
+                give_up()
+    timer = threading.Timer(seconds, fire)
     timer.daemon = True
     timer.start()
     try:
         yield
     finally:
+        with guard:
+            finished.append(True)
         timer.cancel()
 
 
