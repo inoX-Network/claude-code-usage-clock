@@ -129,9 +129,11 @@ for (const surface of SURFACES) {
     await report($)
     const ui = await mountPane($, surface)
     const buttons = await ui.findAll({ type: 'Button' })
+    // The desktop writes the key of the open view and period into its label instead (see the label test)
+    const open = surface === 'desktop' ? undefined : true
     expect(Object.fromEntries(buttons.map(button => [button.key, button.props.hotkey]))).toEqual({
-      'period-day': '1', 'period-week': '2', 'period-month': '3', 'period-year': '4',
-      'view-overview': 'a', 'view-agents': 'b', 'view-models': 'c', 'view-cache': 'd', 'view-tokens': 'e', 'view-projects': 'f',
+      'period-day': '1', 'period-week': open && '2', 'period-month': '3', 'period-year': '4',
+      'view-overview': open && 'a', 'view-agents': 'b', 'view-models': 'c', 'view-cache': 'd', 'view-tokens': 'e', 'view-projects': 'f',
       'view-sessions': 'g',
       refresh: 'r',
     })
@@ -143,10 +145,18 @@ for (const surface of SURFACES) {
     await start($)
     await report($)
     const ui = await mountPane($, surface)
-    // Every surface shows a plain Button's hotkey itself: the terminal as `d: `, the desktop beside the label
-    expect((await ui.find({ key: 'period-week' }))?.text.trim()).toBe('Week')
+    // Every surface shows a plain Button's hotkey itself: the terminal as `d: `, the desktop beside the label. On the
+    // desktop the open view and period carry their key in the label, in the colour of the text, and no hotkey
+    const open = surface === 'desktop' ? ['2  Week', 'A  Overview'] : ['Week', 'Overview']
+    expect((await ui.find({ key: 'period-week' }))?.text.trim()).toBe(open[0])
+    expect((await ui.find({ key: 'view-overview' }))?.text.trim()).toBe(open[1])
     expect((await ui.find({ key: 'view-cache' }))?.text.trim()).toBe('Cache/Thinking')
     expect((await ui.find({ key: 'refresh' }))?.text.trim()).toBe('Refresh')
+    // Another view chosen: the key moves back to the app's key box, the new one takes it into its label
+    await ui.press({ key: 'view-cache' })
+    expect((await ui.find({ key: 'view-overview' }))?.props.hotkey).toBe('a')
+    expect((await ui.find({ key: 'view-overview' }))?.text.trim()).toBe('Overview')
+    expect((await ui.find({ key: 'view-cache' }))?.text.trim()).toBe(surface === 'desktop' ? 'D  Cache/Thinking' : 'Cache/Thinking')
     await ui.unmount()
   })
 
