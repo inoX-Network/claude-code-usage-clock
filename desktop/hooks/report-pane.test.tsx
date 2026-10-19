@@ -256,10 +256,11 @@ for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
     const tab = (element: string) =>
       $.ui.focus({ component: 'Pane', requestId: 'usage-report', element, origin: { kind: 'person' } })
+    const agents = surface === 'terminal' ? /agent\s+USD\s+requests/ : /BY AGENT · USD · REQUESTS/
     await tab('view-agents')
-    expect(await texts(ui)).toMatch(/agent\s+USD\s+requests/)
+    expect(await texts(ui)).toMatch(agents)
     await tab('period-year')
-    expect(await texts(ui)).toMatch(/agent\s+USD\s+requests/)
+    expect(await texts(ui)).toMatch(agents)
     expect(seen.runs).toHaveLength(1)
     await ui.unmount()
   })
@@ -296,10 +297,15 @@ for (const surface of SURFACES) {
     await start($)
     await report($)
     const ui = await mountPane($, surface)
-    const views: [string, RegExp[]][] = [
-      ['view-overview', surface === 'terminal'
-        ? [/39 % of the weekly limit used \(\+39 points\)/, /webshop\s+60\s+60 %\s+20\.0\s+1/, /Main 75 USD · subagents 25 USD/]
-        : [/WEEKLY LIMIT\n\+39\.0 pts in this period/, /webshop\n60 · 20\.0/, /main 75 · agents 25/, /5H  one 5h window reached 82 %/]],
+    const views: [string, RegExp[]][] = surface === 'desktop' ? [
+      ['view-overview', [/WEEKLY LIMIT\n\+39\.0 pts in this period/, /webshop\n60 · 20\.0/, /main 75 · agents 25/, /5H  one 5h window reached 82 %/]],
+      ['view-agents', [/MAIN\n75 USD[\s\S]*300 requests/, /SUBAGENTS\n25 USD[\s\S]*2 types/, /stripe-meister\n20 · 40 · 6\.6/, /reviewer\n5\.0 · 160 · <1/]],
+      ['view-models', [/OPUS 5\.5\n92 USD[\s\S]*97 requests\nthinking 30 %\ncache hits 90 %/, /MYSTERY 1\n- USD/, /without a price has no USD/, /SHARE OF THE COST/]],
+      ['view-cache', [/CACHE HIT RATE\n89 %/, /COLD STARTS\n3/, /THINKING TOKENS\n123k[\s\S]*123,000/, /THINKING SHARE\n25 % of output/]],
+      ['view-tokens', [/CACHE READ\n78\.9M tokens[\s\S]*78,900,000/, /OUTPUT\n123k tokens/, /TOKENS BY KIND\ncache read\n78\.9M/]],
+      ['view-projects', [/PROJECTS · USD · SHARE/, /blog\n9\.0 · 9 % · 3\.0 · 2/, /scratch\n0\.40 · <1 % · <1 · 2/]],
+    ] : [
+      ['view-overview', [/39 % of the weekly limit used \(\+39 points\)/, /webshop\s+60\s+60 %\s+20\.0\s+1/, /Main 75 USD · subagents 25 USD/]],
       ['view-agents', [/agent\s+USD\s+requests\s+~week pts\s+~5h pts/, /stripe-meister\s+20\s+40\s+6\.6\s+2\.0/, /main\s+75\s+300\s+30\.5\s+12\.5/]],
       ['view-models', [/Opus 5\.5\s+92\s+97\s+30 %\s+90 %/, /Mystery 1\s+-\s+3/]],
       ['view-cache', [/Cache hit rate\s+89 %/, /Cold starts\s+3/, /Thinking tokens\s+123,000/, /Thinking share\s+25 % of output/]],
