@@ -559,12 +559,15 @@ a push; a public repository is never written to. The clone `<log_dir>/sync/repo`
 run the installer with --sync-repo`).
 
 - **Git in the clone** (`Clone.git`): GIT_DIR and GIT_WORK_TREE set to the clone (a GIT_DIR, GIT_WORK_TREE, index,
-  object or date variable of the caller is dropped), the environment of `git_env` (its core.sshCommand is then the
-  clone's own), `LC_ALL=C` and `LANGUAGE=C` (git translates its messages after the locale, and errors are told apart
+  object, date, TLS (`GIT_SSL_NO_VERIFY`, `GIT_SSL_CAINFO`, `GIT_SSL_CAPATH`), proxy or config variable
+  (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` with its pairs) of the caller is dropped), the environment of `git_env` (its core.sshCommand is then the
+  clone's own; `-o StrictHostKeyChecking=yes` is appended after `-o BatchMode=yes`, not with a `GIT_SSH` program,
+  and ssh takes the first value of an option, so a command that sets one itself keeps it), `LC_ALL=C` and `LANGUAGE=C` (git translates its messages after the locale, and errors are told apart
   by their text), `GIT_EDITOR=:`, the identity `usage-clock <usage-clock@sync.invalid>` as GIT_AUTHOR_* and
   GIT_COMMITTER_* (beats any user.name and any variable of the caller; `.invalid` is never a mailbox), and
   `-c core.hooksPath=<log_dir>/sync/no-hooks` (an empty folder of its own, else `internal`) with fsmonitor, signing,
-  automatic gc and maintenance, submodules, autostash, follow-tags and colour switched off. No hook runs on the side
+  automatic gc and maintenance, commit graphs, submodules, autostash, follow-tags, signatures in the log and colour
+  switched off, `transfer.fsckObjects` and `http.sslVerify` on. No hook runs on the side
   of the clone: `--no-verify` alone would still run post-commit, reference-transaction and a global hooksPath of the
   user, and a detached gc would outlive the lock. No attributes either: `attr.tree` is the empty tree (SHA-1; a
   value that does not resolve falls back to `.gitattributes`, measured with git 2.56), `core.attributesFile` is
@@ -578,8 +581,16 @@ run the installer with --sync-repo`).
   or a rewrite to elsewhere: `internal`. Then it heals what a run the watchdog or a shutdown ended left (the sync
   lock is held, no other run works in the clone): a git lock file below `.git` (index, refs, packed-refs, HEAD …,
   not `objects/`) older than 75 s (`STALE_LOCK_S`: deadline, kill wait and watchdog) is removed; a younger one, or
-  one from the future, belongs to a git someone else started: `internal`, the next run tries again. An interrupted
-  rebase is aborted (the branch is back on its own commits). Last, the branch checked out must be the default
+  one from the future, belongs to a git someone else started: `internal`, the next run tries again. Temporary
+  objects of an ended fetch (`tmp_pack_*`, `tmp_idx_*`, `tmp_obj_*` below `objects/`) older than that go too, regular
+  files only. An interrupted rebase is aborted (the branch is back on its own commits); its state must be a real
+  folder (`lstat`): a link would make `rebase --abort` empty its target, so it is `internal` and nothing is aborted.
+  Then every path outside `machines/<own id>/` (every path before the first export) is put back as HEAD has it: an
+  ended fast-forward or checkout leaves files of other machines half written or unknown, and the next fast-forward
+  would refuse for ever. Changed or deleted files come back from HEAD, added ones leave the index (both with the
+  paths taken literally from a file in `.git`), unknown files are removed; an unknown folder (a repository inside)
+  is `internal`. Nothing below the own folder is touched: that is exported data. The guard of step 6 still sees what
+  turns up outside during the run. Last, the branch checked out must be the default
   branch of the remote (`origin/HEAD` as the installer's clone set it, else `main`); it is the only one pushed.
 - **3. Visibility** (`check_visibility`, the installer uses it too), unless `<log_dir>/sync/visibility.json` (0600)
   says `private` for this repository and is younger than 24 h (a note from the future or of another repository does
@@ -594,8 +605,9 @@ run the installer with --sync-repo`).
   text, a timeout, no git) is unclear, `network`, no push. The note holds for 24 h (the node asks for it): a
   repository made public within that time is still pushed to until the note is older. Whoever can write
   `<log_dir>/sync/` can write the note as well; the sync folder is as private as the log folder (0700).
-- **4. Update** (`update_clone`, shared with the pull of the report): fetch (`--prune --no-tags`, all branches to
-  `refs/remotes/origin/`); same or ahead: `up_to_date`; behind: `merge --ff-only`, `fast_forwarded` (refused by git:
+- **4. Update** (`update_clone`, shared with the pull of the report): fetch of the default branch only
+  (`--no-tags`, other branches of the repository never arrive; a remote without it, `couldn't find remote ref`:
+  the remote-tracking branch is dropped); same or ahead: `up_to_date`; behind: `merge --ff-only`, `fast_forwarded` (refused by git:
   `conflict`); apart, because commits of an earlier run were not pushed (shadow, a failed push), with a clean work
   tree: the own commits are rebased onto the remote, `rebased` (a conflict aborts the rebase: `conflict`, the own
   commits stay); apart with changes in the work tree: nothing, `diverged_dirty` (the push rebases after its commit,
@@ -624,6 +636,10 @@ run the installer with --sync-repo`).
   whose path a later commit removes again. Then `git push --porcelain origin HEAD:refs/heads/<default branch>`. Refused as `[rejected] (fetch first)` or `(non-fast-forward)`: fetch,
   rebase, guard, push once more; refused again: `rejected`. `[remote rejected]` (a rule of the repository):
   `rejected`. Credentials missing or refused: `auth`; anything else: `network`.
+- **Open:** every machine checks out the files of all others; a highly compressible file of another machine
+  arrives small and fills the disk on checkout (the security review measured about 900 times). A sparse checkout of
+  the own folder would end that, but the report reads the other machines from the work tree (0034-SYNC-REPORT);
+  decided later.
 - **Nothing exported is thrown away:** no reset, checkout, clean or stash anywhere, also not after `conflict` or a
   failed guard (the export cursor has moved on). The lines wait in the clone, committed or not, and go with the next
   push that passes.

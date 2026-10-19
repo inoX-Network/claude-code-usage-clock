@@ -15,8 +15,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
 
 2. **Remote** (`open_clone`): `sync.repo` set and of the form owner/name, the clone a real folder with a `.git`
    folder, and `git remote get-url --all origin` as well as `--push --all` (insteadOf and pushInsteadOf applied) give
-   exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Then left-over git locks and an interrupted
-   rebase of an ended run are cleared (`_heal`), and the branch checked out must be the default branch of the remote,
+   exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Then what an ended run left is cleared
+   (`_heal`: old git locks and temporary objects, an interrupted rebase, half-written files outside the own folder),
+   and the branch checked out must be the default branch of the remote,
    the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree).
 3. **Visibility** (`check_visibility`), unless a result `private` for this repository is younger than 24 h
    (`<log_dir>/sync/visibility.json`): `git ls-remote` of `https://github.com/<owner>/<name>.git` without any git
@@ -44,8 +45,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    more, then `rejected`. Refused by the repository: `rejected`. Credentials missing or refused: `auth` (AUTH_TEXTS);
    any other failure to reach it: `network`.
 
-Nothing exported is ever thrown away: no reset, checkout, clean or stash, also not after `conflict` or a failed guard
-(the export cursor has moved on). Errors carry a fixed text, never output of git.
+Nothing exported is ever thrown away: no reset, checkout, clean or stash of the own folder, also not after `conflict`
+or a failed guard (the export cursor has moved on); only paths outside it are put back as HEAD has them (`_heal`).
+Errors carry a fixed text, never output of git.
 """
 from __future__ import annotations
 
@@ -87,14 +89,19 @@ IDENTITY = {'GIT_AUTHOR_NAME': 'usage-clock', 'GIT_AUTHOR_EMAIL': 'usage-clock@s
 # editor
 FOREIGN_ENV = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
                'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES', 'GIT_AUTHOR_DATE', 'GIT_COMMITTER_DATE',
-               'GIT_SEQUENCE_EDITOR', 'GIT_ATTR_SOURCE')
+               'GIT_SEQUENCE_EDITOR', 'GIT_ATTR_SOURCE', 'GIT_SSL_NO_VERIFY', 'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH',
+               'GIT_PROXY_COMMAND', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
+FOREIGN_ENV_PREFIXES = ('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')       # the pairs of GIT_CONFIG_COUNT
+TEMP_OBJECT_PREFIXES = ('tmp_pack_', 'tmp_idx_', 'tmp_obj_')         # what a fetch git ended leaves in objects/
+NO_REMOTE_BRANCH = "couldn't find remote ref"
 # attr.tree and core.attributesFile: no .gitattributes of another machine (nor a global one) decides how the own files
 # are stored or checked out (filters such as git-lfs, working-tree-encoding, eol).
 SETTINGS = ('core.fsmonitor=false', 'commit.gpgSign=false', 'push.gpgSign=false', 'gc.auto=0',
             'maintenance.auto=false', 'submodule.recurse=false', 'fetch.recurseSubmodules=false',
             'push.recurseSubmodules=no', 'rebase.autoStash=false', 'rebase.updateRefs=false',
             'merge.verifySignatures=false', 'push.followTags=false', f'attr.tree={EMPTY_TREE}',
-            'core.attributesFile=', 'color.ui=false', 'log.showRoot=true')
+            'core.attributesFile=', 'color.ui=false', 'log.showRoot=true', 'log.showSignature=false',
+            'fetch.writeCommitGraph=false', 'transfer.fsckObjects=true', 'http.sslVerify=true')
 BRANCH = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,99}')
 REQUEST_FILE = re.compile(r'requests/(?P<month>[0-9]{4}-[0-9]{2})/[A-Za-z0-9_-]{1,128}\.jsonl')
 
@@ -174,11 +181,14 @@ def _empty_hooks(directory: str) -> str:
 
 
 def _clone_env(path: str, deadline: _sync_core.Deadline) -> dict[str, str]:
-    base = {name: value for name, value in os.environ.items() if name not in FOREIGN_ENV}
+    base = {name: value for name, value in os.environ.items()
+            if name not in FOREIGN_ENV and not name.startswith(FOREIGN_ENV_PREFIXES)}
     base.update(GIT_DIR=os.path.join(path, '.git'), GIT_WORK_TREE=path)
     env = _sync_core.git_env(base, deadline)      # with GIT_DIR it reads the core.sshCommand of the clone
     env.update(IDENTITY, LC_ALL='C', LANGUAGE='C', GIT_EDITOR=':',     # `:` is git's editor that does nothing
                GIT_ATTR_NOSYSTEM='1')
+    if env.get('GIT_SSH_COMMAND'):      # not with a GIT_SSH program (see git_env); ssh takes the first of an option
+        env['GIT_SSH_COMMAND'] += ' -o StrictHostKeyChecking=yes'
     return env
 
 
@@ -203,7 +213,11 @@ def open_clone(run: _sync_core.Run) -> Clone:
         done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
         if done.returncode != 0 or done.stdout.splitlines() != expected:
             raise _fail('internal', 'the remote of the sync clone is not sync.repo')
-    _heal(clone)
+    try:
+        machine_id = sync_format.load_machine_id(run.log_dir, create=False)
+    except sync_format.FormatError as error:
+        raise _fail('internal', str(error)) from error
+    _heal(clone, sync_format.machine_dir(machine_id) if machine_id else None)
     done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
     branch = done.stdout.strip()
     if done.returncode != 0 or not BRANCH.fullmatch(branch):
@@ -220,30 +234,77 @@ def _default_branch(clone: Clone) -> str:
     return name[len(REMOTE) + 1:] if done.returncode == 0 and name.startswith(REMOTE + '/') else DEFAULT_BRANCH
 
 
-def _stale_locks(git_dir: str) -> list[str]:
-    """The lock files of git below `git_dir` (index, refs, packed-refs, HEAD, config …), objects left out."""
-    found = []
-    for folder, dirs, names in os.walk(git_dir):
-        if folder == git_dir and 'objects' in dirs:
-            dirs.remove('objects')
-        found += [os.path.join(folder, name) for name in names if name.endswith('.lock')]
-    return sorted(found)
+def _left_over(git_dir: str) -> tuple[list[str], list[str]]:
+    """Below `git_dir`: the lock files of git (index, refs, packed-refs, HEAD, config …) outside `objects/`, and the
+    temporary files of a fetch git ended inside it (TEMP_OBJECT_PREFIXES)."""
+    objects, locks, temporary = os.path.join(git_dir, 'objects'), [], []
+    for folder, _dirs, names in os.walk(git_dir):
+        if folder == objects or folder.startswith(objects + os.sep):
+            temporary += [os.path.join(folder, name) for name in names if name.startswith(TEMP_OBJECT_PREFIXES)]
+        else:
+            locks += [os.path.join(folder, name) for name in names if name.endswith('.lock')]
+    return sorted(locks), sorted(temporary)
 
 
-def _heal(clone: Clone) -> None:
+def _heal(clone: Clone, own: str | None) -> None:
     """What a run the watchdog or a shutdown ended left in the clone. The caller holds the sync lock, so no other run
     works in it: a git lock older than STALE_LOCK_S is left over and removed; a younger one belongs to a git someone
-    else started (`internal`, try later). An interrupted rebase is aborted: the branch is back on its own commits."""
+    else started (`internal`, try later). Temporary objects of an ended fetch older than that go too (regular files
+    only, never through a link). An interrupted rebase is aborted: the branch is back on its own commits. Last, every
+    path outside the own folder is put back as HEAD has it (`_restore_foreign`)."""
     git_dir = os.path.join(clone.path, '.git')
+    locks, temporary = _left_over(git_dir)
     try:
-        for lock in _stale_locks(git_dir):
+        for lock in locks:
             if time.time() - os.lstat(lock).st_mtime < STALE_LOCK_S:       # from the future: young, too
                 raise _fail('internal', 'the sync clone is in use by another git process (a young lock file)')
             os.unlink(lock)
+        for path in temporary:
+            info = os.lstat(path)
+            if stat.S_ISREG(info.st_mode) and time.time() - info.st_mtime >= STALE_LOCK_S:
+                os.unlink(path)
     except OSError as error:
-        raise _fail('internal', f'a lock file of the sync clone cannot be removed ({type(error).__name__})') from error
+        raise _fail('internal', f'a left-over file of the sync clone cannot be removed ({type(error).__name__})') \
+            from error
     if _rebasing(clone) and clone.git('rebase', '--abort').returncode != 0:
         raise _fail('internal', 'an interrupted rebase in the sync clone could not be aborted')
+    _restore_foreign(clone, own)
+
+
+def _restore_foreign(clone: Clone, own: str | None) -> None:
+    """Paths outside the own folder (`own`; None before the first export: every path) as HEAD has them: an ended
+    fast-forward or checkout leaves them half written, and the next fast-forward would refuse. Changed or deleted files
+    come back from HEAD, added ones leave the index, and files git does not know are removed. Nothing below the own
+    folder is touched: that is exported data."""
+    foreign = [(code, path) for code, path in _status(clone) if own is None or not below(own, path)]
+    if not foreign:
+        return
+    added = [path for code, path in foreign if 'A' in code]
+    known = [path for code, path in foreign if code != '??' and 'A' not in code]
+    for paths, command in ((added, ('rm', '--cached', '--quiet')), (known, ('checkout', '--quiet', 'HEAD'))):
+        if paths and not _with_paths(clone, paths, command):
+            raise _fail('internal', 'the files of other machines in the sync clone cannot be put back')
+    for path in [path for code, path in foreign if code == '??'] + added:
+        if path.endswith('/') or posixpath.normpath(path) != path or path.startswith(('/', '../')):
+            raise _fail('internal', 'an unknown folder or path outside the own machine folder of the sync clone')
+        try:
+            os.unlink(os.path.join(clone.path, *path.split('/')))
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise _fail('internal', f'a file of another machine cannot be removed ({type(error).__name__})') from error
+
+
+def _with_paths(clone: Clone, paths: list[str], command: tuple[str, ...]) -> bool:
+    """git `command` for `paths`, taken literally (no glob of a foreign file name) from a file in `.git` (no command
+    line limit, written atomically, never through a link). True if it worked."""
+    name = 'sync-paths'
+    try:
+        _context_state.write_private(os.path.join(clone.path, '.git'), name, '\0'.join(paths) + '\0')
+    except OSError:
+        return False
+    return clone.git('--literal-pathspecs', *command, f'--pathspec-from-file=.git/{name}',
+                     '--pathspec-file-nul').returncode == 0
 
 
 # --- Visibility -------------------------------------------------------------------------------------------------------
@@ -331,10 +392,16 @@ def _tracking(clone: Clone) -> str:
 
 
 def _fetch(clone: Clone) -> None:
-    done = clone.git('fetch', '--quiet', '--prune', '--no-tags', '--no-recurse-submodules', REMOTE,
-                     f'+refs/heads/*:refs/remotes/{REMOTE}/*')
-    if done.returncode != 0:
+    """Only the default branch (other branches of the repository are never fetched). A remote without it (an empty
+    repository, a deleted branch): no remote-tracking branch."""
+    done = clone.git('fetch', '--quiet', '--no-tags', '--no-recurse-submodules', REMOTE,
+                     f'+refs/heads/{clone.branch}:{_tracking(clone)}')
+    if done.returncode == 0:
+        return
+    if done.returncode != 128 or NO_REMOTE_BRANCH not in done.stderr:
         raise _remote_error(done, 'fetch')
+    if clone.git('update-ref', '-d', _tracking(clone)).returncode != 0:
+        raise _fail('internal', 'the remote-tracking branch of the sync clone cannot be removed')
 
 
 def _commit_of(clone: Clone, ref: str) -> str | None:
@@ -389,7 +456,18 @@ def update_clone(run: _sync_core.Run, clone: Clone) -> str:
 
 
 def _rebasing(clone: Clone) -> bool:
-    return any(os.path.isdir(os.path.join(clone.path, '.git', name)) for name in ('rebase-merge', 'rebase-apply'))
+    """A rebase stands in the clone. Its state must be a real folder: `rebase --abort` would empty the target of a
+    link (`internal`, nothing is aborted)."""
+    found = False
+    for name in ('rebase-merge', 'rebase-apply'):
+        try:
+            info = os.lstat(os.path.join(clone.path, '.git', name))
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise _fail('internal', 'the rebase state of the sync clone is no folder: nothing is aborted')
+        found = True
+    return found
 
 
 def _rebase(clone: Clone) -> None:
@@ -587,7 +665,7 @@ def _check_outgoing(clone: Clone, own: str) -> None:
     tracking = _tracking(clone)
     revisions = f'{tracking}..HEAD' if _commit_of(clone, tracking) else 'HEAD'
     done = clone.git('log', '--format=%x01%H %P', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-ext-diff',
-                     revisions)
+                     revisions, '--')
     if done.returncode != 0:
         raise _fail('internal', 'git log failed in the sync clone')
     for commit in done.stdout.split('\x01')[1:]:
@@ -631,10 +709,7 @@ def push(run: _sync_core.Run, projects_dir: str | None = None, execute: Execute 
     run.deadline.check()
     update_clone(run, clone)
     run.deadline.check()
-    try:
-        machine_id = sync_format.load_machine_id(run.log_dir)
-    except sync_format.FormatError as error:
-        raise _fail('internal', str(error)) from error
+    machine_id = sync_format.load_machine_id(run.log_dir)      # open_clone refused an id that cannot be used
     result = _sync_export.export(clone.path, run.log_dir, run.cfg, os.path.expanduser(projects_dir or PROJECTS_DIR),
                                  run.started, run.deadline)
     months = _compact(run, clone, machine_id)
