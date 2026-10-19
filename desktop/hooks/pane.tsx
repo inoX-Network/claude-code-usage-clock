@@ -10,8 +10,8 @@ import type { ReportSlot, ReportState } from '../types/index'
 import { DEFAULTS } from './config'
 import { PERIODS, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
-import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, tilesPerRow, toneColor } from './tiles'
-import type { Bar, Kpi } from './tiles'
+import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
+import type { Bar, Kpi, Tile } from './tiles'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
@@ -236,6 +236,16 @@ export function registerReport(on: On): void {
       const grid = (key: string, tiles: unknown[]) => (
         <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" width="100%">{tiles}</Box>
       )
+      const muted = (key: string, text: string) => <Text key={key} size="footnote" color={LOOK.muted}>{text}</Text>
+      const drawTile = (t: Tile) =>
+        t.kind === 'kpis' ? grid(t.key, t.kpis.map(kpi))
+          : t.kind === 'note' ? card(t.key, [muted(`${t.key}-text`, t.text)])
+            : card(t.key, [
+                caption(`${t.key}-label`, t.label),
+                ...(t.lead === undefined ? [] : [<Text key={`${t.key}-lead`} color={LOOK.text}>{t.lead}</Text>]),
+                ...barRows(t.key, t.bars),
+                ...(t.note === undefined ? [] : [muted(`${t.key}-note`, t.note)]),
+              ])
 
       if (state.view === 'overview') {
         const t = overviewTiles(slot.report, limits)
@@ -280,8 +290,16 @@ export function registerReport(on: On): void {
           caption('all-label', own.length === 0 ? 'Sessions · highest cost first' : 'All sessions · highest cost first'),
           ...cards.filter(c => !c.isOwn).map(sessionCard),
         ]
+      } else if (state.view === 'sessions' && state.session !== null) {
+        const [heading, figures] = sessionDetail(slot.report, state.session, e.props.bodyColumns, state.own)
+        body = [
+          <Button key="back" hotkey="q" plain onPress={chooseSession(null)}><Text key="label-back" dimColor>Back to the list</Text></Button>,
+          ...(heading === undefined ? [] : [<Text key="detail-title" size="heading" weight="semibold" color={LOOK.text}>{heading.text}</Text>]),
+          ...(figures === undefined || figures.text === '' ? [] : [muted('detail-figures', figures.text)]),
+          ...sessionTiles(slot.report, state.session).map(drawTile),
+        ]
       } else {
-        body = [card('view', body)]
+        body = viewTiles(state.view, slot.report).map(drawTile)
       }
     }
 

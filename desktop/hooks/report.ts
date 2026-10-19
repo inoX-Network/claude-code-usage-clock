@@ -99,7 +99,7 @@ export const pct = (x: number | null, none = '-'): string =>
   x === null ? none : x > 0 && x < 0.01 ? '<1 %' : `${Math.round(x * 100)} %`
 /** Points of a limit, an estimate: `<1` is more than 0 and less than one point. */
 export const pts = (x: number | null): string => (x === null ? '-' : x === 0 ? '0' : x < 1 ? '<1' : x.toFixed(1))
-const whole = (x: number | null): string => (x === null ? '-' : String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
+export const whole = (x: number | null): string => (x === null ? '-' : String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','))
 /** A number with at most one decimal, without a trailing zero. */
 const plain = (x: number): string => String(Number(x.toFixed(1)))
 /** Tokens, with `k` for thousands from 10 000 on. */

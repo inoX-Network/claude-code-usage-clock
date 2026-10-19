@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { REPORT } from './report-fixture'
-import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, tilesPerRow } from './tiles'
+import { LOOK, gaugeSvg, overviewTiles, peaksSvg, sessionCards, sessionTiles, tilesPerRow } from './tiles'
 
 const LIMITS = { yellowFrom: 50, redFrom: 75 }
 
@@ -54,6 +54,30 @@ describe('sessionCards', () => {
     expect(cards.map(c => [c.id, c.isOwn])).toEqual([['bbbbbbbb', true], ['aaaaaaaa', false]])
     expect(cards[1]).toMatchObject({ title: 'webshop aaaaaaaa', cost: '60 USD' })
     expect(cards[1]?.meta).toMatch(/^\S+ 13 Oct \d\d:\d\d · 300 requests · cache 90 % · ~20\.0 week pts$/)
+  })
+})
+
+describe('sessionTiles', () => {
+  test('figures, tokens, models, subagents, then the context; free space is left out', async () => {
+    const tiles = sessionTiles(REPORT, 'aaaaaaaa')
+    expect(tiles.map(t => t.key)).toEqual(['figures', 'tokens', 'models', 'subagents', 'context', 'mcp-servers', 'mcp-tools', 'memory', 'skills', 'context-agents'])
+    const context = tiles.find(t => t.key === 'context')
+    expect(context?.kind === 'bars' && context.lead).toBe('Context after the first answer: 63,000 tokens of 1,000,000 (6 %)')
+    expect(context?.kind === 'bars' && context.bars.map(b => b.label)).toEqual(['MCP tools', 'System prompt', 'Memory files'])
+  })
+
+  test('more than ten entries: the ten largest and a bar for the rest', async () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({ name: `skill-${i}`, tokens: 100 - i }))
+    const cli = { ...REPORT.clis[0], context: { ...REPORT.clis[0]?.context, skills: { tokens: 1000, included: 12, total: 12, items } } }
+    const skills = sessionTiles({ ...REPORT, clis: [cli] }, 'aaaaaaaa').find(t => t.key === 'skills')
+    const labels = skills?.kind === 'bars' ? skills.bars.map(b => [b.label, b.value]) : []
+    expect(labels).toHaveLength(11)
+    expect(labels[10]).toEqual(['2 more', '179'])
+  })
+
+  test('a session from before the plugin says it has no context; one not in the report says so', async () => {
+    expect(sessionTiles(REPORT, 'bbbbbbbb').at(-1)).toMatchObject({ kind: 'note', key: 'no-context' })
+    expect(sessionTiles(REPORT, 'cccccccc')).toEqual([expect.objectContaining({ kind: 'note', key: 'gone' })])
   })
 })
 

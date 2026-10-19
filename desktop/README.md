@@ -79,7 +79,10 @@ figures (the weekly limit as a half circle with a mark where red starts, the hig
 window, the cost split into main and subagents, the cache hit rate), then the projects, the models, main and the agents
 as bars, and what is notable with a tag (`GATE`, `CACHE`, `RISE`, `5H`). Sessions shows one card per session; the
 session `/report` was opened from comes first, under "This session", its card toned and framed in the accent colour and
-marked `LIVE`. The other views stand in a tile as text. The tiles carry a dark ground of their own, so they read the
+marked `LIVE`; its detail shows cost, requests, cache and thinking as key figures, then tokens, models, subagents and
+what its context held as bars (the ten largest of each, then one bar for the rest). Agents shows main and the
+subagents as key figures and every agent as a bar; Models a key figure per model and the share of the cost; Cache/
+Thinking four key figures; Tokens one per kind and their bars; Projects every project as a bar. The tiles carry a dark ground of their own, so they read the
 same in a light and a dark app, and the pane can be dragged wider or narrower: one tile per row below 44 columns, two
 up to 95, four from 96 on. A Button of the desktop holds text only, so a session opens by its name, not by a click on
 the whole card.
