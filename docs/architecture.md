@@ -21,6 +21,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _plat.py                the platform switch: replace, pread, fchmod, path and command spelling, open flags (POSIX or Windows)
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
   _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report does)
+  sync_format.py          the sync repository: layout, line formats, machine id, project labels, writing (allowlist), reading (foreign data), compacting; see docs/report-format.md
 tools/
   install.py              adds/removes the hooks in a settings.json (per component, backup, dry run); --check checks an installation
   log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)

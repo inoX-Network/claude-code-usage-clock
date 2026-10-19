@@ -136,7 +136,7 @@ def test_every_log_summary_option_is_mentioned_in_the_readme():
 def flatten(data, prefix=''):
     flat = {}
     for key, value in data.items():
-        if isinstance(value, dict):
+        if isinstance(value, dict) and value:      # an empty object is a value of its own (sync.project_aliases)
             flat.update(flatten(value, f'{prefix}{key}.'))
         else:
             flat[f'{prefix}{key}'] = value

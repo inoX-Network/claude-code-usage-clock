@@ -67,9 +67,22 @@ DEFAULTS: dict = {
         'skill_fork_missing_agent': 'warn',
         'model_override_in_call': 'warn',
     },
+    'sync': {
+        'machine_name': '',
+        'project_labels': 'plain',
+        'project_aliases': {},
+        'label_salt': '',
+        'keep_request_months': 3,
+    },
 }
 
 _MISSING = object()  # no file at all, as opposed to a file that contains `null`
+
+# Keys whose value is an object of free names to texts, not a section, as `section.key`.
+_MAPS = ('sync.project_aliases',)
+
+# The name of the machine in the sync repository: the characters a project label may have, at most 64.
+_MACHINE_NAME = re.compile(r'[\w .+@=-]{0,64}')
 
 # Keys whose value is a filesystem path: "~" is expanded in the loaded result (not in DEFAULTS).
 _PATH_KEYS = ('usage_file', 'log_dir')
@@ -80,6 +93,7 @@ _CHOICES = {
     ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
+    ('sync', 'project_labels'): ('plain', 'alias', 'hash'),
 }
 
 
@@ -111,6 +125,11 @@ def _merge_section(defaults: dict, given, path: str, problems: list[str]) -> dic
         name = f'{path}.{key}' if path else key
         if key not in defaults:
             problems.append(f'{name}: unknown key ignored')
+        elif name in _MAPS:
+            if isinstance(value, dict) and all(isinstance(item, str) for pair in value.items() for item in pair):
+                result[key] = dict(value)
+            else:
+                problems.append(f'{name}: must be an object of texts, using default')
         elif isinstance(defaults[key], dict):
             result[key] = _merge_section(defaults[key], value, name, problems)
         elif not _type_ok(defaults[key], value):
@@ -192,6 +211,17 @@ def load(log_problems: bool = True) -> dict:
     if not (math.isfinite(estimate['chars_per_token']) and estimate['chars_per_token'] > 0):
         problems.append('start_estimate.chars_per_token: must be a positive number, using default')
         estimate['chars_per_token'] = DEFAULTS['start_estimate']['chars_per_token']
+    sync = cfg['sync']
+    # Whole months only; fewer than one would compact the month that just ended.
+    months = sync['keep_request_months']
+    if not (math.isfinite(months) and months >= 1 and months == int(months)):
+        problems.append('sync.keep_request_months: must be a whole number of at least 1, using default')
+        months = DEFAULTS['sync']['keep_request_months']
+    sync['keep_request_months'] = int(months)
+    # The name goes into machine.json and the commit message: no line break, no path, no quote.
+    if not _MACHINE_NAME.fullmatch(sync['machine_name']):
+        problems.append('sync.machine_name: at most 64 letters, digits, spaces and . + @ = - _, using default')
+        sync['machine_name'] = DEFAULTS['sync']['machine_name']
     for (section, key), allowed in _CHOICES.items():
         if cfg[section][key] not in allowed:
             problems.append(f'{section}.{key}: must be one of {"|".join(allowed)}, using default')
