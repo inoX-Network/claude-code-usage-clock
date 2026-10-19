@@ -29,13 +29,16 @@ function level(value: number, yellow: number, red: number): Color {
   return value >= red ? 'error' : value >= yellow ? 'warning' : undefined
 }
 
-/** ` ↻19:10` in the given zone (the system's when absent), with the weekday ` ↻Mon 15:00`; '' when past or broken. */
+/** ` ↻19:10` in the given zone (the system's when absent), with the weekday ` ↻Mon 15:00` unless the reset is later
+ *  today (the app cuts its footer: a weekday only where it says something); '' when past or broken. */
 export function resetText(iso: string | undefined, now: number, withDay: boolean, timeZone?: string): string {
   const moment = iso === undefined ? NaN : Date.parse(iso)
   if (!Number.isFinite(moment) || moment <= now) return ''
   const time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone })
     .format(moment)
-  const day = withDay ? new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone }).format(moment) + ' ' : ''
+  const date = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone })
+  const isToday = date.format(moment) === date.format(now)
+  const day = withDay && !isToday ? new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone }).format(moment) + ' ' : ''
   return ` ↻${day}${time}`
 }
 
