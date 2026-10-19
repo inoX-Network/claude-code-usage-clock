@@ -14,7 +14,7 @@ import _sync_export
 import _sync_git
 import sync
 import sync_format
-from test_usage_report import NOW, T, dollars, local_zone, report_module, req, row, spend, world  # noqa: F401
+from test_usage_report import NOW, T, dollars, extras, local_zone, report_module, req, row, spend, world  # noqa: F401
 from test_usage_report_golden import OUTPUTS, build, compare_golden, outputs
 
 LAPTOP = '1aaaaaaa-0000-4000-8000-000000000001'
@@ -337,6 +337,17 @@ def test_a_machine_with_fewer_requests_than_its_day_line_counts_the_line_while_a
     assert '  proj-a  aaaaaaaa  started Sun 11 Oct 10:00  on desk' in world.overview('--day', '2026-10-11', '--full')
 
 
+def test_a_day_line_beside_requests_that_does_not_add_up_with_them_is_counted_and_left_out(world, synced):
+    world.projects.mkdir()
+    world.transcript('-home-u-proj-a', 'dddddddd-1', [extras(req('2026-10-11T10:05:00Z', 'd1', out=100), thinking=50)])
+    synced.clone.machine(LAPTOP)
+    line = archive_line(7, 4.0, 'bbbbbbbb', 'proj-b')
+    line['extra'] = {'thinking': {'x': 1}}      # figures where the requests have a number
+    synced.clone.days(LAPTOP, [('2026-10-11', line)])
+    report = world.report('--day', '2026-10-11')
+    assert report['total']['requests'] == 1 and report['coverage']['sync']['unreadable_day_lines'] == 1
+
+
 def test_a_foreign_day_line_counts_while_a_third_machine_has_requests_also_with_machine(world, synced):
     world.projects.mkdir()
     synced.clone.machine(LAPTOP)
@@ -396,10 +407,10 @@ def test_without_an_own_line_the_first_other_machine_gives_the_subscription(worl
 def test_a_day_line_that_does_not_add_up_with_the_others_is_counted_and_left_out(world, synced):
     world.projects.mkdir()
     first = archive_line(5, 2.0, 'aaaaaaaa', 'proj-a')
-    first['agent_types'] = {'reviewer': {'requests': 5, 'cost': 2.0}}
+    first['extra'] = {'thinking': 5}
     own_archive(world, ('2026-10-11', first))
     other = archive_line(7, 4.0, 'bbbbbbbb', 'proj-b')
-    other['agent_types'] = {'reviewer': 7}      # a number where the first line has figures: they cannot be added
+    other['extra'] = {'thinking': {'x': 1}}     # figures where the first line has a number: they cannot be added
     synced.clone.machine(LAPTOP)
     synced.clone.days(LAPTOP, [('2026-10-11', other)])
     report = world.report('--day', '2026-10-11')
@@ -461,13 +472,15 @@ def set_in(path, value):
     set_in(('clis', 'bbbbbbbb', 'models'), {'Opus 5.5': {'cost': 1}}),
     set_in(('clis', 'bbbbbbbb', 'subs'), {'reviewer': 7}),
     set_in(('clis', 'bbbbbbbb', 'label'), 'proj-\x1b[2J\x1b]0;pwned\x07'),     # control characters
+    set_in(('clis', 'bbbbbbbb', 'label'), 'proj/<b>'),                       # not a label of the format
     set_in(('agent_types',), {'agent\x1b[5m': {'requests': 7, 'cost': 4.0}}),
     set_in(('models',), {'evil\x1b[31mmodel': {'requests': 7, 'cost': 4.0, 'tokens': {}}}),
     set_in(('guard_reasons', 'soft_stop', 'enforce', 'deny'), {'why\x07': 1}),
     set_in(('abo',), {'five_windows': [{'resets': None, 'first': 1.0, 'peak': 1, 'peak_at': 10 ** 12, 'last': 2.0,
                                         'first_value': 1, 'last_value': 1}]}),   # passes the checks, fails the report
 ], ids=['huge', 'negative-count', 'negative-cost', 'too-many-tokens', 'agent-types-shape', 'models-shape',
-        'unpriced-shape', 'cli-shape', 'cli-id', 'cli-models', 'cli-subs', 'label-escape', 'agent-type-escape',
+        'unpriced-shape', 'cli-shape', 'cli-id', 'cli-models', 'cli-subs', 'label-escape', 'label-pattern',
+        'agent-type-escape',
         'model-escape', 'reason-escape', 'probe'])
 def test_a_hostile_foreign_day_line_is_skipped_and_counted(world, synced, change):
     hostile(world, synced, change)

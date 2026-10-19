@@ -1955,9 +1955,7 @@ def _figures(value) -> None:
 def _table(table, names: re.Pattern, needs: tuple = (), counts: bool = False) -> None:
     """A table of a day line as the report reads it: an object whose keys fit `names`, of objects with the keys
     `needs` (`tokens` an object with every kind), or with `counts` of numbers."""
-    if not isinstance(table, dict):
-        raise ValueError('table')
-    for name, entry in table.items():
+    for name, entry in table.items():      # an object: parse_archive_line merged the line before
         if not names.fullmatch(name):
             raise ValueError('name')
         if counts:
