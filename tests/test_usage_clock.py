@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -123,6 +124,18 @@ def test_reset_times_use_the_time_zone_of_the_clock_not_utc():
     assert usage_clock.format_reset(ts(2026, 1, 14, 21, 30), now) == '23:30'          # still today locally
     assert usage_clock.format_reset(ts(2026, 1, 14, 22, 30), now) == 'Thu 15 Jan 00:30'   # tomorrow locally
     assert usage_clock.time_text(now) == 'Now: Wed 14 Jan 2026 22:30'
+
+
+@pytest.mark.posix_only
+def test_a_local_reset_behind_a_daylight_saving_switch_keeps_its_own_offset(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setenv('TZ', 'CET-1CEST,M3.5.0,M10.5.0/3')    # Central Europe: summer time ends Sun 25 Oct 2026
+        time.tzset()
+        now = datetime(2026, 10, 19, 13, 40, tzinfo=UTC).astimezone()    # Mon 15:40 CEST, as the hook builds it
+        assert usage_clock.format_reset(ts(2026, 10, 26, 13, 0), now) == 'Mon 26 Oct 14:00'   # CET by then
+        assert usage_clock.format_reset(ts(2026, 10, 19, 16, 50), now) == '18:50'
+        assert usage_clock.format_reset(ts(2026, 10, 26, 13, 0), now.astimezone(UTC)) == 'Mon 26 Oct 13:00'
+    time.tzset()
 
 
 def test_missing_reset_times_leave_the_values_bare_and_a_missing_week_is_a_question_mark():

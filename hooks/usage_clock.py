@@ -18,8 +18,13 @@ FRESH_MEASUREMENT_HINT = 'start larger blocks only after a fresh measurement'
 
 
 def format_reset(ts: float, now: datetime) -> str:
-    """Reset time in the time zone of `now`: today only the time, otherwise with weekday and date."""
-    moment = datetime.fromtimestamp(ts, tz=now.tzinfo)
+    """Reset time in the time zone of `now`: today only the time, otherwise with weekday and date. A `now` in
+    local time (the hook's own) carries only today's offset; the reset then takes the offset valid at the
+    reset itself, so a daylight saving switch in between does not shift it by an hour."""
+    if now.utcoffset() == now.astimezone().utcoffset():
+        moment = datetime.fromtimestamp(ts).astimezone()
+    else:
+        moment = datetime.fromtimestamp(ts, tz=now.tzinfo)
     if moment.date() == now.date():
         return f'{moment:%H:%M}'
     return f'{WEEKDAYS[moment.weekday()]} {moment.day} {MONTHS[moment.month - 1]} {moment:%H:%M}'
