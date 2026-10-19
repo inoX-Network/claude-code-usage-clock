@@ -1,2 +1,5 @@
+# Text files are kept with line feeds, whatever the editor or the checkout on Windows writes
+* text=auto eol=lf
+
 # bash must read these with plain line feeds, whatever the checkout settings
 *.sh text eol=lf
