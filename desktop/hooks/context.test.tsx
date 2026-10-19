@@ -51,6 +51,9 @@ const RECORD = {
 
 type Write = { path: string; text: string }
 
+/** The written path in one spelling: the engine reports it in the host's, so `/home/you` comes back as `C:\home\you` on Windows. */
+const posix = (path: string | undefined): string | undefined => path?.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
+
 function world(on: On, writes: Write[], asked: unknown[],
                { breakdown = BREAKDOWN as SessionContextBreakdown | undefined, config = undefined as string | undefined,
                  logEnv = undefined as string | undefined, failsWrite = false, home = '/home/you' as string | null } = {}) {
@@ -103,7 +106,7 @@ test('after the first answer of the main loop the session writes its file once, 
   await turn($)
   await turn($)
   expect(writes).toHaveLength(1)
-  expect(writes[0]?.path).toBe('/home/you/.cache/claude-usage-clock/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/home/you/.cache/claude-usage-clock/context-breakdown/desk-1.json')
   expect(JSON.parse(writes[0]?.text ?? '')).toEqual(RECORD)
   expect(asked).toContainEqual(expect.objectContaining({ breakdown: 'full' }))
 })
@@ -113,7 +116,7 @@ test('the folder is that of the hooks: CCUC_LOG_DIR, else log_dir of config.json
   world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }) })
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
   await twoTurns($)
-  expect(writes[0]?.path).toBe('/home/you/logs/usage/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/home/you/logs/usage/context-breakdown/desk-1.json')
 })
 
 test('CCUC_LOG_DIR wins over config.json', async ($, on) => {
@@ -121,7 +124,7 @@ test('CCUC_LOG_DIR wins over config.json', async ($, on) => {
   world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }), logEnv: '/var/tmp/ccuc/' })
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
   await twoTurns($)
-  expect(writes[0]?.path).toBe('/var/tmp/ccuc/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/var/tmp/ccuc/context-breakdown/desk-1.json')
 })
 
 test('no breakdown, or a file that cannot be written: nothing written, the turn goes on', async ($, on) => {
@@ -147,21 +150,21 @@ test('after /clear (no session.start) the first answer writes to the settled fol
   world(on, writes, [])
   await twoTurns($)
   expect(writes).toHaveLength(1)
-  expect(writes[0]?.path).toBe('/home/you/.cache/claude-usage-clock/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/home/you/.cache/claude-usage-clock/context-breakdown/desk-1.json')
 })
 
 test('after /clear the folder is still that of the hooks: log_dir of config.json, CCUC_LOG_DIR before it', async ($, on) => {
   const writes: Write[] = []
   world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }) })
   await twoTurns($)
-  expect(writes[0]?.path).toBe('/home/you/logs/usage/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/home/you/logs/usage/context-breakdown/desk-1.json')
 })
 
 test('after /clear CCUC_LOG_DIR wins over config.json', async ($, on) => {
   const writes: Write[] = []
   world(on, writes, [], { config: JSON.stringify({ log_dir: '~/logs/usage' }), logEnv: '/var/tmp/ccuc' })
   await twoTurns($)
-  expect(writes[0]?.path).toBe('/var/tmp/ccuc/context-breakdown/desk-1.json')
+  expect(posix(writes[0]?.path)).toBe('/var/tmp/ccuc/context-breakdown/desk-1.json')
 })
 
 test('no home known: nothing written, the turn goes on', async ($, on) => {
