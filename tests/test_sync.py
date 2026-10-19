@@ -70,6 +70,13 @@ def test_push_now_is_the_forced_run_and_pull_background_the_long_one(tmp_path, m
     assert runs[1].deadline.left() > 29 and runs[2].deadline.left() <= 5
 
 
+def test_push_if_due_runs_only_when_due(tmp_path, mode):
+    mode('shadow')
+    runs = []
+    assert sync.main(['push', '--if-due'], push_runner=runs.append) == 0 and len(runs) == 1
+    assert sync.main(['push', '--if-due'], push_runner=runs.append) == 0 and len(runs) == 1   # next_due is ahead
+
+
 def test_with_sync_off_every_command_does_nothing(tmp_path, starts):
     for argv in (['push', '--now'], ['pull'], ['session-start'], ['session-end']):
         assert sync.main(argv) == 0
@@ -97,16 +104,16 @@ def test_a_failing_session_hook_still_exits_0_silently(mode, monkeypatch, capsys
     assert capsys.readouterr() == ('', '')
 
 
-def test_a_sync_folder_that_cannot_be_used_ends_with_1_and_a_log_line(tmp_path, mode):
+def test_a_sync_folder_that_cannot_be_used_ends_with_1_and_one_log_line_an_hour(tmp_path, mode):
     mode('shadow')
     (tmp_path / 'log').mkdir()
     (tmp_path / 'log' / 'sync').write_text('', encoding='utf-8')
-    assert sync.main(['push', '--now']) == 1
+    assert sync.main(['push', '--now']) == 1 and sync.main(['pull']) == 1
     line, = sync_lines(tmp_path)
     assert (line['decision'], line['reason']) == ('error', 'push: OSError')
 
 
-@pytest.mark.parametrize('argv', [[], ['merge'], ['push', '--later'], ['pull', '--now']])
+@pytest.mark.parametrize('argv', [[], ['merge'], ['push', '--later'], ['pull', '--now'], ['push', '--now', '--if-due']])
 def test_bad_arguments_exit_2(argv, capsys):
     with pytest.raises(SystemExit) as stop:
         sync.main(argv)

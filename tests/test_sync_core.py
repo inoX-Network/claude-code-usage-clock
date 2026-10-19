@@ -14,6 +14,7 @@ import statistics
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 
 import pytest
@@ -82,29 +83,33 @@ class Starts:
         self.calls.append(argv)
 
 
-def push(tmp_path, runner=ok, now=T0, forced=False, config=None, rand=lambda: 0.5, end=None):
+def push(tmp_path, runner=ok, now=T0, forced=False, config=None, rand=lambda: 0.5, end=None, if_due=False):
     """One push at `now` (ending at `end`, default the same moment)."""
     times = iter([now, now if end is None else end])
-    return _sync_core.push(log_dir(tmp_path), config or cfg(), runner, forced=forced, clock=lambda: next(times),
-                           rand=rand)
+    return _sync_core.push(log_dir(tmp_path), config or cfg(), runner, forced=forced, if_due=if_due,
+                           clock=lambda: next(times), rand=rand)
 
 
 # --- Criterion: the status line check uses no network and takes under 5 ms -----------------------------------------
 
 def test_the_status_line_check_uses_no_network_and_its_median_is_under_5_ms(tmp_path, monkeypatch):
-    def no_network(*_args, **_kwargs):
-        raise AssertionError('the due check of the status line touched the network')
+    touched = []      # collected, not raised: an exception could be swallowed by the code under test
+
+    def no_network(*args, **_kwargs):
+        touched.append(args)
+        raise OSError('no network in this test')
     for name in ('socket', 'create_connection', 'getaddrinfo', 'gethostbyname', 'socketpair'):
         monkeypatch.setattr(socket, name, no_network)
     config, starts = cfg(), Starts()
     put_state(tmp_path, State(last_attempt=T0 - 60, last_success=T0 - 60, next_due=T0 + 600))
     waiting, due = [], []
-    for samples, now in ((waiting, T0), (due, T0 + 601)):
-        for _ in range(200):
+    for i in range(200):
+        for samples, now in ((waiting, T0), (due, T0 + 601 + i * _sync_core.START_GAP_S)):
             begin = time.perf_counter()
             _sync_core.statusline_tick(log_dir(tmp_path), config, now, starts)
             samples.append(time.perf_counter() - begin)
-    assert len(starts.calls) == 200      # only the due half started a push
+    assert touched == []
+    assert len(starts.calls) == 200      # only the due half started a push, with its start mark
     assert statistics.median(waiting) < 0.005 and statistics.median(due) < 0.005
 
 
@@ -123,6 +128,23 @@ PUSH_PROCESS = textwrap.dedent('''
 ''')
 
 
+def first_lines_within(processes, seconds):
+    """The first line of each process ('' at its end); fails instead of hanging if one neither writes nor ends (a
+    lock that waits would do that)."""
+    lines = [None] * len(processes)
+
+    def read(i):
+        lines[i] = processes[i].stdout.readline()
+    readers = [threading.Thread(target=read, args=(i,), daemon=True) for i in range(len(processes))]
+    for reader in readers:
+        reader.start()
+    end = time.monotonic() + seconds
+    for reader in readers:
+        reader.join(max(end - time.monotonic(), 0))
+    assert None not in lines, 'a push process neither wrote nor ended: does the lock wait?'
+    return lines
+
+
 def test_three_pushes_started_at_once_run_exactly_one_and_the_others_change_nothing(tmp_path, monkeypatch):
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'sync': {'mode': 'shadow'}}), encoding='utf-8')
@@ -131,7 +153,7 @@ def test_three_pushes_started_at_once_run_exactly_one_and_the_others_change_noth
                                   stdout=subprocess.PIPE, text=True, encoding='utf-8') for _ in range(3)]
     try:
         # The runner holds the lock until the test writes to it, so the other two can only find it held and end.
-        first_lines = [process.stdout.readline() for process in processes]
+        first_lines = first_lines_within(processes, 60)
         running = [i for i, line in enumerate(first_lines) if line.startswith('running ')]
         assert len(running) == 1
         for i, process in enumerate(processes):
@@ -186,7 +208,7 @@ def test_during_a_backoff_the_status_line_starts_no_push_before_next_due_and_ses
     assert not _sync_core.session_end(log_dir(tmp_path), cfg(), before.next_due - 1, starts)
     assert starts.calls == [] and state_of(tmp_path) == before
     assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), before.next_due, starts)
-    assert starts.calls == [_sync_core.command('push')]
+    assert starts.calls == [_sync_core.command('push', '--if-due')]
 
 
 def test_a_push_started_inside_a_backoff_ends_without_a_change(tmp_path):
@@ -240,7 +262,7 @@ def test_session_end_with_a_broken_state_starts_the_push_and_leaves_the_log_line
 # --- Criterion: SessionStart catches up a push that was cut off ----------------------------------------------------
 
 def test_session_start_after_a_cut_off_push_sets_next_due_to_now_and_pulls_in_the_background(tmp_path):
-    put_state(tmp_path, State(last_attempt=T0 - 30, last_success=T0 - 3600, next_due=T0 + 600))
+    put_state(tmp_path, State(last_attempt=T0 - 3000, last_success=T0 - 3600, next_due=T0 + 600))
     starts = Starts()
     _sync_core.session_start(log_dir(tmp_path), cfg(), T0, starts)
     assert state_of(tmp_path).next_due == T0
@@ -251,8 +273,8 @@ def test_session_start_after_a_cut_off_push_sets_next_due_to_now_and_pulls_in_th
     (State(), True),                                                                      # never pushed
     (State(last_attempt=T0 - 90000, last_success=T0 - 90000, next_due=T0 + 60), True),   # older than 24 h
     (State(last_attempt=T0 - 60, last_success=T0 - 60, next_due=T0 + 600), False),       # fresh and complete
-    (State(last_attempt=T0 - 60, last_success=None, backoff_level=1, next_due=T0 + 60, last_error='network'), False),
-    (State(last_attempt=T0 - 60, last_success=T0 - 90000, last_error='visibility', backoff_level=1), False),
+    (State(last_attempt=T0 - 600, last_success=None, backoff_level=1, next_due=T0 + 60, last_error='network'), False),
+    (State(last_attempt=T0 - 600, last_success=T0 - 90000, last_error='visibility', backoff_level=1), False),
 ])
 def test_session_start_catches_up_only_outside_a_backoff_and_the_block(tmp_path, state, catch_up):
     put_state(tmp_path, state)
@@ -263,7 +285,7 @@ def test_session_start_catches_up_only_outside_a_backoff_and_the_block(tmp_path,
 
 
 def test_session_start_leaves_the_state_to_a_run_that_holds_the_lock_and_still_pulls(tmp_path):
-    put_state(tmp_path, State(last_attempt=T0 - 30, last_success=T0 - 3600, next_due=T0 + 600))
+    put_state(tmp_path, State(last_attempt=T0 - 3000, last_success=T0 - 3600, next_due=T0 + 600))
     starts = Starts()
     with _sync_core.try_lock(str(sync_dir(tmp_path))) as held:
         assert held
@@ -379,33 +401,68 @@ def test_the_deadline_runs_on_the_clock_it_is_given():
 
 # --- Criterion: git never asks for credentials --------------------------------------------------------------------
 
-def test_the_git_environment_forbids_every_prompt():
-    env = _sync_core.git_env({'PATH': '/bin', 'GIT_ASKPASS': '/usr/bin/ksshaskpass'})
-    assert env['GIT_TERMINAL_PROMPT'] == '0' and env['GCM_INTERACTIVE'] == 'never'
-    assert env['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes' and env['GIT_ASKPASS'] == '' and env['PATH'] == '/bin'
-    assert _sync_core.git_env({'GIT_SSH_COMMAND': 'ssh -i key'})['GIT_SSH_COMMAND'] == 'ssh -i key -o BatchMode=yes'
+@pytest.fixture
+def git_config(tmp_path, monkeypatch):
+    """Points git at a global config file of this test (never the user's) and no system config; returns a function
+    that writes it. No GIT_SSH_COMMAND or GIT_SSH from outside."""
+    path = tmp_path / 'gitconfig'
+    path.write_text('', encoding='utf-8')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(path))
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    for name in ('GIT_SSH_COMMAND', 'GIT_SSH'):
+        monkeypatch.delenv(name, raising=False)
+    return lambda text: path.write_text(text, encoding='utf-8')
 
 
-def test_the_git_environment_starts_from_the_process_environment(monkeypatch):
+def test_the_git_environment_forbids_every_prompt(git_config, monkeypatch):
+    monkeypatch.setenv('GIT_ASKPASS', '/usr/bin/ksshaskpass')
     monkeypatch.setenv('CCUC_MARKER', 'kept')
-    monkeypatch.delenv('GIT_SSH_COMMAND', raising=False)
     env = _sync_core.git_env()
-    assert env['CCUC_MARKER'] == 'kept' and env['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes'
+    assert env['GIT_TERMINAL_PROMPT'] == '0' and env['GCM_INTERACTIVE'] == 'never' and env['GIT_ASKPASS'] == ''
+    assert env['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes' and env['CCUC_MARKER'] == 'kept'
+
+
+def test_batch_mode_is_appended_to_the_users_ssh_command():
+    env = _sync_core.git_env({'GIT_SSH_COMMAND': 'ssh -i key', 'GIT_SSH': 'plink'})
+    assert env['GIT_SSH_COMMAND'] == 'ssh -i key -o BatchMode=yes'
+
+
+def test_batch_mode_is_appended_to_core_ssh_command_of_the_git_config(git_config):
+    git_config('[core]\n\tsshCommand = ssh -i /keys/sync_key\n')
+    assert _sync_core.git_env()['GIT_SSH_COMMAND'] == 'ssh -i /keys/sync_key -o BatchMode=yes'
+
+
+def test_a_program_in_git_ssh_is_left_alone(git_config, monkeypatch):
+    git_config('[core]\n\tsshCommand = ssh -i key\n')
+    monkeypatch.setenv('GIT_SSH', 'C:/Program Files/PuTTY/plink.exe')
+    env = _sync_core.git_env()
+    assert 'GIT_SSH_COMMAND' not in env and env['GIT_SSH'] == 'C:/Program Files/PuTTY/plink.exe'
+
+
+def test_without_a_usable_git_config_the_ssh_command_is_ssh(git_config, monkeypatch):
+    git_config('[core\n')                                         # broken: the lookup ends with an error
+    assert _sync_core.git_env()['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes'
+    monkeypatch.setattr(_sync_core, 'GIT', 'no-such-git-here')
+    assert _sync_core.git_env()['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes'
+    used_up = _sync_core.Deadline(-1)                               # no time left for the lookup
+    assert _sync_core.git_env(deadline=used_up)['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes'
 
 
 def test_run_git_hands_the_environment_and_the_deadline_to_the_child(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_SSH_COMMAND', 'ssh')
     calls = []
     monkeypatch.setattr(_sync_core, 'run_command', lambda *args: calls.append(args))
     deadline = _sync_core.Deadline(60)
     run = _sync_core.Run('push', 'shadow', cfg(), log_dir(tmp_path), str(sync_dir(tmp_path)), deadline, T0)
     run.git('ls-remote', 'origin', cwd='repo')
-    (argv, given_deadline, env, cwd), = calls
+    run.git('status')
+    (argv, given_deadline, env, cwd), second = calls
     assert argv == ['git', 'ls-remote', 'origin'] and given_deadline is deadline and cwd == 'repo'
     assert (env['GIT_TERMINAL_PROMPT'], env['GCM_INTERACTIVE'], env['GIT_ASKPASS']) == ('0', 'never', '')
-    assert env['GIT_SSH_COMMAND'].endswith(' -o BatchMode=yes')
+    assert env['GIT_SSH_COMMAND'] == 'ssh -o BatchMode=yes' and second[2] is env      # worked out once per run
 
 
-def test_the_child_really_sees_the_non_interactive_environment():
+def test_the_child_really_sees_the_non_interactive_environment(git_config):
     show = ('import os; print(os.environ["GIT_TERMINAL_PROMPT"], os.environ["GCM_INTERACTIVE"], '
             'os.environ["GIT_SSH_COMMAND"])')
     done = _sync_core.run_command([sys.executable, '-c', show], _sync_core.Deadline(30), _sync_core.git_env())
@@ -464,15 +521,16 @@ def test_the_status_line_logs_an_unreadable_state_at_most_once_an_hour(tmp_path)
     put_raw(tmp_path, '{broken')
     starts = Starts()
     for now in (T0, T0 + 60, T0 + 3599):
-        assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), now, starts)
+        _sync_core.statusline_tick(log_dir(tmp_path), cfg(), now, starts)
     assert len(sync_lines(tmp_path, 'state_unreadable')) == 1
     _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 + 3600, starts)
-    assert len(sync_lines(tmp_path, 'state_unreadable')) == 2 and len(starts.calls) == 4
+    assert len(sync_lines(tmp_path, 'state_unreadable')) == 2
+    assert len(starts.calls) == 2      # T0 and T0 + 3599; the others were within START_GAP_S of a start
 
 
 def test_the_status_line_logs_again_if_its_note_is_broken_or_cannot_be_written(tmp_path):
     put_raw(tmp_path, '{broken')
-    (sync_dir(tmp_path) / _sync_core.READ_ERROR_FILE).mkdir()      # neither readable nor replaceable
+    (tmp_path / 'log' / _sync_core.READ_ERROR_NOTE).mkdir()      # neither readable nor replaceable
     for now in (T0, T0 + 60):
         _sync_core.statusline_tick(log_dir(tmp_path), cfg(), now, Starts())
     assert len(sync_lines(tmp_path, 'state_unreadable')) == 2
@@ -489,10 +547,12 @@ def make_every_sync_file(tmp_path):
 
 
 def modes(tmp_path):
+    """The sync folder, its two files, and the start mark and the note in the log folder."""
     folder = sync_dir(tmp_path)
     return ([stat.S_IMODE(os.stat(folder).st_mode)]
-            + [stat.S_IMODE(os.stat(folder / name).st_mode) for name in ('state.json', 'sync.lock',
-                                                                          _sync_core.READ_ERROR_FILE)])
+            + [stat.S_IMODE(os.stat(path).st_mode) for path in (
+                folder / 'state.json', folder / 'sync.lock', tmp_path / 'log' / _sync_core.START_MARKS['push'],
+                tmp_path / 'log' / _sync_core.READ_ERROR_NOTE)])
 
 
 @pytest.mark.posix_only
@@ -503,7 +563,7 @@ def test_the_sync_folder_is_0700_and_its_files_0600_whatever_the_umask(tmp_path,
         make_every_sync_file(tmp_path)
     finally:
         os.umask(old)
-    assert modes(tmp_path) == [0o700, 0o600, 0o600, 0o600]
+    assert modes(tmp_path) == [0o700, 0o600, 0o600, 0o600, 0o600]
 
 
 @pytest.mark.posix_only
@@ -517,14 +577,15 @@ def test_an_open_sync_folder_of_an_earlier_umask_becomes_private(tmp_path):
 @pytest.mark.posix_only
 def test_the_files_are_0600_even_under_a_umask_that_takes_the_owner_rights(tmp_path):
     make_every_sync_file(tmp_path)
-    for name in ('state.json', 'sync.lock', _sync_core.READ_ERROR_FILE):
-        (sync_dir(tmp_path) / name).unlink()
+    for path in (sync_dir(tmp_path) / 'state.json', sync_dir(tmp_path) / 'sync.lock',
+                 tmp_path / 'log' / _sync_core.START_MARKS['push'], tmp_path / 'log' / _sync_core.READ_ERROR_NOTE):
+        path.unlink()
     old = os.umask(0o277)      # a new file would be 0400: only the explicit chmod gives 0600
     try:
         make_every_sync_file(tmp_path)
     finally:
         os.umask(old)
-    assert modes(tmp_path) == [0o700, 0o600, 0o600, 0o600]
+    assert modes(tmp_path) == [0o700, 0o600, 0o600, 0o600, 0o600]
 
 
 @pytest.mark.posix_only
@@ -647,4 +708,187 @@ def test_the_status_line_starts_a_push_on_an_empty_state(tmp_path, monkeypatch):
     starts = Starts()
     monkeypatch.setattr(_plat, 'start_detached', starts)
     assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0)
-    assert starts.calls == [_sync_core.command('push')] and sync_lines(tmp_path) == []
+    assert starts.calls == [_sync_core.command('push', '--if-due')] and sync_lines(tmp_path) == []
+
+
+# --- Review findings: no start while a push may run, one start per gap, --if-due, the watchdog, a far next_due ------
+
+def test_no_start_while_a_push_may_still_be_running(tmp_path):
+    put_state(tmp_path, State(last_attempt=T0 - 1, last_success=T0 - 3600, next_due=T0 - 10))
+    starts = Starts()
+    assert not _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0, starts)
+    assert not _sync_core.session_end(log_dir(tmp_path), cfg(), T0, starts)
+    _sync_core.session_start(log_dir(tmp_path), cfg(), T0, starts)
+    assert starts.calls == []
+    later = T0 - 1 + _sync_core.running_window_s()      # by then the watchdog has ended any push
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), later, starts)
+    assert starts.calls == [_sync_core.command('push', '--if-due')]
+
+
+def test_one_start_of_a_kind_per_start_gap(tmp_path):
+    starts = Starts()
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0, starts)
+    assert not _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 + 119, starts)
+    assert not _sync_core.session_end(log_dir(tmp_path), cfg(), T0 + 119, starts)      # also a push
+    _sync_core.session_start(log_dir(tmp_path), cfg(), T0 + 119, starts)                # a pull: another kind
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 + 120, starts)
+    assert starts.calls == [_sync_core.command('push', '--if-due'), _sync_core.command('pull', '--background'),
+                            _sync_core.command('push', '--if-due')]
+
+
+def test_a_start_mark_from_the_future_does_not_block(tmp_path):
+    starts = Starts()
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0, starts)
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 - 3600, starts)      # the clock went back
+    assert len(starts.calls) == 2
+
+
+def test_a_start_mark_that_cannot_be_written_starts_nothing(tmp_path):
+    (tmp_path / 'log' / _sync_core.START_MARKS['push']).mkdir(parents=True)
+    starts = Starts()
+    assert not _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0, starts)
+    assert not _sync_core.session_end(log_dir(tmp_path), cfg(), T0, starts)
+    assert starts.calls == []
+
+
+def test_a_log_folder_that_is_a_file_starts_nothing(tmp_path):
+    (tmp_path / 'log').write_text('', encoding='utf-8')
+    starts = Starts()
+    for minute in range(5):
+        assert not _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 + 60 * minute, starts)
+    assert starts.calls == []
+
+
+def test_a_file_as_the_sync_folder_starts_one_push_per_gap_and_logs_once_an_hour(tmp_path):
+    (tmp_path / 'log').mkdir()
+    sync_dir(tmp_path).write_text('', encoding='utf-8')
+    starts = Starts()
+    for minute in range(10):
+        _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0 + 60 * minute, starts)
+    assert len(starts.calls) == 5 and len(sync_lines(tmp_path, 'state_unreadable')) == 1
+
+
+def test_a_push_if_due_after_another_one_pushed_ends_without_a_change(tmp_path):
+    calls = []
+    assert push(tmp_path, calls.append, T0, if_due=True) == 0
+    before = (sync_dir(tmp_path) / 'state.json').read_bytes()
+    assert push(tmp_path, calls.append, T0 + 5, if_due=True) == 0
+    assert len(calls) == 1 and (sync_dir(tmp_path) / 'state.json').read_bytes() == before
+    assert push(tmp_path, calls.append, T0 + 5) == 0 and len(calls) == 2      # T2 does not ask for due
+
+
+@pytest.mark.parametrize('level', [0, 3])
+def test_a_next_due_further_ahead_than_any_wait_counts_as_due(tmp_path, level):
+    put_state(tmp_path, State(last_success=T0 - 90000, backoff_level=level, next_due=T0 + 100 * 365 * 86400,
+                              last_error='network' if level else None))
+    starts, calls = Starts(), []
+    assert _sync_core.statusline_tick(log_dir(tmp_path), cfg(), T0, starts)
+    assert _sync_core.session_end(log_dir(tmp_path), cfg(), T0 + 300, starts)
+    assert push(tmp_path, calls.append, T0 + 400, if_due=True) == 0 and len(calls) == 1
+
+
+def test_the_horizon_is_the_longer_wait_plus_the_jitter():
+    assert _sync_core.max_wait_s(cfg()) == pytest.approx(1.2 * 6 * 3600)
+    assert _sync_core.max_wait_s(cfg(backoff_max_h=0.1, interval_min=60)) == pytest.approx(1.2 * 3600)
+    assert _sync_core.max_wait_s(cfg(backoff_max_h=0.01, interval_min=3)) == pytest.approx(1.2 * 600)
+    at_the_edge = State(next_due=T0 + 1.2 * 6 * 3600)
+    assert _sync_core.bounded(at_the_edge, T0, cfg()) == at_the_edge
+    assert _sync_core.bounded(State(next_due=T0 + 1.2 * 6 * 3600 + 1), T0, cfg()).next_due is None
+
+
+@pytest.fixture
+def quick_watchdog(monkeypatch):
+    """The watchdog fires 0.1 s after the deadline; its exit is recorded instead of ending pytest."""
+    monkeypatch.setattr(_sync_core, 'KILL_WAIT_S', 0.05)
+    monkeypatch.setattr(_sync_core, 'RUN_SLACK_S', 0.05)
+    exits, released = [], threading.Event()
+
+    def record(code):
+        exits.append(code)
+        released.set()
+    monkeypatch.setattr(_sync_core, '_exit', record)
+    return exits, released
+
+
+def test_the_watchdog_ends_a_push_whose_runner_hangs_without_a_child(tmp_path, quick_watchdog):
+    exits, released = quick_watchdog
+    seen = []
+
+    def hanging(run):
+        assert released.wait(30)
+        seen.append((state_of(tmp_path), [r['reason'] for r in sync_lines(tmp_path, 'failure')]))
+        raise _sync_core.SyncError('internal', 'released by the test')      # a real process never gets here
+    begin = time.monotonic()
+    _sync_core.push(log_dir(tmp_path), cfg(), hanging, clock=lambda: T0, rand=lambda: 0.5, timeout_s=0.1)
+    assert time.monotonic() - begin < 10 and exits == [1]
+    (state, reasons), = seen
+    assert (state.last_error, state.backoff_level) == ('timeout', 1)
+    assert reasons == ['the run outlived its deadline, the process was ended']
+
+
+def test_the_watchdog_ends_the_children_of_a_run(tmp_path, quick_watchdog):
+    exits, _released = quick_watchdog
+    codes = []
+
+    def runner(run):
+        codes.append(_sync_core.run_command([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                            _sync_core.Deadline(60)).returncode)
+    begin = time.monotonic()
+    _sync_core.push(log_dir(tmp_path), cfg(), runner, clock=lambda: T0, rand=lambda: 0.5, timeout_s=0.1)
+    assert time.monotonic() - begin < 10 and exits == [1] and codes[0] != 0 and _sync_core._children == set()
+
+
+def test_the_watchdog_ends_a_hanging_pull(tmp_path, quick_watchdog, monkeypatch):
+    exits, released = quick_watchdog
+    monkeypatch.setattr(_sync_core, 'PULL_BACKGROUND_TIMEOUT_S', 0.1)
+
+    def hanging(run):
+        assert released.wait(30)
+    _sync_core.pull(log_dir(tmp_path), cfg(), hanging, background=True)
+    assert exits == [1]
+    line = sync_lines(tmp_path, 'failure')[0]
+    assert (line['action'], line['category']) == ('pull', 'timeout')
+
+
+# The watchdog for real: os._exit ends the process, its lock goes with it.
+WATCHED_PROCESS = textwrap.dedent('''
+    import sys, time
+    sys.path.insert(0, sys.argv[1])
+    import _sync_core, sync
+    _sync_core.PUSH_TIMEOUT_S, _sync_core.KILL_WAIT_S, _sync_core.RUN_SLACK_S = 0.2, 0.1, 0.1
+    sys.exit(sync.main(['push', '--now'], push_runner=lambda run: time.sleep(60)))
+''')
+
+
+def test_a_push_process_whose_runner_hangs_is_ended_and_frees_the_lock(tmp_path, monkeypatch):
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'sync': {'mode': 'shadow'}}), encoding='utf-8')
+    monkeypatch.setenv('CCUC_CONFIG', str(config))
+    begin = time.monotonic()
+    done = subprocess.run([sys.executable, '-c', WATCHED_PROCESS, HOOKS], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1 and time.monotonic() - begin < 30, done.stderr
+    assert state_of(tmp_path).last_error == 'timeout'
+    assert sync_lines(tmp_path, 'failure')[0]['reason'] == 'the run outlived its deadline, the process was ended'
+    with _sync_core.try_lock(str(sync_dir(tmp_path))) as held:
+        assert held
+
+
+def test_the_watchdog_still_ends_the_run_if_the_state_cannot_be_written(tmp_path, quick_watchdog, monkeypatch):
+    exits, released = quick_watchdog
+
+    def hanging(run):
+        def refuse(*_args):
+            raise OSError('disk full')
+        monkeypatch.setattr(_sync_core, 'write_state', refuse)
+        assert released.wait(30)
+    with pytest.raises(OSError):      # only here, after the recorded exit, the push itself meets the full disk
+        _sync_core.push(log_dir(tmp_path), cfg(), hanging, clock=lambda: T0, rand=lambda: 0.5, timeout_s=0.1)
+    assert exits == [1] and sync_lines(tmp_path, 'failure')[0]['category'] == 'timeout'
+
+
+def test_session_start_with_a_broken_state_and_a_held_lock_still_pulls(tmp_path):
+    put_raw(tmp_path, '{broken')
+    starts = Starts()
+    with _sync_core.try_lock(str(sync_dir(tmp_path))):
+        _sync_core.session_start(log_dir(tmp_path), cfg(), T0, starts)
+    assert starts.calls == [_sync_core.command('pull', '--background')]

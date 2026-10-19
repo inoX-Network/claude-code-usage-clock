@@ -673,7 +673,7 @@ def test_a_due_sync_is_started_detached_after_the_line(tmp_path, monkeypatch, ca
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
     assert statusline.main() == 0
     (argv, printed_before), = starts
-    assert argv == _sync_core.command('push') and plain(printed_before).strip() == 'Claude'
+    assert argv == _sync_core.command('push', '--if-due') and plain(printed_before).strip() == 'Claude'
 
 
 def test_no_sync_is_started_with_sync_off_or_when_it_is_not_due(tmp_path, monkeypatch):
