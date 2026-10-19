@@ -2110,9 +2110,24 @@ def _clone_request(row: dict) -> _transcripts.Request:
 
 def merge_measurements(measurements: list[Measurement]) -> list[Measurement]:
     """The measurements of all machines in time order; equal ones (both values and both reset times) within
-    SAME_MEASUREMENT_S of one that is kept are one measurement: every machine measures the same subscription."""
+    SAME_MEASUREMENT_S of one that is kept are one measurement: every machine measures the same subscription. Within
+    a window (the same reset time, within RESET_TOLERANCE_S) a value only rises: a value below the highest one of its
+    window is the stale state of another machine and is raised to it, or the stretches around it would count as a
+    reset and the rise after it twice. A value without its reset time is left as it is (drop_noise judges it)."""
     kept, last = [], {}
+    peaks: dict[str, list[list[float]]] = {metric: [] for metric in METRICS}     # [reset time, highest value]
     for m in sorted(measurements, key=lambda m: m.t):
+        for metric in METRICS:
+            value, resets = getattr(m, metric), getattr(m, metric + '_resets')
+            if value is None or resets is None:
+                continue
+            window = next((peak for peak in peaks[metric] if abs(peak[0] - resets) < RESET_TOLERANCE_S), None)
+            if window is None:
+                peaks[metric].append([resets, value])
+            elif value < window[1]:
+                m = m._replace(**{metric: window[1]})
+            else:
+                window[1] = value
         values = m[1:]
         if values in last and m.t - last[values] <= SAME_MEASUREMENT_S:
             continue

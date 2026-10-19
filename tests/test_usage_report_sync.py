@@ -244,6 +244,29 @@ def test_measurements_of_other_machines_fill_the_gaps_of_this_one(world, synced)
     assert world.report('--day', '2026-10-13')['allocation']['five']['counted_points'] == 4
 
 
+def test_a_stale_measurement_of_another_machine_does_not_inflate_the_rise(world, synced):
+    world.history([measured('2026-10-13T10:00:00Z', 40, 20), measured('2026-10-13T10:10:00Z', 41, 20),
+                   measured('2026-10-13T10:20:00Z', 42, 20)])
+    spend(world, ('2026-10-13T10:01:00Z', 1.0), ('2026-10-13T10:11:00Z', 1.0), ('2026-10-13T10:19:00Z', 1.0),
+          session='dddddddd-1')
+    synced.clone.machine(LAPTOP)
+    synced.clone.history(LAPTOP, [measured('2026-10-13T10:05:00Z', 39, 20), measured('2026-10-13T10:15:00Z', 39, 20)])
+    five = world.report('--day', '2026-10-13')['allocation']['five']
+    assert five['counted_points'] == 2 and five['skipped_sections'] == 0
+    assert world.report('--day', '2026-10-13', '--local')['allocation']['five']['counted_points'] == 2
+
+
+def test_within_a_window_a_value_only_rises_a_new_window_starts_anew():
+    m = report_module.Measurement
+    kept = report_module.merge_measurements([
+        m(0, 40, 20, 1000.0, 9000.0), m(100, 39, 21, 1000.0, 9000.0),      # 5h stale, week rose
+        m(300, 38, 21, 1030.0, 9000.0),                                    # the same window within 60 s of its reset
+        m(400, 2, 22, 19000.0, 9000.0),                                    # a new 5h window: falls
+        m(500, 1, 22, None, None)])                                        # no reset times: not judged
+    assert [(x.t, x.five, x.week) for x in kept] == [(0, 40, 20), (100, 40, 21), (300, 40, 21), (400, 2, 22),
+                                                     (500, 1, 22)]
+
+
 def test_measurements_further_apart_than_two_minutes_stay_two(world):
     m = report_module.Measurement
     kept = report_module.merge_measurements([m(0, 1, 2, None, None), m(121, 1, 2, None, None), m(60, 1, 2, None, None),
