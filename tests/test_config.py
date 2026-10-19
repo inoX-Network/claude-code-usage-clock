@@ -419,10 +419,17 @@ def test_start_estimate_that_is_not_positive_and_finite_falls_back_and_logs(tmp_
 
 # --- sync -----------------------------------------------------------------------------------------------------------
 
+SYNC_CORE_KEYS = ('mode', 'interval_min', 'backoff_max_h', 'pull_timeout_s')      # the keys of the sync core
+
+
+def core():
+    return {key: _config.load()['sync'][key] for key in SYNC_CORE_KEYS}
+
+
 def test_sync_is_off_by_default_with_the_documented_waits(tmp_path):
-    assert _config.load()['sync'] == {'mode': 'off', 'interval_min': 30, 'backoff_max_h': 6, 'pull_timeout_s': 5}
+    assert core() == {'mode': 'off', 'interval_min': 30, 'backoff_max_h': 6, 'pull_timeout_s': 5}
     write_config(tmp_path, {'sync': {'mode': 'shadow', 'interval_min': 5, 'backoff_max_h': 0.5, 'pull_timeout_s': 2.5}})
-    assert _config.load()['sync'] == {'mode': 'shadow', 'interval_min': 5, 'backoff_max_h': 0.5, 'pull_timeout_s': 2.5}
+    assert core() == {'mode': 'shadow', 'interval_min': 5, 'backoff_max_h': 0.5, 'pull_timeout_s': 2.5}
     assert log_lines(tmp_path) == []      # an interval below 10 is valid here; the sync core raises it
 
 

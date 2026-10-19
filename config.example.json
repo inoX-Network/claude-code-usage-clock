@@ -56,8 +56,13 @@
   },
   "sync": {
     "mode": "off",
+    "machine_name": "",
     "interval_min": 30,
     "backoff_max_h": 6,
-    "pull_timeout_s": 5
+    "pull_timeout_s": 5,
+    "project_labels": "plain",
+    "project_aliases": {},
+    "label_salt": "",
+    "keep_request_months": 3
   }
 }

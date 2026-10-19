@@ -341,6 +341,121 @@ the number of decisions by kind: `allow`, `warn`, `ask`, `deny` (`other` for a d
 `guard_reasons` has the same shape with one more level: for `warn`, `ask` and `deny` a map from reason to count.
 Decisions of days archived before reasons were kept are in `guards` but not in `guard_reasons`.
 
+## The sync repository
+
+With the sync, every machine writes its usage data to a private git repository of the user, and the report of each
+machine reads the folders of the others. `hooks/sync_format.py` is the format of that repository: what is written, how
+it is laid out, and how it is read. Each machine writes only below its own folder:
+
+```
+machines/<machine_id>/
+  machine.json
+  status.json
+  requests/<YYYY-MM>/<session_id>.jsonl
+  history/<YYYY-MM>.jsonl
+  gates/<YYYY-MM>.jsonl
+  days/<YYYY-MM>.jsonl
+```
+
+- `<machine_id>` is a UUID4, made at the first activation and kept in `<log_dir>/sync/machine_id` (mode 0600). A
+  folder whose name is not a UUID4 is not read.
+- `requests/<YYYY-MM>/<session_id>.jsonl`, `history/<YYYY-MM>.jsonl` and `gates/<YYYY-MM>.jsonl` are named after the
+  month of the line's `t` in UTC, `days/<YYYY-MM>.jsonl` after the month of its `day`. No file name has a colon; times
+  are only in the lines.
+- Every `.jsonl` file is UTF-8 with one record per line and is only appended to. `status.json` and `machine.json` are
+  the only files that are overwritten, and only by their own machine: `status.json` on every push, `machine.json` only
+  when `name` or `platform` changed (it keeps its `created`). Old request months are compacted (see below).
+- Times are UTC in the form `2026-10-13T12:30:00Z`, with three decimals of a second where the transcript has them
+  (`2026-10-13T12:30:00.250Z`).
+
+Every line and file has `v`, the version of its format (now `1`). A reader skips a line of another version.
+
+### `machine.json` and `status.json`
+
+| Field | Meaning |
+|---|---|
+| `v` | The version of the format, `1`. |
+| `name` | The name of the machine: `sync.machine_name`, or `machine-` and the first 6 characters of its id if that is empty. The host name is never used. A changed name rewrites `machine.json`. |
+| `platform` | `linux`, `darwin` or `windows`. |
+| `schema` | The version of the line formats the machine writes (now `1`), in both files. |
+| `created` | When the machine first wrote to the repository. |
+| `last_success` | `status.json`: the time of the machine's last successful push. |
+| `tool_version` | `status.json`: the version of the usage clock that pushed. |
+
+### Request lines (`requests/<YYYY-MM>/<session_id>.jsonl`)
+
+One line per request of a transcript, made by the same rules as in the local report (of the lines of one request the
+last counts; the type of a subagent; the first request of a transcript). A request that changes later is appended again
+with the same `k`: a reader keeps, per `k`, the line it read last.
+
+| Field | Meaning |
+|---|---|
+| `v` | `1`. |
+| `t` | The time of the request. |
+| `k` | The key of the request: the first 16 hex characters of SHA-256 of the message id, a line break and the request id. The ids themselves are not written. |
+| `sid` | The session id. |
+| `sub` | `null` for the main session, else the agent type of the subagent as the local report names it (`unknown` or `other` where the transcript does not say). |
+| `proj` | The project label after `sync.project_labels`, see below. |
+| `model` | The model name as in the transcript; a name with characters outside `A-Z a-z 0-9 _ . : / -` or longer than 64 is written as `?`. |
+| `in`, `cw5`, `cw1h`, `cr`, `out` | Tokens: input, cache write for 5 minutes, cache write for 1 hour, cache read, output. Whole numbers. |
+| `think`, `ws`, `wf` | Thinking tokens, web searches, web fetches; `null` where the transcript does not report them. |
+| `first` | `true` for the first request of a transcript (a start, see `startup`). |
+
+`sync.project_labels` decides what `proj` holds, and the project names in the day lines (`stats.clis[*].label`):
+
+- `plain` (the default): the folder name as the local report shows it. Everyone in the private repository sees the
+  project names.
+- `alias`: the entry of the folder in `sync.project_aliases`, looked up by the folder name as it is, then as the report
+  shows it; a folder without one becomes `unbenannt-` and the first 8 hex characters of SHA-256 of its name.
+- `hash`: `p-` and the first 12 hex characters of SHA-256 of `sync.label_salt`, a line break and the folder name.
+  Without a salt the export stops with the error category `internal`; it never falls back to `plain`.
+
+### Measurement, gate and day lines
+
+| Field | Meaning |
+|---|---|
+| `five`, `week`, `five_resets`, `week_resets` | `history/`: one measurement, as in `usage-history.jsonl` (see `subscription`): the 5h and weekly percentage and their reset times in Unix seconds, each `null` if unknown, never negative; with `v` and `t`. |
+| `hook` | `gates/`: the gate, `spawn_gate` or `soft_stop`; with `v` and `t` (the time of the decision). |
+| `decision` | `gates/`: the decision as the local log names it, read the way the local report reads it: `allow`, `warn`, `ask`, `deny`, and `error` for a soft stop that failed; `other` if the log holds no lower-case word of at most 20 letters. |
+| `mode` | `gates/`: the mode as the local log names it, `shadow` or `enforce`; `unknown` if the log holds no lower-case word. |
+| `reason` | `gates/`: the text of the local log line before its first colon, quoted parts as `…`, percentages as `N %`, other characters outside a small set as `?`, at most 60 characters. The question of the ask dialog, which names the agent, is written as `7-day window at N %`. Never more than the local log holds. |
+| `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl`: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). They are taken over as they are, with one exception: the project name of each session (`stats.clis[*].label`, the folder name) becomes its label after `sync.project_labels`, the same as `proj`. With `plain` the line is the archive line byte for byte; with `alias` or `hash` no folder name is left in it. A `clis` that is not an object of entries with a text `label` stops the export (category `internal`). `sync_format.py` checks only the envelope (`v`, `day`, `stats` an object); the report checks the figures in `stats` with the rules of its day archive before it uses them. |
+
+### What is never written
+
+The writer takes over only the fields above and checks each value; any other field is dropped. No prompt, message
+text, command, path, file name, host name (except a `name` the user chose), raw message or request id, and no content
+of CLAUDE.md, skills or agents. A value that does not fit the format stops the export (category `internal`).
+
+### Reading
+
+Everything below `machines/` counts as foreign data. A reader takes only regular files (checked with `lstat`) with a
+single link and names of the layout, at most 8 MB per file, and never a path outside the repository folder. A line
+must lie in the file of its month (`t`, or `day` for a day line). It never runs anything and ignores executable bits.
+What it skips it counts:
+
+| Counter | What was skipped |
+|---|---|
+| `symlinks` | A link, as a file or as a folder. |
+| `hardlinks` | A file with more than one hard link (it could be shared with a file outside the repository; git never makes one). |
+| `oversized` | A file larger than 8 MB, also one that grew past 8 MB while it was read. |
+| `irregular` | Anything that is neither a regular file nor a folder (a named pipe, a device), also a file that turned into one after it was checked. |
+| `bad_names` | A file or folder whose name is not one of the layout, or that resolves outside the repository folder. |
+| `unreadable` | A file or folder that could not be opened. |
+| `unknown_version` | A line or file with another `v`. |
+| `broken_lines` | A line or file that is not UTF-8 JSON or does not fit its format. |
+| `misplaced` | A line in the file of another month: a request, measurement or gate line whose `t`, or a day line whose `day`, is not in the month the file or folder is named after. |
+
+### Compacting (`sync.keep_request_months`)
+
+A machine removes month folders `requests/<YYYY-MM>/` from its own folder once they are older than
+`sync.keep_request_months` full months (default 3, at least 1; with 3, in October the months up to June go, July to
+September and October stay), as a commit in the checked-out repository. A month goes only if, for every local day on
+which it has requests, a day line lies in the file of its month in `days/`; if one is missing, or anything in the month
+could not be read or lies in the wrong month, it stays. The day
+lines stay. A compacted month therefore has, in a report, only the local split of each machine from its day line, no
+split across machines. The git history is never rewritten.
+
 ## Known limits
 
 - **Projects are folder names.** The report knows no paths, on purpose. Two folders of the same name in different places are
