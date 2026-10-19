@@ -24,6 +24,7 @@ hooks/                    installed as one directory, e.g. ~/.claude/hooks/usage
   _spawn_check.py         model/effort checks for Agent, Workflow scripts and Skill forks
   _sync_core.py           the sync core: state, due check, lock, backoff, timeouts, triggers (<log_dir>/sync/)
   _sync_export.py         the sync export: the new local data appended to the own folder of the sync clone, with a cursor (<log_dir>/sync/cursor.json)
+  _sync_git.py            the git work of the sync: the push (remote, visibility, export, commit guard, commit, push), the clone and fast-forward the pull uses
   _transcripts.py         reads the transcripts: requests, token counts, agent types, starts (no hook uses it: the usage report and the sync export do)
   sync_format.py          the sync repository: layout, line formats, machine id, project labels, writing (allowlist), reading (foreign data), compacting; see docs/report-format.md
 tools/
@@ -453,8 +454,8 @@ inside the check, so a failed import fails open like the imports in `main()`.
 
 `_sync_core.py` decides whether and when this machine pushes its usage data to the sync repo, and gives every run
 its frame. It does not sync: the git work is a function handed in (`Runner`, called with a `Run`: kind, mode, config,
-folders, deadline), the push from 0034-SYNC-PUSH and the pull from 0034-SYNC-REPORT. Until they exist, `sync.py` has
-`git_push` and `git_pull`, which fail with the category `internal`: logged and backed off like any failure, never a
+folders, deadline), the push from 0034-SYNC-PUSH (`_sync_git.push`) and the pull from 0034-SYNC-REPORT. Until the
+pull exists, `sync.py` has `git_pull`, which fails with the category `internal`: logged like any failure, never a
 success. `sync.mode` `off` (the default) makes every entry point do nothing; `shadow` and `on` run the core alike.
 
 - **State** `<log_dir>/sync/state.json`: `{"last_attempt", "last_success", "backoff_level", "next_due",
@@ -548,6 +549,68 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
   cannot be written: `SyncError('internal')`. A source line that does not fit or a file that cannot be read is
   counted (`Result.skipped`, `Result.unreadable_files`) and left out. With a deadline the export stops at the next
   file once 30 s are left for commit and push (`Result.complete` false); the next run goes on from there.
+
+## Sync push
+
+`_sync_git.push(run)` is the runner of `sync.py push`: it runs under the lock of the core, which wrote `last_attempt`
+before, and raises `SyncError` with a fixed text (never output of git) when it fails. Whatever is unclear ends without
+a push; a public repository is never written to. The clone `<log_dir>/sync/repo` is made by the installer
+(`--sync-repo`, 0034-SYNC-INSTALL); the push never clones (a missing clone is `internal`, `the sync clone is missing,
+run the installer with --sync-repo`).
+
+- **Git in the clone** (`Clone.git`): GIT_DIR and GIT_WORK_TREE set to the clone (a GIT_DIR, GIT_WORK_TREE, index,
+  object or date variable of the caller is dropped), the environment of `git_env` (its core.sshCommand is then the
+  clone's own), `LC_ALL=C` and `LANGUAGE=C` (git translates its messages after the locale, and errors are told apart
+  by their text), `GIT_EDITOR=:`, the identity `usage-clock <usage-clock@sync.invalid>` as GIT_AUTHOR_* and
+  GIT_COMMITTER_* (beats any user.name and any variable of the caller; `.invalid` is never a mailbox), and
+  `-c core.hooksPath=<log_dir>/sync/no-hooks` (an empty folder of its own, else `internal`) with fsmonitor, signing,
+  automatic gc and maintenance, submodules, autostash and follow-tags switched off. No hook runs on the side of the
+  clone: `--no-verify` alone would still run post-commit, reference-transaction and a global hooksPath of the user,
+  and a detached gc would outlive the lock.
+- **2. Remote** (`open_clone`, shared with the pull): `sync.repo` set and `owner/name`; the clone a real folder with
+  a `.git` folder (a link, a file or a `.git` file: `internal`); a branch checked out; `git remote get-url --all
+  origin` and `--push --all` (insteadOf and pushInsteadOf applied) each give exactly the one URL of `sync.repo` and
+  `sync.transport`: `https://github.com/<owner>/<name>.git` or `git@github.com:<owner>/<name>.git`. A second URL, a
+  push URL elsewhere or a rewrite to elsewhere: `internal`.
+- **3. Visibility** (`check_visibility`, the installer uses it too), unless `<log_dir>/sync/visibility.json` (0600)
+  says `private` for this repository and is younger than 24 h (a note from the future or of another repository does
+  not count): `git -c credential.helper= ls-remote --heads https://github.com/<owner>/<name>.git` in the sync folder
+  with no GIT_* of the caller, `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` (no credential helper, no
+  insteadOf, no proxy of the git config), HOME in the sync folder (no `.netrc`), `XDG_CONFIG_HOME` dropped, no prompt
+  or askpass, C messages, no repository above the sync folder, at most 15 s. The table `VISIBILITY_TABLE`: exit 0 is
+  public, `visibility` (the core blocks every push until the installer runs again); exit 128 with `could not read
+  Username for 'https://github.com': terminal prompts disabled` is private (noted, on we go; a private and a missing
+  repository look alike anonymously, both are not public); anything else (an unknown host, another exit, another
+  text, a timeout, no git) is unclear, `network`, no push.
+- **4. Update:** fetch (`--prune --no-tags`, all branches to `refs/remotes/origin/`); behind the remote: `merge
+  --ff-only` (refused by git: `conflict`). Ahead, or apart because commits of an earlier run were not pushed (shadow,
+  a failed push): nothing yet, see 7b. A fetch that fails is `auth` (AUTH_TEXTS: no user name, permission denied,
+  repository not found, 401/403 …) or `network`.
+- **5. Export** (`_sync_export.export`) and **5b. compacting** (`sync_format.compact`): the request months beyond
+  `sync.keep_request_months` with a day line for every day with requests. The months that may go are taken before
+  anything is removed and noted in `<log_dir>/sync/compacting.json` (0600) first; without the note nothing is
+  removed. The note is cleared after the commit, so a run that ended between compacting and committing leaves
+  deletions the next run still commits.
+- **6. Commit guard** (`guard`): the own folder is staged (`git add --all --force`: a `.gitignore` of the repository
+  hides nothing), then every path of `git status --porcelain=v1 -z --untracked-files=all --no-renames` and of
+  `git diff --cached --raw -z --no-renames` is checked: below `machines/<own id>/` as a plain path (no `.`, `..` or
+  empty part, no backslash; a rename gives both paths), nothing git did not take (untracked, unstaged, unmerged),
+  every added or changed path a regular file of the layout (mode 100644, `lstat` a regular file: no link, no
+  submodule, no executable), every deletion a request file of a month of step 5 or the note. Else `internal`, no
+  commit. Nothing changed: no commit, a success.
+- **7. Commit:** `status.json` (`last_success` the time of the run, `tool_version`, `schema`), staged and guarded
+  with the rest, `git commit -m "sync: <name> <time UTC>"` (`sync_format.display_name`). **7b.** A history that went
+  apart is rebased onto the remote (never merged); a conflict aborts the rebase, `conflict`, and the own commits stay.
+- **8. Shadow:** no push; one log line `shadow` with `lines` and `bytes` of this export (`committed, not pushed` or
+  `nothing new, not pushed`). The commits gather and go out with the first push in `on`.
+- **9. Push** (only if the clone is ahead): first every path from the fork with the remote to HEAD passes the guard
+  again (deletions only of request files), so a commit made by hand in the clone never leaves; then `git push
+  --porcelain origin HEAD:refs/heads/<branch>`. Refused as `[rejected] (fetch first)` or `(non-fast-forward)`: fetch,
+  rebase, guard, push once more; refused again: `rejected`. `[remote rejected]` (a rule of the repository):
+  `rejected`. Credentials missing or refused: `auth`; anything else: `network`.
+- **Nothing exported is thrown away:** no reset, checkout, clean or stash anywhere, also not after `conflict` or a
+  failed guard (the export cursor has moved on). The lines wait in the clone, committed or not, and go with the next
+  push that passes.
 
 ## Log
 

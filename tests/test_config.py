@@ -447,3 +447,29 @@ def test_a_broken_sync_number_falls_back_to_its_default_and_logs(tmp_path, key, 
     cfg = _config.load()['sync']
     assert cfg[key] == _config.DEFAULTS['sync'][key] and cfg['mode'] == 'on'
     assert f'sync.{key}: ' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('value', ['owner/name', 'inoX-Network/usage.sync', 'a/.github', 'o/_x-y.z',
+                                   f'{"o" * 39}/{"n" * 100}'])
+def test_a_sync_repo_of_the_form_owner_name_is_taken(tmp_path, value):
+    write_config(tmp_path, {'sync': {'repo': value, 'transport': 'ssh'}})
+    assert (_config.load()['sync']['repo'], _config.load()['sync']['transport']) == (value, 'ssh')
+    assert log_lines(tmp_path) == []
+
+
+@pytest.mark.parametrize('value', ['../name', 'owner/../name', 'owner/..', 'owner/.', 'owner/na..me', 'own er/name',
+                                   'owner/na me', 'owner/name/more', 'owner', '/name', 'owner/', '-owner/name',
+                                   'owner/name\n', 'https://github.com/owner/name', 'git@github.com:owner/name',
+                                   'owner\\name', f'{"o" * 40}/name', f'owner/{"n" * 101}', 'ownér/name', 5])
+def test_a_sync_repo_that_is_not_owner_name_falls_back_to_empty_and_logs(tmp_path, value):
+    write_config(tmp_path, {'sync': {'repo': value, 'mode': 'on'}})
+    cfg = _config.load()['sync']
+    assert (cfg['repo'], cfg['mode']) == ('', 'on')
+    assert 'sync.repo: ' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('value', ['http', 'git', 'SSH', ''])
+def test_an_unknown_sync_transport_falls_back_to_https_and_logs(tmp_path, value):
+    write_config(tmp_path, {'sync': {'transport': value}})
+    assert _config.load()['sync']['transport'] == 'https'
+    assert 'sync.transport: must be one of https|ssh, using default' in log_lines(tmp_path)[0]['reason']
