@@ -126,7 +126,7 @@ def test_reset_times_use_the_time_zone_of_the_clock_not_utc():
     assert usage_clock.time_text(now) == 'Now: Wed 14 Jan 2026 22:30'
 
 
-@pytest.mark.skipif(not hasattr(time, 'tzset'), reason='switching the local time zone needs time.tzset')
+@pytest.mark.posix_only
 def test_a_local_reset_behind_a_daylight_saving_switch_keeps_its_own_offset(monkeypatch):
     with monkeypatch.context() as patch:
         patch.setenv('TZ', 'CET-1CEST,M3.5.0,M10.5.0/3')    # Central Europe: summer time ends Sun 25 Oct 2026
