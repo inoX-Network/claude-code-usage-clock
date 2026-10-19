@@ -534,7 +534,7 @@ def test_a_held_lock_reads_the_clone_as_it_is(world, synced):
         report = world.report('--day', '2026-10-13', '--sync')
     assert synced.pulls == [] and synced.pushes == [] and report['total']['requests'] == 3
     assert report['coverage']['sync']['pull']['status'] == 'locked'
-    assert report['coverage']['sync']['push'] == {'status': 'locked', 'category': None}
+    assert report['coverage']['sync']['push'] == {'status': 'locked', 'category': None, 'detail': None}
     assert 'another sync run holds the lock' in report['coverage']['sync']['text']
 
 
@@ -545,7 +545,7 @@ def test_sync_pushes_inside_a_backoff(world, synced):
     synced.state(backoff_level=2, next_due=NOW + 3600, last_error='network', last_success=NOW - 7200)
     report = world.report('--sync')
     assert len(synced.pushes) == 1 and synced.read_state().backoff_level == 0
-    assert report['coverage']['sync']['push'] == {'status': 'ok', 'category': None}
+    assert report['coverage']['sync']['push'] == {'status': 'ok', 'category': None, 'detail': None}
     assert 'push ok' in report['coverage']['sync']['text']
 
 
@@ -560,11 +560,22 @@ def test_sync_does_not_push_after_visibility_and_says_so(world, synced):
     assert synced.read_state().last_error == 'visibility'
 
 
+def test_the_push_of_sync_reports_its_own_run_not_a_change_of_the_state(world, synced, monkeypatch):
+    world.projects.mkdir()
+
+    def another_run_holds_the_lock(log_dir, cfg, runner, **kwargs):
+        synced.state(backoff_level=1, next_due=NOW + 1800, last_error='network')     # that run failed meanwhile
+        return _sync_core.Outcome('locked')
+    monkeypatch.setattr(_sync_core, 'push_outcome', another_run_holds_the_lock)
+    assert world.report('--sync')['coverage']['sync']['push'] == {'status': 'locked', 'category': None,
+                                                                  'detail': None}
+
+
 def test_a_failed_push_of_sync_is_named_and_the_report_goes_on(world, synced):
     world.projects.mkdir()
     synced.push_error = ('auth', 'no credentials')
     report = world.report('--sync')
-    assert report['coverage']['sync']['push'] == {'status': 'failed', 'category': 'auth'}
+    assert report['coverage']['sync']['push'] == {'status': 'failed', 'category': 'auth', 'detail': 'no credentials'}
     assert 'push failed (auth)' in report['coverage']['sync']['text'] and len(synced.pulls) == 1
 
 
@@ -573,7 +584,7 @@ def test_a_sync_folder_that_cannot_be_used_fails_push_and_pull_but_not_the_repor
     shutil.rmtree(world.log / 'sync')
     (world.log / 'sync').write_text('', encoding='utf-8')
     sync_part = world.report('--sync')['coverage']['sync']
-    assert sync_part['push'] == {'status': 'failed', 'category': 'internal'}
+    assert sync_part['push'] == {'status': 'failed', 'category': 'internal', 'detail': 'the sync folder cannot be used'}
     assert sync_part['pull']['status'] == 'failed' and sync_part['pull']['category'] == 'internal'
 
 

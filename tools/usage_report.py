@@ -2158,17 +2158,13 @@ def _state(log_dir: str) -> _sync_core.State:
 
 def sync_push(log_dir: str, cfg: dict, now: float) -> dict:
     """`--sync`: the push of this machine past the wait and the backoff (`sync.py push --now`), never past the block
-    after `visibility` and never past the lock. Its status: `ok`, `failed` (with the category), `blocked`, `locked`."""
-    before = _state(log_dir)
+    after `visibility` and never past the lock. Its status: `ok`, `failed` (with the category), `blocked`, `locked`;
+    `detail` is the fixed text of the error (never output of git)."""
     try:
-        code = _sync_core.push(log_dir, cfg, _sync_git.push, forced=True, clock=lambda: now)
+        outcome = _sync_core.push_outcome(log_dir, cfg, _sync_git.push, forced=True, clock=lambda: now)
     except OSError:
-        return {'status': 'failed', 'category': 'internal'}
-    after = _state(log_dir)
-    if after == before:      # nothing ran: blocked after `visibility`, or another run holds the lock
-        return {'status': 'blocked', 'category': 'visibility'} if before.blocked else {'status': 'locked',
-                                                                                       'category': None}
-    return {'status': 'ok', 'category': None} if code == 0 else {'status': 'failed', 'category': after.last_error}
+        return {'status': 'failed', 'category': 'internal', 'detail': 'the sync folder cannot be used'}
+    return {'status': outcome.status, 'category': outcome.category, 'detail': outcome.detail or None}
 
 
 def sync_pull(log_dir: str, cfg: dict, now: float, wanted: bool, forced: bool) -> dict:

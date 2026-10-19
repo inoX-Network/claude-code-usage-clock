@@ -703,12 +703,12 @@ def test_a_failed_pull_is_logged_with_its_category_and_leaves_last_pull(tmp_path
 
 def test_the_outcome_of_a_pull_names_how_it_ended(tmp_path):
     outcome = _sync_core.pull_outcome
-    assert outcome(log_dir(tmp_path), cfg(mode='off'), ok, background=False) == _sync_core.PullOutcome('off')
-    assert outcome(log_dir(tmp_path), cfg(), ok, background=False, clock=lambda: T0) == _sync_core.PullOutcome('ok')
-    assert outcome(log_dir(tmp_path), cfg(), failing('network'), background=False) == _sync_core.PullOutcome(
+    assert outcome(log_dir(tmp_path), cfg(mode='off'), ok, background=False) == _sync_core.Outcome('off')
+    assert outcome(log_dir(tmp_path), cfg(), ok, background=False, clock=lambda: T0) == _sync_core.Outcome('ok')
+    assert outcome(log_dir(tmp_path), cfg(), failing('network'), background=False) == _sync_core.Outcome(
         'failed', 'network', 'network for the test')
     with _sync_core.try_lock(str(sync_dir(tmp_path))):
-        assert outcome(log_dir(tmp_path), cfg(), ok, background=False) == _sync_core.PullOutcome('locked')
+        assert outcome(log_dir(tmp_path), cfg(), ok, background=False) == _sync_core.Outcome('locked')
     assert state_of(tmp_path).last_pull == T0
 
 
@@ -947,3 +947,19 @@ def test_a_push_keeps_the_time_of_the_last_pull(tmp_path):
     put_state(tmp_path, State(last_pull=T0 - 60))
     assert push(tmp_path, ok, forced=True) == 0 and state_of(tmp_path).last_pull == T0 - 60
     assert push(tmp_path, failing('network'), forced=True) == 1 and state_of(tmp_path).last_pull == T0 - 60
+
+
+def test_the_outcome_of_a_push_names_how_it_ended(tmp_path):
+    def outcome(runner=ok, config=None, **kwargs):
+        return _sync_core.push_outcome(log_dir(tmp_path), config or cfg(), runner, clock=lambda: T0,
+                                       rand=lambda: 0.5, **kwargs)
+    assert outcome(config=cfg(mode='off')) == _sync_core.Outcome('off')
+    assert outcome() == _sync_core.Outcome('ok')
+    assert outcome(if_due=True) == _sync_core.Outcome('waiting')               # the success set next_due ahead
+    assert outcome(failing('auth'), forced=True) == _sync_core.Outcome('failed', 'auth', 'auth for the test')
+    assert outcome() == _sync_core.Outcome('waiting')                          # inside the backoff
+    with _sync_core.try_lock(str(sync_dir(tmp_path))):
+        assert outcome(forced=True) == _sync_core.Outcome('locked')
+    put_state(tmp_path, State(backoff_level=1, last_error='visibility'))
+    assert outcome(forced=True) == _sync_core.Outcome('blocked', 'visibility')
+    assert [push(tmp_path, forced=True)] == [1]                                # blocked is a failure as exit code
