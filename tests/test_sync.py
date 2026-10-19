@@ -59,6 +59,10 @@ def test_without_the_git_work_a_pull_fails_as_internal(tmp_path, mode):
     assert (line['action'], line['category'], line['reason']) == ('pull', 'internal', 'pull is not built yet')
 
 
+def test_without_the_git_work_there_is_no_clone(tmp_path):
+    assert sync.clone_dir(str(tmp_path / 'log'), {}) is None
+
+
 def test_push_now_is_the_forced_run_and_pull_background_the_long_one(tmp_path, mode):
     mode('shadow')
     assert sync.main(['push']) == 1                                           # into a backoff
