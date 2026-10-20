@@ -1424,7 +1424,7 @@ def test_the_components_help_and_the_required_files_name_the_reporter():
     module = load_module()
     assert 'context-reporter' in ''.join(module.build_parser().format_help().split())   # the help wraps at hyphens
     assert 'context_reporter.py' in module.REQUIRED_FILES and module.SCRIPTS['context-reporter'] == 'context_reporter.py'
-    assert module.TOUCHED_EVENTS == ('UserPromptSubmit', 'PostToolUse', 'PreToolUse')
+    assert module.TOUCHED_EVENTS == ('UserPromptSubmit', 'PostToolUse', 'PreToolUse', 'SessionStart', 'SessionEnd')
     assert 'context-reporter' not in module.GATES
 
 

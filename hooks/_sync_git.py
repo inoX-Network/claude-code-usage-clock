@@ -1,8 +1,8 @@
 """The git work of the sync: the push (0034-SYNC-PUSH), and the clone and the fast-forward the pull (0034-SYNC-REPORT)
 shares with it. Whatever is unclear ends without a push; a public repository is never written to.
 
-The clone `<log_dir>/sync/repo` is made by the installer (`--sync-repo`); nothing here clones. Every git call in it
-(`Clone.git`) runs with GIT_DIR and GIT_WORK_TREE set to the clone (never a working folder, never a repository above
+The clone `<log_dir>/sync/repo` is made by the installer (`--sync-repo`, `make_clone`); push and pull never clone.
+Every git call in it (`Clone.git`) runs with GIT_DIR and GIT_WORK_TREE set to the clone (never a working folder, never a repository above
 it), the environment of `_sync_core.git_env` (no prompt, no askpass, ssh in batch mode, the core.sshCommand of the
 clone's own config), messages in C (`LC_ALL=C`: git translates them otherwise, and errors are told apart by their
 text), a fixed identity for the commit (`usage-clock`, in the environment: it beats any user.name and any GIT_AUTHOR_*
@@ -58,8 +58,11 @@ import json
 import os
 import posixpath
 import re
+import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import time
 from collections.abc import Callable
 
@@ -70,6 +73,7 @@ import _sync_export
 import sync_format
 
 CLONE_DIR = 'repo'
+CLONE_TEMP_PREFIX = 'repo.tmp-'  # the folder make_clone clones into before it becomes CLONE_DIR
 NO_HOOKS_DIR = 'no-hooks'
 VISIBILITY_FILE = 'visibility.json'
 JOURNAL_FILE = 'compacting.json'
@@ -194,6 +198,63 @@ def _empty_hooks(directory: str) -> str:
     raise _fail('internal', f'{NO_HOOKS_DIR} in the sync folder is no empty folder')
 
 
+def clone_at(path: str, deadline: _sync_core.Deadline, max_mb: int, hooks: str | None = None) -> Clone:
+    """The Clone of the folder `path`, nothing checked, no branch yet: git with SETTINGS and the environment of the
+    clone, core.hooksPath `hooks` if given (`--check` of the installer runs no command that starts a hook and writes no
+    hook folder)."""
+    settings = (f'core.hooksPath={hooks}',) if hooks else ()
+    options = tuple(arg for setting in (*settings, *SETTINGS) for arg in ('-c', setting))
+    return Clone(path, '', deadline, _clone_env(path, deadline), options, max_mb)
+
+
+def remote_matches(clone: Clone, url: str) -> bool:
+    """`git remote get-url --all origin` and `--push --all` (insteadOf and pushInsteadOf applied) give exactly `url`."""
+    for which in ((), ('--push',)):
+        done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
+        if done.returncode != 0 or done.stdout.splitlines() != [url]:
+            return False
+    return True
+
+
+def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadline) -> None:
+    """For the installer (`--sync-repo`), which holds the sync lock and found the repository private: clones `url` into
+    `<directory>/repo`, which must not exist. Into a temporary folder beside it first (CLONE_TEMP_PREFIX, 0700), with
+    the settings and the environment of every git call of the sync (no prompt, no askpass, no hooks, core.autocrlf
+    false: Git for Windows sets it to true in its system config, and a plain clone checks LF files out with CRLF), only
+    the default branch, no checkout; then the size check of a fast-forward (`_check_size`), then the checkout, then the
+    rename. Fails with SyncError (fixed text: `auth`, `network`, `internal`), and the temporary folder is removed: a
+    clone left without its checkout would be checked out by the next push (`_restore_foreign`), past the limit."""
+    temporary = tempfile.mkdtemp(prefix=CLONE_TEMP_PREFIX, dir=directory)
+    try:
+        clone = clone_at(temporary, deadline, max_mb, _empty_hooks(directory))
+        env = {name: value for name, value in clone.env.items() if name not in ('GIT_DIR', 'GIT_WORK_TREE')}
+        done = _sync_core.run_command([_sync_core.GIT, *clone.options, 'clone', '--quiet', '--single-branch',
+                                       '--no-checkout', '--no-tags', '--', url, temporary], deadline, env, directory)
+        if done.returncode != 0:
+            raise _remote_error(done, 'clone')      # GIT_DIR of a clone that is to be made would break `git clone`
+        done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
+        branch = done.stdout.strip()
+        if done.returncode != 0 or not BRANCH.fullmatch(branch):
+            raise _fail('internal', 'the clone has no branch checked out')
+        clone = dataclasses.replace(clone, branch=branch)
+        if _commit_of(clone, _tracking(clone)):         # an empty repository has nothing to check out
+            _check_size(clone)
+            if clone.git('checkout', '--quiet', branch).returncode != 0:
+                raise _fail('internal', 'the sync repository could not be checked out')
+        os.rename(temporary, os.path.join(directory, CLONE_DIR))
+    except BaseException:
+        _remove_tree(temporary)
+        raise
+
+
+def _remove_tree(path: str) -> None:
+    """Removes a folder make_clone made. Git makes its pack files read-only, which Windows refuses to delete."""
+    def writable(function, name, _error) -> None:
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+    shutil.rmtree(path, **{'onexc' if sys.version_info >= (3, 12) else 'onerror': writable})
+
+
 def _clone_env(path: str, deadline: _sync_core.Deadline) -> dict[str, str]:
     base = {name: value for name, value in os.environ.items()
             if name not in FOREIGN_ENV and not name.startswith(FOREIGN_ENV_PREFIXES)}
@@ -219,14 +280,9 @@ def open_clone(run: _sync_core.Run) -> Clone:
         raise _fail('internal', 'the sync clone is missing, run the installer with --sync-repo') from None
     except OSError as error:
         raise _fail('internal', f'the sync clone cannot be read ({type(error).__name__})') from error
-    options = tuple(arg for setting in (f'core.hooksPath={_empty_hooks(run.directory)}', *SETTINGS)
-                    for arg in ('-c', setting))
-    clone = Clone(path, '', run.deadline, _clone_env(path, run.deadline), options, run.cfg['sync']['max_clone_mb'])
-    expected = [remote_url(repo, run.cfg['sync']['transport'])]
-    for which in ((), ('--push',)):
-        done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
-        if done.returncode != 0 or done.stdout.splitlines() != expected:
-            raise _fail('internal', 'the remote of the sync clone is not sync.repo')
+    clone = clone_at(path, run.deadline, run.cfg['sync']['max_clone_mb'], _empty_hooks(run.directory))
+    if not remote_matches(clone, remote_url(repo, run.cfg['sync']['transport'])):
+        raise _fail('internal', 'the remote of the sync clone is not sync.repo')
     try:
         machine_id = sync_format.load_machine_id(run.log_dir, create=False)
     except sync_format.FormatError as error:
@@ -358,16 +414,22 @@ def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | 
     return judge(done.returncode, done.stderr)
 
 
-def cached_private(directory: str, repo: str, now: float) -> bool:
-    """True if `<directory>/visibility.json` says that `repo` was found private less than 24 h before `now`. A file
-    that is missing, broken, of another repository or from the future: False (check again)."""
+def private_checked(directory: str, repo: str) -> float | None:
+    """When `<directory>/visibility.json` says `repo` was found private (Unix seconds); None for a file that is
+    missing, broken or of another repository. `--check` of the installer shows its age."""
     try:
         data = json.loads(_sync_core._read_small(os.path.join(directory, VISIBILITY_FILE)))
         checked = _sync_core._moment(data['checked'], 'checked') if isinstance(data, dict) else None
     except (OSError, ValueError, RecursionError, KeyError):
-        return False
-    return (checked is not None and data.get('repo') == repo and data.get('result') == PRIVATE
-            and 0 <= now - checked < VISIBILITY_MAX_AGE_S)
+        return None
+    return checked if checked is not None and data.get('repo') == repo and data.get('result') == PRIVATE else None
+
+
+def cached_private(directory: str, repo: str, now: float) -> bool:
+    """True if `<directory>/visibility.json` says that `repo` was found private less than 24 h before `now`. A file
+    that is missing, broken, of another repository or from the future: False (check again)."""
+    checked = private_checked(directory, repo)
+    return checked is not None and 0 <= now - checked < VISIBILITY_MAX_AGE_S
 
 
 def remember_private(directory: str, repo: str, now: float) -> None:
