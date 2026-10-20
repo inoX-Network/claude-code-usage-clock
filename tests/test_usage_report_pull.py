@@ -99,6 +99,24 @@ def test_own_commits_that_do_not_fit_onto_the_remote_are_not_merged(tmp_path, re
     assert desk.status() == ''
 
 
+def test_a_remote_over_the_size_limit_is_not_pulled_and_the_report_uses_the_clone_as_it_is(tmp_path, remote,
+                                                                                         monkeypatch, capsys):
+    laptop, desk = machines(tmp_path)
+    laptop.request(session='llllllll-1')
+    assert laptop.push() == 0
+    assert report_of(desk, monkeypatch, capsys)['coverage']['sync']['pull']['status'] == 'ok'
+    remote.foreign_commit('big.bin', b'x' * (2 * 1024 * 1024))
+    desk.cfg['sync']['max_clone_mb'] = 1
+    own = desk.head()
+    report = report_of(desk, monkeypatch, capsys, '--sync')
+    pull = report['coverage']['sync']['pull']
+    assert (pull['status'], pull['category'], pull['detail']) == (
+        'failed', 'internal', 'the sync repository is larger than sync.max_clone_mb (1 MB): nothing was checked out; '
+                              'raise the limit if this size is expected')
+    assert desk.head() == own and not os.path.exists(os.path.join(desk.clone, 'big.bin'))
+    assert [cli['id'] for cli in report['clis']] == ['llllllll']          # what the clone already had
+
+
 def test_without_a_clone_the_report_shows_this_machine_and_names_the_installer(tmp_path, remote, monkeypatch, capsys):
     desk = Device(tmp_path / 'desk', clone=False)
     desk.request(session='dddddddd-1')

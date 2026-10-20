@@ -5,6 +5,7 @@ real ones in its own test), the visibility probe is a function handed in (`execu
 config and without the system config, so nothing of the real configuration takes part, and with the C locale as the
 push sets it."""
 import copy
+import dataclasses
 import functools
 import json
 import os
@@ -90,11 +91,14 @@ class Remote:
         return git('show', f'refs/heads/main:{path}', cwd=self.bare).stdout
 
     def foreign_commit(self, path, text):
-        """Someone else commits `path` and pushes it."""
+        """Someone else commits `path` (a text, or bytes as they are) and pushes it."""
         git('pull', '--quiet', '--ff-only', cwd=self.other)
         target = self.other / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding='utf-8')
+        if isinstance(text, bytes):
+            target.write_bytes(text)
+        else:
+            target.write_text(text, encoding='utf-8')
         git('add', path, cwd=self.other)
         git('commit', '--quiet', '-m', 'foreign', cwd=self.other)
         git('push', '--quiet', 'origin', 'HEAD:refs/heads/main', cwd=self.other)
@@ -887,6 +891,299 @@ def test_the_first_push_into_an_empty_remote(tmp_path):
     assert device.push() == 0
     files = git('ls-tree', '-r', '--name-only', 'refs/heads/main', cwd=bare).stdout.split()
     assert files and all(path.startswith(device.own + '/') for path in files)
+
+
+# --- The size limit (sync.max_clone_mb) -----------------------------------------------------------------------------
+
+MB = 1024 * 1024
+TOO_LARGE = ('internal', 'the sync repository is larger than sync.max_clone_mb (1 MB): nothing was checked out; '
+                         'raise the limit if this size is expected')
+
+
+def base_size(remote):
+    """The bytes of the first commit of the remote (its README, as this system wrote it)."""
+    return int(git('cat-file', '-s', 'refs/heads/main:README.md', cwd=remote.bare).stdout)
+
+
+def limited(device, mb=1):
+    """A run of `device` with sync.max_clone_mb `mb` and its clone, opened."""
+    device.cfg['sync']['max_clone_mb'] = mb
+    run = run_of(device)
+    return run, _sync_git.open_clone(run)
+
+
+def big_file(device):
+    return os.path.exists(os.path.join(device.clone, 'big.bin'))
+
+
+def ls_tree_fails(monkeypatch):
+    """scan_command of ls-tree ends with exit 128 and no output; the calls are recorded."""
+    calls = []
+
+    def scan_command(argv, deadline, take, env=None, cwd=None):
+        calls.append(argv)
+        return 128
+    monkeypatch.setattr(_sync_core, 'scan_command', scan_command)
+    return calls
+
+
+@pytest.mark.parametrize('relation', ['behind', 'apart'])
+def test_a_remote_over_the_limit_is_neither_fast_forwarded_nor_rebased(device, remote, relation):
+    run, clone = limited(device)
+    if relation == 'apart':
+        git('commit', '--quiet', '--allow-empty', '-m', 'local', cwd=device.clone)
+    remote.foreign_commit('big.bin', b'x' * (2 * MB))
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == TOO_LARGE
+    assert device.head() == head and device.status() == '' and not big_file(device)
+    assert git('log', '--format=%s', '-1', cwd=device.clone).stdout.strip() == (
+        'local' if relation == 'apart' else 'start')
+
+
+def test_a_remote_exactly_at_the_limit_is_taken_one_byte_more_is_not(device, remote):
+    run, clone = limited(device)
+    remote.foreign_commit('big.bin', b'x' * (MB - base_size(remote)))
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded' and device.head() == remote.head()
+    remote.foreign_commit('big.bin', b'x' * (MB - base_size(remote) + 1))
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == TOO_LARGE
+    assert device.head() == head and os.path.getsize(os.path.join(device.clone, 'big.bin')) == MB - base_size(remote)
+
+
+def test_the_limit_counts_megabytes_of_1024_kib(device, remote):
+    run, clone = limited(device, mb=2)
+    remote.foreign_commit('big.bin', b'x' * (2 * MB - base_size(remote)))
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+
+
+def test_a_clone_over_the_limit_that_is_up_to_date_or_ahead_is_not_checked(device, remote, monkeypatch):
+    remote.foreign_commit('big.bin', b'x' * (2 * MB))
+    run, clone = limited(device, mb=3)
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    run, clone = limited(device)
+    calls = ls_tree_fails(monkeypatch)
+    assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # same
+    git('commit', '--quiet', '--allow-empty', '-m', 'local', cwd=device.clone)
+    assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # ahead
+    assert calls == []
+
+
+def test_a_size_that_cannot_be_read_is_internal_and_nothing_is_checked_out(device, remote, monkeypatch):
+    run, clone = limited(device, mb=1024)
+    remote.foreign_commit('README.md', 'news\n')
+    head = device.head()
+    calls = ls_tree_fails(monkeypatch)
+    assert failure_of(_sync_git.update_clone, run, clone) == (
+        'internal', 'the size of the sync repository could not be read: nothing was checked out')
+    assert device.head() == head and len(calls) == 1
+
+
+def plumbing(remote, data, *args):
+    """git `args` in the bare repository with `data` on stdin; its output."""
+    done = subprocess.run(['git', *args], input=data, cwd=remote.bare, capture_output=True,
+                          env={**os.environ, **TESTER, 'LC_ALL': 'C'})
+    assert done.returncode == 0, done.stderr
+    return done.stdout.decode().strip()
+
+
+@pytest.mark.parametrize('chunk', [65536, 7])
+def test_names_with_spaces_tabs_and_line_breaks_are_counted_and_submodules_skipped(device, remote, monkeypatch,
+                                                                                   chunk):
+    """The tree is made without a work tree (Windows allows no line break in a file name): blobs whose names would
+    break a reading by lines, and a submodule, whose size git gives as `-` (it counts as an entry). With pieces of 7
+    bytes every entry is cut in several."""
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', chunk)
+    sizes = {'a b.bin': 300_000, 'c\nd.bin': 400_000, 'e\tf.bin': MB - base_size(remote) - 700_000}
+    readme = git('rev-parse', 'refs/heads/main:README.md', cwd=remote.bare).stdout.strip()
+    entries = [f'100644 blob {readme}\tREADME.md', f'160000 commit {remote.head()}\tsub']
+    for name, size in sizes.items():
+        entries.append(f'100644 blob {plumbing(remote, b"x" * size, "hash-object", "-w", "--stdin")}\t{name}')
+
+    def push_tree(extra):
+        tree = plumbing(remote, ('\0'.join(entries + extra) + '\0').encode(), 'mktree', '-z')
+        commit = plumbing(remote, b'names', 'commit-tree', tree, '-p', 'refs/heads/main')
+        git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+    push_tree([])
+    run, clone = limited(device)
+    _sync_git._fetch(clone)
+    _sync_git._check_size(clone)                                    # exactly the limit
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 4)
+    assert failure_of(_sync_git._check_size, clone) == too_many(4)  # five entries with the submodule
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 5)
+    empty, one = (plumbing(remote, data, 'hash-object', '-w', '--stdin') for data in (b'', b'x'))
+    push_tree([f'100644 blob {empty}\tg\nh', f'100644 blob {one}\ti j'])
+    _sync_git._fetch(clone)
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 7)
+    assert failure_of(_sync_git._check_size, clone) == TOO_LARGE   # one byte more
+
+
+def too_many(files):
+    return 'internal', f'the sync repository has more than {files} files: nothing was checked out'
+
+
+def git_bomb(remote, levels, width=10):
+    """`width ** levels` empty files of `levels + 1` objects: every tree names the one below `width` times."""
+    name, mode, kind = plumbing(remote, b'', 'hash-object', '-w', '--stdin'), '100644', 'blob'
+    for _ in range(levels):
+        listing = ''.join(f'{mode} {kind} {name}\t{kind[0]}{number}\0' for number in range(width))
+        name, mode, kind = plumbing(remote, listing.encode(), 'mktree', '-z'), '040000', 'tree'
+    commit = plumbing(remote, b'bomb', 'commit-tree', name, '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+
+
+def counted_reads(monkeypatch):
+    """The sizes of the pieces scan_command hands on."""
+    pieces, real = [], _sync_core.scan_command
+
+    def scan_command(argv, deadline, take, env=None, cwd=None):
+        return real(argv, deadline, lambda chunk: pieces.append(len(chunk)) or take(chunk), env, cwd)
+    monkeypatch.setattr(_sync_core, 'scan_command', scan_command)
+    return pieces
+
+
+def test_a_git_bomb_of_a_million_empty_files_is_stopped_early(device, remote, monkeypatch):
+    """8 objects, 10**6 empty files, size 0: the number of entries stops it, after a tenth of the listing (about
+    79 bytes an entry: 79 MB in all)."""
+    git_bomb(remote, 6)
+    run, clone = limited(device)
+    pieces = counted_reads(monkeypatch)
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == too_many(100_000)
+    assert device.head() == head and device.status() == ''
+    assert sum(pieces) < 16 * MB
+
+
+def test_exactly_max_clone_files_entries_are_taken_one_more_is_not(device, remote, monkeypatch):
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 3)
+    run, clone = limited(device)
+    remote.foreign_commit('a.txt', 'a\n')
+    remote.foreign_commit('b.txt', 'b\n')                            # with README.md: three
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    remote.foreign_commit('c.txt', 'c\n')
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == too_many(3)
+    assert device.head() == head and not os.path.exists(os.path.join(device.clone, 'c.txt'))
+
+
+def test_a_size_over_the_limit_stops_the_listing_where_it_is(device, remote, monkeypatch):
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 64)
+    big = plumbing(remote, b'x' * (2 * MB), 'hash-object', '-w', '--stdin')
+    empty = plumbing(remote, b'', 'hash-object', '-w', '--stdin')
+    listing = f'100644 blob {big}\ta.bin\0' + ''.join(f'100644 blob {empty}\tf{number:04}\0' for number in range(2000))
+    commit = plumbing(remote, b'big first', 'commit-tree', plumbing(remote, listing.encode(), 'mktree', '-z'),
+                      '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+    run, clone = limited(device)
+    pieces = counted_reads(monkeypatch)
+    assert failure_of(_sync_git.update_clone, run, clone) == TOO_LARGE
+    whole = len(git('ls-tree', '-r', '-l', '-z', 'refs/heads/main', cwd=remote.bare).stdout)
+    assert sum(pieces) < whole // 10
+
+
+def fetched_tree(remote, clone, tree):
+    """The remote gets a commit of `tree` on top of main, and the clone fetches it."""
+    commit = plumbing(remote, b'tree', 'commit-tree', tree, '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+    _sync_git._fetch(clone)
+
+
+LONG = ('internal', 'the sync repository has an entry of more than 200 bytes: nothing was checked out')
+
+
+def test_an_entry_longer_than_max_entry_bytes_stops_the_listing(device, remote, monkeypatch):
+    """An entry of ls-tree -l: `100644 blob <40 hex> <size in 7>\t<name>`, 61 bytes and the name. A name of 100 000
+    bytes is not read to its end: memory stays small however long the entry."""
+    monkeypatch.setattr(_sync_git, 'MAX_ENTRY_BYTES', 200)
+    blob = plumbing(remote, b'x', 'hash-object', '-w', '--stdin')
+    run, clone = limited(device)
+
+    def fetched(name):
+        fetched_tree(remote, clone, plumbing(remote, f'100644 blob {blob}\t{name}\0'.encode(), 'mktree', '-z'))
+    fetched('n' * 139)
+    _sync_git._check_size(clone)                                    # 200 bytes
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 200)
+    _sync_git._check_size(clone)                                    # the 200 bytes without their \0 as the rest
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 65536)
+    fetched('n' * 140)
+    assert failure_of(_sync_git._check_size, clone) == LONG
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 64)
+    # fsck refuses a name above 4096 bytes, not a path of many: 100 parts of 1000 bytes
+    deep = plumbing(remote, f'100644 blob {blob}\t{"n" * 999}\0'.encode(), 'mktree', '-z')
+    for _ in range(99):
+        deep = plumbing(remote, f'040000 tree {deep}\t{"n" * 999}\0'.encode(), 'mktree', '-z')
+    fetched_tree(remote, clone, deep)
+    pieces = counted_reads(monkeypatch)
+    assert failure_of(_sync_git._check_size, clone) == LONG and sum(pieces) <= 200 + 2 * 64
+
+
+def test_the_deadline_ends_the_listing_and_its_process(device, remote, monkeypatch):
+    """The listing is read slowly (the bomb is packed in the clone: git lists it in a fifth of a second): the timer
+    ends git at the deadline."""
+    git_bomb(remote, 6)
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 10 ** 9)
+    run, clone = limited(device)
+    _sync_git._fetch(clone)
+    real_take = _sync_git._Tally.take
+
+    def slow_take(self, chunk):
+        time.sleep(0.05)
+        return real_take(self, chunk)
+    monkeypatch.setattr(_sync_git._Tally, 'take', slow_take)
+    started, real = [], subprocess.Popen
+
+    def popen(*args, **kwargs):
+        started.append(real(*args, **kwargs))
+        return started[-1]
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    clone = dataclasses.replace(clone, deadline=_sync_core.Deadline(0.3))
+    assert failure_of(_sync_git._check_size, clone) == ('timeout', 'git did not finish in time')
+    assert started[0].poll() is not None and started[0].stdout.closed
+
+
+def test_a_push_over_the_limit_is_internal_and_exports_nothing(device, remote):
+    device.cfg['sync']['max_clone_mb'] = 1
+    remote.foreign_commit('big.bin', b'x' * (2 * MB))
+    device.request()
+    head = device.head()
+    assert device.push() == 1
+    assert (device.failure()['category'], device.failure()['reason']) == TOO_LARGE
+    assert device.head() == head and device.status() == '' and not big_file(device)
+
+
+def test_the_rebase_after_the_commit_is_limited_too(device, remote):
+    device.request()
+    assert device.push() == 0
+    device.cfg['sync']['mode'] = 'shadow'
+    device.request()
+    assert device.push(now=NOW + 60) == 0
+    remote.foreign_commit('big.bin', b'x' * (2 * MB))
+    foreign = remote.head()
+    with open(os.path.join(device.clone, *device.own.split('/'), 'status.json'), 'w', encoding='utf-8') as f:
+        f.write('{"v":1,"dirty":true}\n')                            # dirty: step 4 leaves the rebase to step 7b
+    device.cfg['sync'].update(mode='on', max_clone_mb=1)
+    device.request()
+    assert device.push(now=NOW + 120) == 1
+    assert (device.failure()['category'], device.failure()['reason']) == TOO_LARGE
+    base = git('merge-base', 'HEAD', foreign, cwd=device.clone).stdout.strip()
+    assert git('log', '--format=%an', f'{base}..HEAD', cwd=device.clone).stdout.split() == ['usage-clock'] * 2
+    assert not big_file(device) and len(device.worktree_requests()) == 3 and remote.head() == foreign
+
+
+def test_the_rebase_of_a_second_push_attempt_is_limited_too(tmp_path, remote, monkeypatch):
+    device = Device(tmp_path / 'a')
+    device.cfg['sync']['max_clone_mb'] = 1
+    device.request()
+    pushed, real_export = [], _sync_export.export
+
+    def export_after_another_pushed(*args, **kwargs):
+        if not pushed:
+            remote.foreign_commit('big.bin', b'x' * (2 * MB))       # after the fetch of step 4
+            pushed.append(remote.head())
+        return real_export(*args, **kwargs)
+    monkeypatch.setattr(_sync_export, 'export', export_after_another_pushed)
+    assert device.push() == 1
+    assert (device.failure()['category'], device.failure()['reason']) == TOO_LARGE
+    assert not big_file(device) and remote.head() == pushed[0] and len(device.worktree_requests()) == 1
 
 
 def test_a_fast_forward_git_refuses_is_a_conflict_and_keeps_the_change(device, remote):

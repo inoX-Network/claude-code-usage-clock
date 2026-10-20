@@ -18,7 +18,8 @@ it fails; whatever else it raises counts as `internal`.
   and waits one interval +- 20 %. After `visibility` no push starts any more until the installer clears it
   (`clear_visibility`), not even a manual one. A `next_due` further ahead than any wait the core sets counts as due.
 - **Git** runs through `run_command` (or `Run.git`): never interactive (`git_env`), and the whole tree of the child is
-  ended when the deadline of the run is reached (category `timeout`). A watchdog ends the whole process if a run
+  ended when the deadline of the run is reached (category `timeout`). An output that may be endless (the listing of
+  a foreign tree) goes through `scan_command`: read piece by piece, the tree ended as soon as the reader has enough. A watchdog ends the whole process if a run
   outlives its deadline anyway, so the lock is never held for good.
 
 `sync.mode` `off` makes every entry point do nothing; `shadow` and `on` run the core alike (the push tells them apart).
@@ -55,6 +56,7 @@ MAX_EXPONENT = 30               # 2^30 intervals lie beyond every cap; a larger 
 PUSH_TIMEOUT_S = 60
 PULL_BACKGROUND_TIMEOUT_S = 30
 KILL_WAIT_S = 5                 # how long the output of a killed child is still read
+SCAN_CHUNK_BYTES = 65536        # the most scan_command hands on at once
 RUN_SLACK_S = 10                # beyond deadline and kill wait: then the watchdog ends the process
 START_GAP_S = 120               # at most one detached start of a kind in this time
 CONFIG_TIMEOUT_S = 5            # git config --get core.sshCommand
@@ -388,6 +390,56 @@ def run_command(argv: list[str], deadline: Deadline, env: dict | None = None, cw
         _children.discard(process)
     return subprocess.CompletedProcess(argv, process.returncode, out.decode('utf-8', 'replace'),
                                        err.decode('utf-8', 'replace'))
+
+
+def scan_command(argv: list[str], deadline: Deadline, take: Callable[[bytes], bool], env: dict | None = None,
+                 cwd: str | None = None) -> int | None:
+    """Runs `argv` like run_command, but hands its output to `take` piece by piece (at most SCAN_CHUNK_BYTES) instead
+    of keeping it: the memory stays small however long the output. The error output is dropped (a full pipe could
+    not block the child). `take` returns False to stop: the child and its tree are ended at once, None. Else the exit
+    code.
+
+    A timer ends the tree at the deadline (a read on a pipe has no timeout on Windows): SyncError('timeout'). A
+    program that cannot be started: SyncError('internal'). No child outlives the call, unless it survives the kill
+    for KILL_WAIT_S.
+    """
+    import subprocess
+    import threading
+    name = os.path.basename(argv[0])
+    if deadline.left() <= 0:
+        raise SyncError('timeout', f'no time left for {name}')
+    try:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   env=env, cwd=cwd, **_plat.GROUP_OPTIONS)
+    except OSError as error:
+        raise SyncError('internal', f'{name} could not be started ({type(error).__name__})') from error
+    _children.add(process)
+    expired: list[bool] = []
+
+    def expire() -> None:
+        expired.append(True)
+        _plat.kill_tree(process)
+    timer = threading.Timer(max(deadline.left(), 0), expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        with process.stdout:
+            for chunk in iter(functools.partial(process.stdout.read1, SCAN_CHUNK_BYTES), b''):
+                if not take(chunk):
+                    return None
+        process.wait()
+    finally:
+        timer.cancel()
+        if process.poll() is None:      # stopped, or `take` failed: the tree goes now
+            _plat.kill_tree(process)
+            try:
+                process.wait(KILL_WAIT_S)
+            except subprocess.TimeoutExpired:
+                pass
+        _children.discard(process)
+    if expired:
+        raise SyncError('timeout', f'{name} did not finish in time')
+    return process.returncode
 
 
 @dataclasses.dataclass(frozen=True)

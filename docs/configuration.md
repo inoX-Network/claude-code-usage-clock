@@ -51,6 +51,7 @@ that key and writes one line to the log.
 | `sync.label_salt` | `""` | Required for `hash`, the same on every machine. Without it the export stops. |
 | `sync.include_gates` | `true` | Sync the decisions of the spawn gate and the soft stop (time, gate, decision, mode and the kind of the reason). `false`: no gate lines leave this machine. |
 | `sync.keep_request_months` | `3` | Full months (at least 1) whose requests stay in the own folder of the sync repository; older months are compacted to their day lines. |
+| `sync.max_clone_mb` | `1024` | The most the files of the sync repository may add up to, in MB of 1024 KiB (a whole number, at least 1). A larger remote is neither fast-forwarded nor rebased onto: push and pull end `internal` and nothing is checked out (a small fetch that would unpack to gigabytes). Raise it if the repository really is that large. The number of files has a fixed limit of 100 000 (no key: a real export has about 120 files a machine and month), against a few objects that would check out as millions of empty files. |
 
 The mode and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config file.
 

@@ -66,6 +66,7 @@
     "project_aliases": {},
     "label_salt": "",
     "include_gates": true,
-    "keep_request_months": 3
+    "keep_request_months": 3,
+    "max_clone_mb": 1024
   }
 }
