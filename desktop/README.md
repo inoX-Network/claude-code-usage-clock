@@ -147,6 +147,18 @@ side.
 - The app tells a plugin no cache expiry, so a desktop session saves no cache clock: the wake-up watcher has nothing to
   wake there.
 
+## Measured in the app
+
+On 20 Oct 2026, Windows 11, Claude desktop app with Claude Code 2.1.299:
+
+- **The status line runs after the answers.** The context state of a desktop session (`<log_dir>/context/<session
+  id>.json`, which only `statusline.py` writes) was written 3 s after the last answer, and in an earlier session right
+  after each of two answers an hour apart. The plugin hands the numbers over once per answer, not on a timer, so the
+  sync's status line trigger runs when you work in the app, not while it sits idle.
+- **`SessionStart` and `SessionEnd` fire.** A hook on both wrote one line each: `SessionStart` with source `startup`
+  when a new session opened, `SessionEnd` with reason `other` when the app was quit from the tray. Hooks are read when a
+  session starts: a session that was already open when a hook was added does not run it.
+
 ## Configuration
 
 The colours follow the `statusline` section of the usage-clock `config.json` (`yellow_from`, `red_from`,
