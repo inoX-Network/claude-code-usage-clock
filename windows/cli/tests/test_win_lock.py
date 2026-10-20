@@ -197,5 +197,6 @@ def test_kill_tree_ends_a_child_and_its_grandchild(tmp_path):
     grandchild = int(marker.read_text())
     _win.kill_tree(child)
     assert child.wait(timeout=30) is not None
-    listed = subprocess.run(['tasklist', '/FI', f'PID eq {grandchild}', '/NH'], capture_output=True, text=True)
-    assert str(grandchild) not in listed.stdout
+    # bytes: tasklist writes in the console code page (850 on a German console: "ausgeführt" is not UTF-8)
+    listed = subprocess.run(['tasklist', '/FI', f'PID eq {grandchild}', '/NH'], capture_output=True)
+    assert listed.returncode == 0 and str(grandchild).encode() not in listed.stdout
