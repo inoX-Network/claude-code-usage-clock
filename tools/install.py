@@ -37,8 +37,9 @@ checks once that the repository cannot be read without logging in (public or unc
 clones it into <log_dir>/sync/repo (no checkout before the size check of the push, a clone of another repository there
 is never touched). Run again, it lifts the lasting block after `visibility`. --sync-mode off|shadow|on sets sync.mode;
 without it the mode of an installed sync is kept and a first installation starts in shadow (the output line
-`Sync mode:` says which and where it comes from). Without --components, --uninstall removes the sync entries too
-(the clone and the data in the remote stay) and --check checks the sync if its entries are installed.
+`Sync mode:` says which and where it comes from). Without --components, --uninstall removes the sync entries too and
+sets sync.mode to off (the status line pushes from the mode alone; the clone and the data in the remote stay), and
+--check checks the sync if its entries are installed; a sync.mode that is not off without them is a FIX.
 
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
@@ -192,6 +193,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
     if (args.sync_repo is not None or args.sync_mode) and 'sync' not in args.components:
         raise UsageError('--sync-repo and --sync-mode need the component sync (for example --components sync).')
+    if args.uninstall and (args.sync_repo is not None or args.sync_mode):
+        raise UsageError('--uninstall takes no --sync-repo or --sync-mode: it switches the sync off.')
     if re.search(r'[\x00-\x1f\x7f]', args.target):
         raise UsageError('--target must not contain control characters or line breaks.')
     if args.week_ok_until is not None:
@@ -845,6 +848,21 @@ def write_sync_config(plan: SyncPlan) -> None:
         print(f'Backup:  {backup}')
 
 
+def plan_sync_off(target: str) -> SyncPlan | None:
+    """--uninstall with the sync: sync.mode back to `off`, or the status line would go on pushing (T1 needs no hook,
+    only the mode). None if there is nothing to switch off: no config.json, or one with which the hooks run as off (an
+    unreadable one gives the defaults)."""
+    path = config_file(target)
+    if not os.path.lexists(path) or effective_config(path)['sync']['mode'] == 'off':
+        return None
+    content = read_config(path)
+    old = content['sync']['mode']
+    content['sync']['mode'] = 'off'
+    cfg = effective_config(path)
+    return SyncPlan(path, True, content, [f'sync.mode {old!r} -> {"off"!r}'], 'off', '--uninstall', cfg['sync']['repo'],
+                    cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir_of(cfg))
+
+
 # --- Check ------------------------------------------------------------------------------------------------------
 
 def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
@@ -1051,6 +1069,12 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     if 'statusline' in args.components:
         results += check_usage(cfg)
     results += check_log_dir(cfg)
+    sync_mode = effective_config(config_file(target))['sync']['mode']
+    if sync_mode != 'off' and installed_command(data, 'sync', target) is None:
+        # Whatever --components says: the status line starts pushes from the mode alone, hooks or not
+        results.append(('FIX', f'Sync: sync.mode is {sync_mode} in {config_file(target)}, but the hooks of the sync '
+                               'are not installed, and the status line goes on pushing. Run install.py --uninstall '
+                               '--components sync to switch it off, or install.py --components sync to install it.'))
     if 'sync' in args.components:
         results += check_sync(effective_config(config_file(target)))
     for status, text in results:
@@ -1074,6 +1098,7 @@ def run(args: argparse.Namespace) -> int:
     sync = None
     if args.uninstall:
         messages = plan_uninstall(data, args, target)
+        sync = plan_sync_off(target) if 'sync' in args.components else None
     else:
         missing = missing_sources()
         if missing:
@@ -1104,7 +1129,7 @@ def run(args: argparse.Namespace) -> int:
             return 1
         print(f'Smoke test: passed ({", ".join(args.components)}).')
     changed = data != before
-    if sync and not args.sync_repo and not os.path.lexists(sync.clone):
+    if sync and not args.uninstall and not args.sync_repo and not os.path.lexists(sync.clone):
         print(f'Sync: the clone {sync.clone} is missing; run again with --sync-repo {sync.repo} to make it.')
     if args.dry_run:
         if not args.uninstall:

@@ -96,5 +96,8 @@ Transcripts of another machine that the file sync put on this one are not counte
 
 ## Uninstall
 
-`python3 tools/install.py --uninstall` removes the two hook entries (also without `--components`). The clone and the
-data in the repository stay: see [Uninstall completely](install.md#uninstall-completely).
+`python3 tools/install.py --uninstall` removes the two hook entries (also without `--components`) and sets `sync.mode`
+in `config.json` to `off` (with a backup; the output says so): the status line starts a push from the mode alone, with
+or without the hooks. The clone and the data in the repository stay: see
+[Uninstall completely](install.md#uninstall-completely). `install.py --check` names a `sync.mode` that is not `off`
+while the hooks are missing as `FIX`, whichever `--components` you give it.

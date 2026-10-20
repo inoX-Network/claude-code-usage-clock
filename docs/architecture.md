@@ -204,7 +204,9 @@ private result, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clo
 --no-tags` with `SETTINGS` and the clone environment without GIT_DIR, `_check_size`, checkout, rename to `repo`; a
 failed attempt removes the temporary folder). A folder already at `repo` stays: kept if it is a git folder whose remote
 is the URL of `sync.repo`, else exit 1. After the lock is released, `clear_visibility` lifts a block after
-`visibility`. `--check` reads the clone with `--no-optional-locks` and without a hooks folder, and changes nothing.
+`visibility`. `--uninstall` with the sync sets `sync.mode` to `off` (backup, only if it is not off): the status line (T1)
+starts pushes from the mode alone, so removing the hooks would not stop it; `--check` names a mode that is not `off`
+without the hooks as `FIX`, whatever `--components` says. `--check` reads the clone with `--no-optional-locks` and without a hooks folder, and changes nothing.
 
 `sync.mode` is `off`, `shadow` or `on` (anything else: `off`); `sync.interval_min`, `sync.backoff_max_h` and
 `sync.pull_timeout_s` must be finite numbers above 0, anything else falls back to the default with the usual log line.

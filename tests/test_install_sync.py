@@ -299,6 +299,13 @@ def test_a_sync_repo_that_is_no_owner_name_is_an_argument_error(setup, bad, caps
     assert stop.value.code == 2 and '--sync-repo must be owner/name' in capsys.readouterr().err
 
 
+@pytest.mark.parametrize('extra', [['--sync-mode', 'on'], ['--sync-repo', REPO]])
+def test_uninstall_takes_no_sync_option(setup, capsys, extra):
+    with pytest.raises(SystemExit) as stop:
+        setup.run('--uninstall', '--components', 'sync', *extra)
+    assert stop.value.code == 2 and '--uninstall takes no --sync-repo or --sync-mode' in capsys.readouterr().err
+
+
 def test_an_unknown_sync_mode_is_an_argument_error(setup, capsys):
     with pytest.raises(SystemExit) as stop:
         setup.run('--components', 'sync', '--sync-mode', 'loud')
@@ -542,23 +549,70 @@ def test_a_sync_hook_that_prints_fails_the_smoke_test(setup, tmp_path):
 
 # --- Uninstall -----------------------------------------------------------------------------------------------------------
 
-def test_uninstall_removes_the_sync_entries_and_leaves_clone_and_remote_alone(setup, remote):
-    assert setup.sync()[0] == 0
+def ticks(setup):
+    """The detached starts the status line (T1) would make now, with the config of the installation."""
+    started = []
+    _sync_core.statusline_tick(str(setup.log), _config.load(log_problems=False, path=str(setup.config)), time.time(),
+                               start=started.append)
+    return started
+
+
+@pytest.mark.parametrize('args', [['--uninstall'], ['--uninstall', '--components', 'sync']],
+                         ids=['default-selection', 'named'])
+def test_uninstall_removes_the_sync_entries_switches_it_off_and_leaves_clone_and_remote_alone(setup, remote, args):
+    assert setup.sync('--sync-mode', 'on')[0] == 0
+    assert ticks(setup)                     # installed: the status line starts a push
     head, files = remote.head(), sorted(p.name for p in setup.clone.iterdir())
-    config = setup.config.read_bytes()
-    code, out = setup.run('--uninstall')
+    backups = setup.backups('config.json')
+    code, out = setup.run(*args)
     assert code == 0, out
     assert 'SessionStart: sync.py removed' in out and 'SessionEnd: sync.py removed' in out
     assert sync_commands(setup.data()) == {} and 'hooks' not in setup.data()
+    assert setup.config_data()['sync']['mode'] == 'off' and setup.config_data()['sync']['repo'] == REPO
+    assert f"config.json: sync.mode 'on' -> 'off' written to {setup.config}" in out
+    assert len(setup.backups('config.json')) == len(backups) + 1
+    assert ticks(setup) == []               # nothing starts a push any more
     assert sorted(p.name for p in setup.clone.iterdir()) == files and remote.head() == head
-    assert setup.config.read_bytes() == config
+
+
+def test_uninstall_of_a_sync_that_is_off_already_writes_no_config(setup):
+    assert setup.sync('--sync-mode', 'off')[0] == 0
+    before, backups = setup.config.read_bytes(), setup.backups('config.json')
+    code, out = setup.run('--uninstall')
+    assert code == 0 and 'sync.mode' not in out, out
+    assert setup.config.read_bytes() == before and setup.backups('config.json') == backups
+
+
+def test_uninstall_without_a_config_or_with_a_broken_one_has_nothing_to_switch_off(setup):
+    """No file, or one the hooks cannot read: they run with the defaults, in which the sync is off."""
+    assert setup.run('--uninstall')[0] == 0 and not setup.config.exists()
+    setup.target.mkdir()
+    setup.config.write_text('{broken', encoding='utf-8')
+    code, out = setup.run('--uninstall')
+    assert code == 0 and setup.config.read_text(encoding='utf-8') == '{broken', out
+
+
+def test_the_dry_run_of_an_uninstall_names_the_mode_it_would_switch_off(setup):
+    assert setup.sync('--sync-mode', 'on')[0] == 0
+    before = setup.config.read_bytes()
+    code, out = setup.run('--uninstall', '--dry-run')
+    assert code == 0 and "config.json: sync.mode 'on' -> 'off' would be written" in out, out
+    assert setup.config.read_bytes() == before
+
+
+def test_uninstall_switches_the_sync_off_although_settings_json_is_unchanged(setup):
+    """Hooks already removed by hand: settings.json is not written, the mode is switched off all the same."""
+    assert setup.sync('--sync-mode', 'shadow')[0] == 0
+    setup.settings.write_text('{}', encoding='utf-8')
+    code, out = setup.run('--uninstall', '--components', 'sync')
+    assert code == 0 and 'already up to date' in out and setup.config_data()['sync']['mode'] == 'off', out
 
 
 def test_uninstall_of_other_components_keeps_the_sync(setup):
-    assert setup.sync()[0] == 0
+    assert setup.sync('--sync-mode', 'on')[0] == 0
     before = sync_commands(setup.data())
     assert setup.run('--uninstall', '--components', 'statusline,usage-clock')[0] == 0
-    assert sync_commands(setup.data()) == before
+    assert sync_commands(setup.data()) == before and setup.config_data()['sync']['mode'] == 'on'
 
 
 # --- --check -------------------------------------------------------------------------------------------------------------
@@ -585,6 +639,22 @@ def test_check_shows_every_sync_line_of_a_fresh_installation_and_changes_nothing
         assert needle in out, needle
     assert sorted((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in setup.log.rglob('*') if p.is_file()) \
         == snapshot
+
+
+@pytest.mark.parametrize('mode', ['on', 'shadow'])
+def test_check_names_a_sync_that_runs_without_its_hooks(setup, mode):
+    """The status line pushes as long as sync.mode is not off, hooks or not: with or without --components sync."""
+    setup.set_config(mode=mode, repo=REPO)
+    for args in ([], ['--components', 'statusline'], ['--components', 'sync']):
+        code, out = check(setup, *args)
+        assert code == 1, out
+        assert (f'FIX  Sync: sync.mode is {mode} in {setup.config}, but the hooks of the sync are not installed') \
+            in out, out
+
+
+def test_check_says_nothing_of_the_sync_while_it_is_off_and_not_installed(setup):
+    setup.set_config(mode='off', repo=REPO)
+    assert 'Sync' not in check(setup)[1]
 
 
 def test_check_without_components_takes_the_sync_if_it_is_installed(setup):

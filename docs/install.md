@@ -34,7 +34,9 @@ when you leave them out:
   there, with a backup, and only when they change.
 
 The sync is not part of the default selection: it is installed only with `--components ...,sync`. Without
-`--components`, `--uninstall` removes its entries too, and `--check` checks it if its entries are installed. All of
+`--components`, `--uninstall` removes its entries too and sets `sync.mode` to `off` (the status line pushes from the
+mode alone, hooks or not), and `--check` checks it if its entries are installed (and names a `sync.mode` that is not
+`off` without them as `FIX`). All of
 it: [The sync across machines](sync.md).
 
 Options:
@@ -75,7 +77,9 @@ the installer did. What stays, and how to remove it:
 | The local clone of the sync, if you installed it: `<log_dir>/sync/` (the clone in `repo/`, its state, the cache of the visibility check and the machine id) | Part of the log folder: `rm -r ~/.cache/claude-usage-clock/sync`, or the whole log folder as above. Commits of shadow mode that were never pushed go with it. |
 | The data of this machine in the sync repository on GitHub (`machines/<machine id>/`): the uninstall never touches the remote | Delete that folder in the repository yourself (a commit that removes it), or the whole repository on GitHub. |
 
-If you use `--components`, the uninstall removes only the components you name.
+If you use `--components`, the uninstall removes only the components you name. With the sync among them it also sets
+`sync.mode` in `config.json` to `off` (backup `config.json.bak-usage-clock-<timestamp>`), the only key it changes there:
+the status line would push on otherwise.
 
 ## Recipe: wake up when the window resets
 
