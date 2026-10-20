@@ -527,6 +527,22 @@ def test_an_empty_remote_is_cloned_and_the_first_push_fills_it(tmp_path, capsys,
     assert git('ls-tree', '-r', '--name-only', 'refs/heads/main', cwd=bare).stdout.startswith('machines/')
 
 
+@pytest.mark.parametrize('key', ['insteadOf', 'pushInsteadOf'])
+def test_a_clone_whose_remote_the_git_config_rewrites_is_not_kept(setup, tmp_path, git_alone, key):
+    """Every push checks that fetch and push URL are exactly the one of sync.repo; a clone that would fail that check
+    is no clone to keep (every push `internal`, every rerun `move it away`)."""
+    other = tmp_path / 'remotes' / 'someone' / 'else.git'
+    other.parent.mkdir(parents=True)
+    git('init', '--bare', '--quiet', '--initial-branch=main', str(other))
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write(f'[url "{other.as_posix()}"]\n\t{key} = {_sync_git.remote_url(REPO, "https")}\n')
+    code, out = setup.sync()
+    assert code == 1, out
+    assert ('Sync: the remote of the new clone is not the URL of sync.repo (an insteadOf or pushInsteadOf of the git '
+            'config rewrites it)') in out
+    assert not setup.clone.exists() and setup.leftovers() == [] and setup.data() == {}
+
+
 def test_an_existing_folder_of_another_repository_stays_untouched(setup, tmp_path):
     other = tmp_path / 'remotes' / 'someone' / 'else.git'
     other.parent.mkdir(parents=True)

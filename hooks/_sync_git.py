@@ -269,6 +269,9 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
             _check_size(clone)
             if clone.git('checkout', '--quiet', branch).returncode != 0:
                 raise _fail('internal', 'the sync repository could not be checked out')
+        if not remote_matches(clone, url):      # as open_clone checks it on every push
+            raise _fail('internal', 'the remote of the new clone is not the URL of sync.repo (an insteadOf or '
+                                    'pushInsteadOf of the git config rewrites it): nothing was kept')
         os.rename(temporary, os.path.join(directory, CLONE_DIR))
     except BaseException:
         _remove_tree(temporary)
