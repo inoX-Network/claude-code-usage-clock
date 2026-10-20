@@ -766,6 +766,16 @@ def test_check_names_a_git_that_cannot_run_in_the_clone(setup, monkeypatch):
     assert code == 1 and 'FIX  Sync clone: git status failed in the clone' in out, out
 
 
+def test_check_notes_a_clone_left_over_by_an_installer_that_was_cut_off(setup):
+    assert setup.sync()[0] == 0
+    left = setup.directory / 'repo.tmp-abc123'
+    (left / '.git').mkdir(parents=True)
+    code, out = check(setup, '--components', 'sync')
+    assert code == 0, out
+    assert (f'NOTE Sync: {left} is left over from a clone that was cut off; the sync never reads it. Remove it '
+            'when no installer runs.') in out
+
+
 def test_check_names_a_git_status_that_fails(setup, monkeypatch):
     assert setup.sync()[0] == 0
     real = _sync_core.run_command

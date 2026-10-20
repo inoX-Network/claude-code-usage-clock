@@ -1040,9 +1040,16 @@ def check_sync(cfg: dict) -> list[tuple[str, str]]:
     path, url = _sync_git.clone_dir(log_dir), _sync_git.remote_url(sync['repo'], sync['transport'])
     results = [('OK', f'Sync repo: {sync["repo"]} ({sync["transport"]}, mode {sync["mode"]})')]
     results += check_clone(path, url, sync['repo'])
-    results += check_sync_state(os.path.join(log_dir, _sync_core.SYNC_DIR), sync['repo'], time.time())
+    directory = os.path.join(log_dir, _sync_core.SYNC_DIR)
+    results += check_sync_state(directory, sync['repo'], time.time())
     if git_folder(path):
         results += check_clone_size(path, sync['max_clone_mb'])
+    try:
+        left = sorted(name for name in os.listdir(directory) if name.startswith(_sync_git.CLONE_TEMP_PREFIX))
+    except OSError:      # no sync folder yet
+        left = []
+    results += [('NOTE', f'Sync: {os.path.join(directory, name)} is left over from a clone that was cut off; the sync '
+                         'never reads it. Remove it when no installer runs.') for name in left]
     return results
 
 

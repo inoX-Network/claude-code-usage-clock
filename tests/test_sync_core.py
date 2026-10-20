@@ -1063,3 +1063,22 @@ def test_the_outcome_of_a_push_names_how_it_ended(tmp_path):
     put_state(tmp_path, State(backoff_level=1, last_error='visibility'))
     assert outcome(forced=True) == _sync_core.Outcome('blocked', 'visibility')
     assert [push(tmp_path, forced=True)] == [1]                                # blocked is a failure as exit code
+
+
+def test_a_run_command_that_is_interrupted_ends_the_tree_of_its_child(monkeypatch):
+    """Ctrl+C in the installer while git clones: the child runs in a group of its own, so it would outlive the
+    installer and go on writing into the sync folder."""
+    import subprocess
+    ended = []
+
+    class Interrupted:
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+
+        def communicate(self, timeout=None):
+            raise KeyboardInterrupt
+    monkeypatch.setattr(subprocess, 'Popen', Interrupted)
+    monkeypatch.setattr(_plat, 'kill_tree', ended.append)
+    with pytest.raises(KeyboardInterrupt):
+        _sync_core.run_command(['git', 'clone'], _sync_core.Deadline(60))
+    assert len(ended) == 1 and ended[0].argv == ['git', 'clone'] and not _sync_core._children
