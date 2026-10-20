@@ -849,6 +849,19 @@ def test_update_clone_with_an_empty_remote_does_nothing(tmp_path):
     assert _sync_git.update_clone(run, _sync_git.open_clone(run)) == 'up_to_date'
 
 
+def test_no_git_config_of_the_user_changes_the_line_ends_in_the_work_tree(device, remote, git_alone):
+    """Git for Windows sets core.autocrlf=true in its system config: the clone would check foreign files out with
+    CRLF, and an export appending LF lines would leave them mixed. The work tree holds the bytes of the repository."""
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write('[core]\n\tautocrlf = true\n')
+    run = run_of(device)
+    clone = _sync_git.open_clone(run)
+    remote.foreign_commit('machines/other/days/2026-10.jsonl', b'{"d":1}\n{"d":2}\n')
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    with open(os.path.join(device.clone, 'machines', 'other', 'days', '2026-10.jsonl'), 'rb') as f:
+        assert f.read() == b'{"d":1}\n{"d":2}\n'
+
+
 def test_shadow_gathers_commits_while_another_machine_pushes_and_on_sends_them(tmp_path, remote):
     first, second = Device(tmp_path / 'a', mode='shadow'), Device(tmp_path / 'b')
     for minute in range(3):

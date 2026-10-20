@@ -195,8 +195,13 @@ def find_git_bash(env=None, settings_env=None) -> str | None:
 
 def start_detached(argv: list[str], popen=None):
     """Starts `argv` so that it outlives its parent and never shows a console window: stdin, stdout and stderr on
-    the null device, DETACHED_FLAGS. Returns the Popen object. `popen` replaces subprocess.Popen (tests)."""
+    the null device, DETACHED_FLAGS. Returns the Popen object. `popen` replaces subprocess.Popen (tests).
+
+    The running Python of a venv becomes `interpreter()`: its python.exe is a launcher that starts the real one as a
+    child, and without a console of its own that child gets a new, visible one (CREATE_NO_WINDOW does not reach it)."""
     import subprocess
+    if argv and argv[0] == sys.executable:
+        argv = [interpreter(), *argv[1:]]
     return (popen or subprocess.Popen)(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, close_fds=True, creationflags=DETACHED_FLAGS)
 

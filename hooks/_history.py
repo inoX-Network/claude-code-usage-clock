@@ -10,7 +10,8 @@ line is appended while the usage file's lock is held (`_usage.update_file(..., a
 running side by side never write the same measurement twice. A line is written only if
 
 - `five`, `week` or one of the resets differs from the last line, or
-- the last line is at least `heartbeat_min` old (an idle stretch stays visible as a stretch, not as a gap),
+- the last line is at least `heartbeat_min` old (an idle stretch stays visible as a stretch, not as a gap), or
+  further than FUTURE_SLACK_S ahead of now (the clock was set back),
 
 and only if at least one block is valid. Above `max_kb` the file becomes `usage-history.jsonl.1` (an older
 `.1` goes); the new file starts with the next line. A last line cut off without its line break (a crash
@@ -31,6 +32,9 @@ import _usage
 FILE_NAME = 'usage-history.jsonl'
 TAIL_BYTES = 4096    # a line is about 120 bytes: the tail holds the last one for sure
 KEYS = ('five', 'week', 'five_resets', 'week_resets')
+# A last line less than this ahead of now counts as now: status lines started side by side take the lock in any
+# order, and `t` is cut to the second, so the one that waited can see the line of a later one up to a second ahead.
+FUTURE_SLACK_S = 60
 
 
 def _sample(merged, now: float) -> tuple | None:
@@ -65,8 +69,9 @@ def _due(descriptor: int, size: int, sample: tuple, now: float, heartbeat_min: f
     if last is None:
         return True
     values, stamp = last
-    # an age below zero is a last line from the future: it must not hold the history back
-    return values != sample or not 0 <= now - stamp < heartbeat_min * 60
+    # a last line further ahead than FUTURE_SLACK_S is from the future (a clock set back): it must not hold the
+    # history back
+    return values != sample or not -FUTURE_SLACK_S < now - stamp < heartbeat_min * 60
 
 
 def _open(path: str) -> int:

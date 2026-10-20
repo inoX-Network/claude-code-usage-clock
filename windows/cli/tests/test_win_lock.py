@@ -170,6 +170,18 @@ def test_the_process_flags_are_those_of_the_win32_api():
         subprocess.DETACHED_PROCESS, subprocess.CREATE_NEW_PROCESS_GROUP, subprocess.CREATE_NO_WINDOW)
 
 
+def test_a_real_detached_start_of_the_running_python_gets_no_console_window(tmp_path):
+    """The suite runs from a venv: sys.executable is the launcher, whose child would get a visible console window
+    (measured 20.10.2026). The child reports the handle of its console window, 0 for none."""
+    report = tmp_path / 'console.txt'
+    process = _win.start_detached([sys.executable, '-c', textwrap.dedent(f'''
+        import ctypes
+        open({str(report)!r}, 'w').write(str(ctypes.windll.kernel32.GetConsoleWindow()))
+    ''')])
+    assert process.wait(timeout=30) == 0
+    assert report.read_text() == '0'
+
+
 def test_kill_tree_ends_a_child_and_its_grandchild(tmp_path):
     marker = tmp_path / 'grandchild.pid'
     child = subprocess.Popen([sys.executable, '-c', textwrap.dedent(f'''
