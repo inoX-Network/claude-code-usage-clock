@@ -11,7 +11,8 @@ If you open a pull request, it is ready when:
   key texts against the code, and `tests/test_doc_links.py` checks every relative link and anchor,
 - the text stays in English, like the rest of the repository.
 
-Security problems go through [SECURITY.md](SECURITY.md), not through a public issue.
+Security problems go through [SECURITY.md](SECURITY.md), not through a public issue. Coding agents read
+[AGENTS.md](AGENTS.md) too (Claude Code through `CLAUDE.md`, which imports it).
 
 ## Development
 
