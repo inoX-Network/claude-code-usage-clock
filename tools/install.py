@@ -698,10 +698,10 @@ CREDENTIALS = ('git has to reach the repository without asking: sign in once wit
 
 
 class SyncPlan(NamedTuple):
-    """What a run does for the component sync. `content` is config.json with the keys of `changes` set."""
+    """What a run does for the component sync. `updates` are the keys of the section sync that `changes` describes."""
     path: str               # the config.json the hooks read
     existed: bool
-    content: dict
+    updates: dict
     changes: list[str]
     mode: str
     source: str             # where the mode comes from
@@ -761,22 +761,21 @@ def resolve_sync_mode(data: dict, args: argparse.Namespace, target: str, current
 
 def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
     path = config_file(target)
-    content = read_config(path)
-    section = content.setdefault('sync', {})
+    section = read_config(path).get('sync', {})
     old_repo, old_mode = section.get('repo', ''), section.get('mode', 'off')
     mode, source, write_mode = resolve_sync_mode(data, args, target, old_mode)
     cfg = effective_config(path)
     repo = args.sync_repo or cfg['sync']['repo']
     if not repo:
         raise UsageError(f'The component sync needs --sync-repo owner/name: sync.repo is not set in {path}.')
-    changes = []
+    changes, updates = [], {}
     if args.sync_repo and old_repo != repo:
-        section['repo'] = repo
+        updates['repo'] = repo
         changes.append(f'sync.repo {old_repo!r} -> {repo!r}')
     if write_mode and old_mode != mode:
-        section['mode'] = mode
+        updates['mode'] = mode
         changes.append(f'sync.mode {old_mode!r} -> {mode!r}')
-    return SyncPlan(path, os.path.exists(path), content, changes, mode, source, repo, cfg['sync']['transport'],
+    return SyncPlan(path, os.path.exists(path), updates, changes, mode, source, repo, cfg['sync']['transport'],
                     cfg['sync']['max_clone_mb'], log_dir_of(cfg))
 
 
@@ -842,7 +841,10 @@ def write_sync_config(plan: SyncPlan) -> None:
     if not plan.changes:
         print('config.json: sync keys already set - unchanged')
         return
-    backup = write_settings(plan.path, plan.content, os.path.exists(plan.path), backup=plan.existed)
+    # Read again: the clone may have taken minutes, and only the keys of this run are set into what is there now
+    content = read_config(plan.path)
+    content.setdefault('sync', {}).update(plan.updates)
+    backup = write_settings(plan.path, content, os.path.exists(plan.path), backup=plan.existed)
     print(f'config.json: {", ".join(plan.changes)} written to {plan.path}')
     if backup:
         print(f'Backup:  {backup}')
@@ -855,11 +857,9 @@ def plan_sync_off(target: str) -> SyncPlan | None:
     path = config_file(target)
     if not os.path.lexists(path) or effective_config(path)['sync']['mode'] == 'off':
         return None
-    content = read_config(path)
-    old = content['sync']['mode']
-    content['sync']['mode'] = 'off'
+    old = read_config(path)['sync']['mode']
     cfg = effective_config(path)
-    return SyncPlan(path, True, content, [f'sync.mode {old!r} -> {"off"!r}'], 'off', '--uninstall', cfg['sync']['repo'],
+    return SyncPlan(path, True, {'mode': 'off'}, [f'sync.mode {old!r} -> {"off"!r}'], 'off', '--uninstall', cfg['sync']['repo'],
                     cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir_of(cfg))
 
 

@@ -259,6 +259,19 @@ def test_a_first_installation_starts_in_shadow_whatever_the_config_says(setup):
     assert len(setup.backups('config.json')) == 1
 
 
+def test_a_change_of_config_json_during_the_clone_is_kept(setup, monkeypatch):
+    """The clone may take minutes: config.json is read again just before the two keys are set in it."""
+    setup.set_config(repo='')
+    real = _sync_git.make_clone
+
+    def make_clone(*args, **kwargs):
+        setup.config.write_text(json.dumps({'statusline': {'yellow_from': 40}, 'sync': {}}), encoding='utf-8')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(_sync_git, 'make_clone', make_clone)
+    assert setup.sync()[0] == 0
+    assert setup.config_data() == {'statusline': {'yellow_from': 40}, 'sync': {'repo': REPO, 'mode': 'shadow'}}
+
+
 def test_a_kept_mode_that_is_no_mode_says_the_hooks_run_with_off(setup):
     assert setup.sync()[0] == 0
     data = setup.config_data()
