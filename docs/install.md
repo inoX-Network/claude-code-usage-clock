@@ -48,7 +48,7 @@ Options:
 | `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). Needs the component `spawn-gate`. |
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
-| `--sync-repo OWNER/NAME` | The private GitHub repository of the sync: sets `sync.repo`, checks once that it cannot be read without logging in (public or unclear: exit code 1, nothing installed) and clones it to `<log_dir>/sync/repo/`. Run again, it lifts the block after a push found the repository public. Needs the component `sync`. See [the sync](sync.md#install). |
+| `--sync-repo OWNER/NAME` | The private GitHub repository of the sync: sets `sync.repo`, checks once that it cannot be read without logging in (public or unclear: exit code 1, no hook added and `settings.json` and `config.json` unchanged) and clones it to `<log_dir>/sync/repo/`. Run again, it lifts the block after a push found the repository public. Needs the component `sync`. See [the sync](sync.md#install). |
 | `--sync-mode off\|shadow\|on` | Mode of the sync, in `config.json`. Without it an installed sync keeps its mode; a first install starts in `shadow` (commits locally, pushes nothing). Needs the component `sync`. |
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |

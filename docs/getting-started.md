@@ -258,7 +258,9 @@ yours, so that the report on each one shows all of them. It is off until you ins
 2. Let `git` on this computer sign in to GitHub once; the tool itself never asks for a password. On Windows, type
    `git ls-remote https://github.com/anna/usage-sync.git` (with your GitHub name instead of `anna`) and sign in in the
    browser window that Git for Windows opens. On Linux and macOS the simplest way is the
-   [GitHub CLI](https://cli.github.com/): `gh auth login`, then `gh auth setup-git`.
+   [GitHub CLI](https://cli.github.com/): `gh auth login`, then `gh auth setup-git`. Both give git access to all
+   your repositories; the safer way, a key or token for this one repository only, is on
+   [the sync page](sync.md#install).
 3. In the folder from step 2 of the install, with your GitHub name instead of `anna`:
 
 ```sh
@@ -266,7 +268,7 @@ python3 tools/install.py --components sync --sync-repo anna/usage-sync
 ```
 
 (On Windows: `python tools\install.py --components sync --sync-repo anna/usage-sync`.) The installer first checks that
-nobody can read the repository without logging in. If it is public, it stops and installs nothing. Then it starts the
+nobody can read the repository without logging in. If it is public, it stops and changes nothing in your settings. Then it starts the
 sync in shadow mode: it prepares everything on this computer but sends nothing yet. Do the same on your other
 computers, and switch it on everywhere once you are happy:
 

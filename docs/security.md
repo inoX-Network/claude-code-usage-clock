@@ -51,7 +51,12 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, the context split of each session, measurement history, report archive, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
 
 With the [sync](sync.md), a model that can write to its clone can fake figures, and they then land on every machine.
-The clone lies below `<log_dir>` (`~/.cache/claude-usage-clock/sync/repo/`), so the last row above covers it already.
+Write access to the whole sync folder `<log_dir>/sync/` gives more: the cached visibility result (`visibility.json`:
+for up to 24 hours no push checks again whether the repository is public) and the git config of the clone
+(`.git/config`: an ssh command or a filter driver that every push in the background then runs). All of it lies below
+`<log_dir>` (`~/.cache/claude-usage-clock/sync/`), so the last row above covers it already. Give git access to the
+sync repository only (a deploy key or a fine-grained token for that repository, see [the sync](sync.md#install)),
+so that even such a command cannot write elsewhere with your account.
 
 List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
 nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is

@@ -16,9 +16,17 @@ the commits gathered in shadow mode go out with the first push.
 ## Install
 
 Create a **private** repository on GitHub first (for example `anna/usage-sync`), and make sure git can reach it
-without asking: the sync never asks for a password. With `https` (the default) sign in once with a credential helper
-(the Git Credential Manager of Git for Windows, or `gh auth setup-git`); with `"transport": "ssh"` in `config.json` an
-ssh key whose host `github.com` is in your `known_hosts`. Then, on every machine:
+without asking: the sync never asks for a password. Give it access to **this repository only**, so that a push that
+runs in the background can never write anywhere else with your account:
+
+- with `"transport": "ssh"` in `config.json`: a *deploy key* of the repository (Settings, Deploy keys, "Allow write
+  access"), used for `github.com` in your ssh config, with `github.com` in your `known_hosts`;
+- with `https` (the default): a *fine-grained personal access token* for only this repository with the permission
+  "Contents: read and write", stored once in the credential helper (the Git Credential Manager of Git for Windows,
+  or the store of your system).
+
+Signing in with your whole account (the Git Credential Manager in the browser, or `gh auth setup-git`) works too, but
+then git holds a token that can write to all your repositories. Then, on every machine:
 
 ```sh
 python3 tools/install.py --components sync --sync-repo anna/usage-sync --dry-run     # shows what would change
@@ -33,7 +41,9 @@ The installer:
   says which mode applies and where it comes from (`Sync mode: shadow (default, nothing installed yet)`; a run without
   `--sync-mode` keeps the mode of an installed sync),
 - checks once, and shows it, that the repository **cannot be read without logging in**. A public repository, or an
-  answer that does not say (no network), stops the installation with exit code 1, and nothing is installed,
+  answer that does not say (no network), stops the installation with exit code 1: no hook is added and
+  `settings.json` and `config.json` stay as they are (in the log folder the run leaves the sync folder with its lock
+  file and empty hooks folder; a cut-off clone may leave a `repo.tmp-*` folder, which `--check` names),
 - clones the repository to `<log_dir>/sync/repo/` (default `~/.cache/claude-usage-clock/sync/repo/`, folder 0700).
   The size of the repository is checked before anything is checked out, as for every pull: above `sync.max_clone_mb`
   (default 1024 MB) or 100 000 files it stops with exit code 1 and checks nothing out. A folder that is already there
@@ -80,8 +90,15 @@ locally, no allocation across machines.
   system catches it up.
 - All machines should run in one time zone. Otherwise the day figures are cut at each machine's own midnight, and the
   report says so under Notable (`sync_timezone`).
-- A model that can write to the clone can fake figures, and they reach every machine. The clone lies below the log
-  folder, which a guard hook should block already ([Working with a guard hook](security.md#working-with-a-guard-hook)).
+- A model that can write to the sync folder `<log_dir>/sync/` can fake figures, and they reach every machine. It can
+  also do more: fake the cached result of the visibility check (`visibility.json`, so that for up to 24 hours no
+  push checks again), or put commands into the git config of the clone (`.git/config`: an ssh command, a filter
+  driver), which every push in the background then runs. The sync folder lies below the log folder, which a guard
+  hook should block already ([Working with a guard hook](security.md#working-with-a-guard-hook)).
+- The size limit (`sync.max_clone_mb`, 100 000 files) applies to what is checked out, not to what is downloaded: the
+  clone and every fetch take the whole history of the default branch, limited only by the time a run may take (the
+  clone of the installer 300 s, a push 60 s, a pull 5 or 30 s). A repository only your machines write to stays small;
+  compacting (`sync.keep_request_months`) removes old requests from the tree, not from the history.
 
 ## If you also sync `~/.claude` with a file sync
 
