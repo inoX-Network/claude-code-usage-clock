@@ -70,7 +70,6 @@ import tempfile
 import time
 from datetime import date, datetime, timezone
 from typing import NamedTuple
-from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
@@ -720,8 +719,7 @@ def config_file(target: str) -> str:
 
 def effective_config(path: str) -> dict:
     """The configuration the hooks would use with the config.json `path`: defaults where it is missing or broken."""
-    with mock.patch.dict(os.environ, {'CCUC_CONFIG': path}):
-        return _config.load(log_problems=False)
+    return _config.load(log_problems=False, path=path)
 
 
 def log_dir_of(cfg: dict) -> str:
