@@ -893,6 +893,12 @@ def test_attributes_that_cannot_be_written_are_internal(device, monkeypatch):
     assert failure_of(_sync_git.open_clone, run_of(device)) == (
         'internal', 'the attributes of the sync clone cannot be written')
 
+    def full(*args):
+        raise OSError(28, 'no space left')
+    monkeypatch.setattr(_context_state, 'write_private', full)
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'the attributes of the sync clone cannot be written')
+
 
 def test_shadow_gathers_commits_while_another_machine_pushes_and_on_sends_them(tmp_path, remote):
     first, second = Device(tmp_path / 'a', mode='shadow'), Device(tmp_path / 'b')
