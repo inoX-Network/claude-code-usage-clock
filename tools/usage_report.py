@@ -2010,6 +2010,12 @@ def machine_name(text: str) -> str:
     return CONTROL_CHARS.sub('?', text)[:64] or '?'
 
 
+def utc_offset(minutes: int) -> str:
+    """A standard offset to UTC in minutes as the report names it: `UTC+1`, `UTC-8`, `UTC+5:30`."""
+    hours, rest = divmod(abs(minutes), 60)
+    return f'UTC{"-" if minutes < 0 else "+"}{hours}' + (f':{rest:02d}' if rest else '')
+
+
 class Machines:
     """The machines of the sync: this one (key `own`, from its local files) and the others (their folders in the
     clone), and what was read of the clone: request lines, measurements, gate decisions and day lines by machine."""
@@ -2018,6 +2024,7 @@ class Machines:
         self.own = own                    # the machine id, or '' if this machine never synced
         self.names = {own: name}
         self.platforms = {own: sync_format.platform_name()}
+        self.utc_std: dict[str, int | None] = {own: sync_format.utc_std()}
         self.last_success: dict[str, float | None] = {own: last_success}
         self.requests: list[dict] = []
         self.history: list[Measurement] = []
@@ -2032,6 +2039,7 @@ class Machines:
         info, status = machine.machine or {}, machine.status or {}
         self.names[key] = machine_name(info.get('name') or sync_format.display_name(key, ''))
         self.platforms[key] = info.get('platform')
+        self.utc_std[key] = info.get('utc_std')
         self.last_success[key] = sync_format.parse_time(status['last_success']) if status else None
         self.requests += [{**row, '_machine': key} for row in machine.requests]
         times: set[float] = set()
@@ -2251,7 +2259,8 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
             'machine': None if chosen is None else machines.names[chosen],
             'machines': [{'id': key or None, 'name': machines.names[key], 'platform': machines.platforms[key],
                           'own': key == machines.own,
-                          'last_success': None if machines.last_success[key] is None else iso(machines.last_success[key])}
+                          'last_success': None if machines.last_success[key] is None else iso(machines.last_success[key]),
+                          'utc_std': machines.utc_std[key]}
                          for key in keys],
             'pull': pull, 'push': push,
             'backoff': {'level': state.backoff_level, 'last_error': state.last_error,
@@ -2260,8 +2269,9 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
 
 
 def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
-    """The notable lines of the sync: machines without a push for over 24 hours, this machine blocked or backing off,
-    a pull that failed or found no fast forward."""
+    """The notable lines of the sync: machines without a push for over 24 hours, machines in different time zones
+    (of those whose standard offset is known), this machine blocked or backing off, a pull that failed or found no fast
+    forward."""
     notes = []
     stale = [machine for machine in sync['machines'] if machine['last_success'] is None
              or now - _transcripts.parse_ts(machine['last_success']) > STALE_PUSH_S]
@@ -2272,6 +2282,12 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
         notes.append({'rule': 'sync_stale', 'machines': [{'name': m['name'], 'last_success': m['last_success']}
                                                          for m in stale],
                       'text': f'no push for over 24 h: {listing}'})
+    zoned = [machine for machine in sync['machines'] if machine['utc_std'] is not None]
+    if len({machine['utc_std'] for machine in zoned}) > 1:
+        listing = ', '.join(f'{m["name"]} {utc_offset(m["utc_std"])}' for m in zoned)
+        notes.append({'rule': 'sync_timezone', 'machines': [{'name': m['name'], 'utc_std': m['utc_std']} for m in zoned],
+                      'text': f"machines in different time zones ({listing}): day lines are cut at each machine's "
+                              'local midnight'})
     if state.blocked:
         notes.append({'rule': 'sync_backoff', 'category': 'visibility', 'next_due': None,
                       'text': 'sync of this machine blocked: the sync repository is public (visibility); '

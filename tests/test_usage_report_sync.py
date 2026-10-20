@@ -41,9 +41,11 @@ class Clone:
         self.root = str(root)
         os.makedirs(self.root, exist_ok=True)
 
-    def machine(self, machine_id, name='laptop', last_success='2026-10-14T11:00:00Z'):
-        sync_format.write_machine(self.root, machine_id, {'name': name, 'platform': 'linux', 'schema': 1,
-                                                          'created': '2026-10-01T00:00:00Z'})
+    def machine(self, machine_id, name='laptop', last_success='2026-10-14T11:00:00Z', utc_std=None):
+        """machine.json and status.json of another machine; `utc_std` by default that of this machine."""
+        sync_format.write_machine(self.root, machine_id, {
+            'name': name, 'platform': 'linux', 'schema': 1, 'created': '2026-10-01T00:00:00Z',
+            'utc_std': sync_format.utc_std() if utc_std is None else utc_std})
         if last_success is not None:
             sync_format.write_status(self.root, machine_id, {'last_success': last_success, 'tool_version': '1.0.0',
                                                              'schema': 1})
@@ -666,7 +668,8 @@ def test_a_sync_folder_that_cannot_be_used_fails_push_and_pull_but_not_the_repor
 def test_local_prints_the_saved_output_byte_for_byte(world, monkeypatch, tmp_path, mode):
     machine = Synced(world, monkeypatch, tmp_path, mode)
     build(world)
-    machine.clone.machine(LAPTOP)
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    machine.clone.machine(LAPTOP, utc_std=-480)      # another time zone changes nothing here
     machine.clone.requests(LAPTOP, [request_line('2026-10-13T10:05:00Z', 'l1', 1.0, first=True)])
     monkeypatch.setattr(report_module, 'PRICES_FILE', os.path.join(os.path.dirname(__file__), 'golden', 'prices.json'))
     for name, args in OUTPUTS.items():
@@ -782,6 +785,59 @@ def test_a_machine_that_never_pushed_is_notable(world, synced):
     assert note['text'] == 'no push for over 24 h: desk never'
 
 
+# --- Machines in different time zones (FORMAT v8: utc_std in machine.json) -----------------------------------------
+
+def time_zone_notes(report):
+    return [n for n in report['overview']['notable'] if n['rule'] == 'sync_timezone']
+
+
+def test_machines_in_one_time_zone_are_not_notable(world, synced, monkeypatch):
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP, utc_std=60)
+    synced.clone.machine(TABLET, name='tablet', utc_std=60)
+    assert time_zone_notes(world.report()) == []
+
+
+def test_this_machine_in_another_time_zone_than_the_other_is_notable(world, synced, monkeypatch):
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP, utc_std=-480)
+    report = world.report()
+    assert time_zone_notes(report) == [{
+        'rule': 'sync_timezone', 'machines': [{'name': 'desk', 'utc_std': 60}, {'name': 'laptop', 'utc_std': -480}],
+        'text': "machines in different time zones (desk UTC+1, laptop UTC-8): day lines are cut at each machine's "
+                'local midnight'}]
+    assert [m['utc_std'] for m in report['coverage']['sync']['machines']] == [60, -480]
+    assert ("  machines in different time zones (desk UTC+1, laptop UTC-8): day lines are cut at each machine's "
+            'local midnight') in world.overview()
+
+
+def test_two_other_machines_in_different_time_zones_are_notable_with_every_known_one(world, synced, monkeypatch):
+    monkeypatch.setattr(sync_format.time, 'timezone', 0)
+    world.projects.mkdir()
+    synced.clone.machine(LAPTOP, name='laptop', utc_std=0)
+    synced.clone.machine(TABLET, name='tablet', utc_std=330)
+    synced.clone.raw('3ccccccc-0000-4000-a000-000000000003', 'machine.json', b'{"v":1,')
+    synced.clone.machine('4ddddddd-0000-4000-b000-000000000004', name='phone', utc_std=-210)
+    [note] = time_zone_notes(world.report())
+    assert note['text'] == ("machines in different time zones (desk UTC+0, laptop UTC+0, phone UTC-3:30, tablet "
+                            "UTC+5:30): day lines are cut at each machine's local midnight")
+    assert [m['name'] for m in note['machines']] == ['desk', 'laptop', 'phone', 'tablet']
+
+
+def test_a_machine_without_a_readable_machine_json_does_not_count(world, synced, monkeypatch):
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    world.projects.mkdir()
+    synced.clone.raw(LAPTOP, 'machine.json', b'{"v":1,"name":"laptop","platform":"linux","schema":1,'
+                                             b'"created":"2026-10-01T00:00:00Z"}')
+    synced.clone.raw(TABLET, 'machine.json', b'{"v":1,"name":"tablet","platform":"linux","schema":1,'
+                                             b'"created":"2026-10-01T00:00:00Z","utc_std":61.5}')
+    report = world.report()
+    assert time_zone_notes(report) == []
+    assert [m['utc_std'] for m in report['coverage']['sync']['machines']] == [60, None, None]
+
+
 def test_the_json_carries_the_machine_of_every_cli_and_the_sync_coverage(world, synced):
     two_machines(world, synced)
     synced.state(last_success=NOW - 60, last_pull=NOW - 1000)
@@ -790,8 +846,9 @@ def test_the_json_carries_the_machine_of_every_cli_and_the_sync_coverage(world, 
     assert sync_part['clone'] == 'read'
     assert sync_part['machines'] == [
         {'id': synced.own, 'name': 'desk', 'platform': sync_format.platform_name(), 'own': True,
-         'last_success': '2026-10-14T11:59:00Z'},
-        {'id': LAPTOP, 'name': 'laptop', 'platform': 'linux', 'own': False, 'last_success': '2026-10-14T11:00:00Z'}]
+         'last_success': '2026-10-14T11:59:00Z', 'utc_std': sync_format.utc_std()},
+        {'id': LAPTOP, 'name': 'laptop', 'platform': 'linux', 'own': False, 'last_success': '2026-10-14T11:00:00Z',
+         'utc_std': sync_format.utc_std()}]
     assert sync_part['pull'] == {'status': 'ok', 'category': None, 'detail': None, 'last_pull': '2026-10-14T12:00:00Z'}
     assert sync_part['skipped'] == dict.fromkeys(sync_format.COUNTERS, 0) and sync_part['unreadable_day_lines'] == 0
     assert sync_part['text'] == 'Sync: 2 devices · desk 1 min ago · laptop 1 h ago · pull ok'
@@ -843,7 +900,7 @@ def test_a_machine_without_machine_json_is_named_by_its_id(world, synced):
     report = world.report('--day', '2026-10-13')
     assert by_id(report)['llllllll']['machine'] == 'machine-1aaaaa'
     assert report['coverage']['sync']['machines'][1] == {'id': LAPTOP, 'name': 'machine-1aaaaa', 'platform': None,
-                                                         'own': False, 'last_success': None}
+                                                         'own': False, 'last_success': None, 'utc_std': None}
 
 
 def test_an_unusable_machine_id_leaves_the_clone_unread(world, synced):
