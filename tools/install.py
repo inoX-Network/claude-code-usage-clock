@@ -1129,8 +1129,12 @@ def run(args: argparse.Namespace) -> int:
             return 1
         print(f'Smoke test: passed ({", ".join(args.components)}).')
     changed = data != before
-    if sync and not args.uninstall and not args.sync_repo and not os.path.lexists(sync.clone):
-        print(f'Sync: the clone {sync.clone} is missing; run again with --sync-repo {sync.repo} to make it.')
+    if sync and not args.uninstall and not args.sync_repo:
+        if not os.path.lexists(sync.clone):
+            print(f'Sync: the clone {sync.clone} is missing; run again with --sync-repo {sync.repo} to make it.')
+        if sync_blocked(sync):
+            print(f'Sync: a push found {sync.repo} public, so nothing is pushed. Make it private, then run install.py '
+                  f'--components sync --sync-repo {sync.repo} to lift the block.')
     if args.dry_run:
         if not args.uninstall:
             note = 'would be created from config.example.json' if not config_exists(target) else 'exists, stays untouched'

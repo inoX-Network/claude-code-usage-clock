@@ -220,6 +220,17 @@ def test_an_unreadable_state_blocks_nothing_and_is_left_to_the_next_run(setup):
     assert (setup.directory / _sync_core.STATE_FILE).read_text(encoding='utf-8') == '{broken'
 
 
+@pytest.mark.parametrize('extra', [[], ['--dry-run'], ['--sync-mode', 'on']])
+def test_a_run_without_sync_repo_names_a_lasting_block(setup, extra):
+    assert setup.sync()[0] == 0
+    setup.write_state(last_error='visibility', backoff_level=1)
+    code, out = setup.run('--components', 'sync', *extra)
+    assert code == 0, out
+    assert (f'Sync: a push found {REPO} public, so nothing is pushed. Make it private, then run install.py '
+            f'--components sync --sync-repo {REPO} to lift the block.') in out
+    assert setup.state().last_error == 'visibility'
+
+
 def test_a_held_lock_lifts_no_block_and_says_so(setup, monkeypatch):
     assert setup.sync()[0] == 0
     setup.write_state(last_error='visibility', backoff_level=1)
