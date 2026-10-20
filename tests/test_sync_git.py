@@ -1101,6 +1101,9 @@ def test_an_entry_longer_than_max_entry_bytes_stops_the_listing(device, remote, 
         fetched_tree(remote, clone, plumbing(remote, f'100644 blob {blob}\t{name}\0'.encode(), 'mktree', '-z'))
     fetched('n' * 139)
     _sync_git._check_size(clone)                                    # 200 bytes
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 200)
+    _sync_git._check_size(clone)                                    # the 200 bytes without their \0 as the rest
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 65536)
     fetched('n' * 140)
     assert failure_of(_sync_git._check_size, clone) == LONG
     monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 64)
