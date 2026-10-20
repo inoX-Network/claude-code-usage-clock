@@ -1021,9 +1021,23 @@ def check_sync_state(directory: str, repo: str, now: float) -> list[tuple[str, s
     return results
 
 
+def _size(path: str) -> int:
+    """The bytes of the regular files below `path`, without entering a link or a junction (os.walk enters a junction on
+    Windows); a file a push removes meanwhile counts 0."""
+    def info(folder: str, name: str) -> os.stat_result | None:
+        try:
+            return os.lstat(os.path.join(folder, name))
+        except OSError:
+            return None
+    total = 0
+    for folder, folders, names in os.walk(path):
+        folders[:] = [name for name in folders if (found := info(folder, name)) and _plat.is_folder(found)]
+        total += sum(found.st_size for name in names if (found := info(folder, name)) and stat.S_ISREG(found.st_mode))
+    return total
+
+
 def check_clone_size(path: str, max_mb: int) -> list[tuple[str, str]]:
-    total = sum(os.lstat(os.path.join(folder, name)).st_size for folder, _dirs, names in os.walk(path)
-                for name in names)
+    total = _size(path)
     size = f'{total / MEGABYTE:.0f} MB'
     if total < CLONE_NOTE_MB * MEGABYTE:
         return [('OK', f'Sync clone size: {size}')]

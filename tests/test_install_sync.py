@@ -836,6 +836,22 @@ def test_check_notes_a_large_clone(setup, monkeypatch):
     assert code == 0 and 'NOTE Sync clone size: 2 MB, at least 1 MB' in out, out
 
 
+def test_a_file_a_push_removes_during_the_check_is_left_out_of_the_size(setup, monkeypatch):
+    assert setup.sync()[0] == 0
+    (setup.clone / 'going.bin').write_bytes(b'x' * (2 * 1024 * 1024))
+    (setup.clone / 'going-folder').mkdir()
+    (setup.clone / 'going-folder' / 'large.bin').write_bytes(b'x' * (2 * 1024 * 1024))
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.path.basename(str(path)) in ('going.bin', 'going-folder'):
+            raise FileNotFoundError(2, 'gone', str(path))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'lstat', lstat)
+    code, out = check(setup, '--components', 'sync')
+    assert 'OK   Sync clone size: 0 MB' in out, out
+
+
 def test_the_note_threshold_of_the_clone_size_is_about_500_mb():
     assert load().CLONE_NOTE_MB == 500
 

@@ -88,3 +88,12 @@ def test_check_names_a_junction_as_the_clone_and_does_not_walk_into_it(setup, tm
     code, out = check(setup, '--components', 'sync')
     assert code == 1 and f'FIX  Sync clone: {setup.clone} is no git folder' in out, out
     assert 'Sync clone size' not in out
+
+
+def test_the_size_of_the_clone_leaves_out_a_junction_inside_it(setup, tmp_path):
+    assert setup.sync()[0] == 0
+    (tmp_path / 'big').mkdir()
+    (tmp_path / 'big' / 'large.bin').write_bytes(b'x' * (3 * 1024 * 1024))
+    junction(setup.clone / 'machines-elsewhere', tmp_path / 'big')
+    code, out = check(setup, '--components', 'sync')
+    assert 'OK   Sync clone size: 0 MB' in out, out
