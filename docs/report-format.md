@@ -219,6 +219,7 @@ The entries of `notable` by `rule`:
 | `project_dominates` | `project`, `share` (above 0.5) and `cost_usd`. |
 | `unexplained_rise` | `week_points` and `five_points`: points that rose with no request with a price in between (an entry exists if one of them is above 0). |
 | `sync_stale` | With the sync: `machines`, a list of `name` and `last_success` (`null`: never) of the machines without a successful push for over 24 hours, this one included. |
+| `sync_timezone` | With the sync: the machines whose `utc_std` is known have at least two different ones. `machines`, a list of `name` and `utc_std` of those machines; the text names each with its offset (`UTC+1`, `UTC-8`, `UTC+5:30`). All machines should run in one time zone; otherwise day lines are cut at each machine's local midnight. The figures are not changed. |
 | `sync_backoff` | With the sync: this machine's push is blocked (`category` `visibility`: the repository was found public, `next_due` `null`) or backs off after an error (`category`, `next_due`: when it tries again). |
 | `sync_machine_id` | With the sync: the machine id of this machine (`sync/machine_id` in the log folder) cannot be used; the other machines are not read and this one does not push. |
 | `sync_pull` | With the sync: the pull before the report failed (`status` `failed`, `category`) or could not bring the histories together (`status` `diverged`: the own commits do not fit onto the repository, or the clone has changes that are not committed; nothing was merged). The text names the fixed reason. The other machines are as of the last pull. |
@@ -334,7 +335,7 @@ Only with the sync (`sync.mode` `shadow` or `on`, not with `--local`). Without i
 | `mode` | `sync.mode`: `shadow` or `on`. |
 | `text` | The part of the `Sources:` line of `--full` about the sync, for example `Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`: the number of machines, each with the age of its last successful push (`never pushed` without one), the push of `--sync`, the pull, and `only NAME` with `--machine`. |
 | `machine` | The name `--machine` chose, else `null`. |
-| `machines` | Every machine, this one first, then by name: `id` (its machine id; `null` if this machine never synced), `name` (`sync.machine_name`, else `machine-` and 6 characters of the id; from another machine's `machine.json`, with control characters as `?` and at most 64 characters), `platform` (`linux`, `darwin`, `windows`, `null` if unknown), `own` (`true` for this machine), `last_success` (its last successful push, from the state of this machine or the `status.json` of the other; `null`: none). |
+| `machines` | Every machine, this one first, then by name: `id` (its machine id; `null` if this machine never synced), `name` (`sync.machine_name`, else `machine-` and 6 characters of the id; from another machine's `machine.json`, with control characters as `?` and at most 64 characters), `platform` (`linux`, `darwin`, `windows`, `null` if unknown), `own` (`true` for this machine), `last_success` (its last successful push, from the state of this machine or the `status.json` of the other; `null`: none), `utc_std` (the offset of its standard time to UTC in minutes: of this machine from its time zone, of another from its `machine.json`; `null` if that is missing or cannot be read). |
 | `pull` | `status`: `ok` (pulled now), `recent` (the last pull is less than 5 minutes old: none now), `skipped` (`--no-pull`), `locked` (another sync run holds the lock: the clone as it is), `failed` or `diverged` (the histories could not be brought together: nothing merged); `category` (the error category of a failed pull, else `null`); `detail` (the fixed text of that error, never output of git, for example `the sync clone is missing, run the installer with --sync-repo`; else `null`); `last_pull` (the last successful pull, `null`: never). |
 | `push` | `null`, or with `--sync`: `status` `ok`, `failed` (with `category`), `blocked` (`category` `visibility`: the repository is public, no push) or `locked`; `category`; `detail` (the fixed text of a failure, never output of git, else `null`). |
 | `clone` | `read` (the clone was read), `missing` (there is no clone: only this machine; `Sources:` says `no clone of the sync repository`) or `unread` (the machine id of this machine cannot be used, so its own folder could not be told from the others: the clone is not read; `Sources:` and `Notable` say so). |
@@ -389,7 +390,7 @@ machines/<machine_id>/
   are only in the lines.
 - Every `.jsonl` file is UTF-8 with one record per line and is only appended to. `status.json` and `machine.json` are
   the only files that are overwritten, and only by their own machine: `status.json` on every push, `machine.json` only
-  when `name` or `platform` changed (it keeps its `created`). Old request months are compacted (see below).
+  when `name`, `platform` or `utc_std` changed (it keeps its `created`). Old request months are compacted (see below).
 - Times are UTC in the form `2026-10-13T12:30:00Z`, with three decimals of a second where the transcript has them
   (`2026-10-13T12:30:00.250Z`).
 
@@ -404,6 +405,7 @@ Every line and file has `v`, the version of its format (now `1`). A reader skips
 | `platform` | `linux`, `darwin` or `windows`. |
 | `schema` | The version of the line formats the machine writes (now `1`), in both files. |
 | `created` | When the machine first wrote to the repository. |
+| `utc_std` | The offset of the machine's local standard time to UTC in minutes, without daylight saving time (Germany `60`, `-time.timezone // 60`): a whole number from `-720` to `840`. It does not change when the clocks change; a move to another time zone rewrites `machine.json`. A `machine.json` without it or with a value outside that range is not read: the report then names the machine by its id. |
 | `last_success` | `status.json`: the time of the machine's last successful push. |
 | `tool_version` | `status.json`: the version of the usage clock that pushed. |
 

@@ -3,7 +3,8 @@
 Below the root of a checked-out sync repository every machine has one folder of its own:
 
     machines/<machine_id>/
-      machine.json                              v, name, platform, schema, created; rewritten if name or platform change
+      machine.json                              v, name, platform, schema, created, utc_std; rewritten if name,
+                                                platform or utc_std change
       status.json                               v, last_success, tool_version, schema; rewritten on every push
       requests/<YYYY-MM>/<session_id>.jsonl     one line per request (month of `t`, UTC)
       history/<YYYY-MM>.jsonl                   the measurement history (month of `t`, UTC)
@@ -36,6 +37,7 @@ import os
 import re
 import stat
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -48,6 +50,7 @@ SCHEMA = 1                  # `schema` in machine.json and status.json: the vers
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_COUNT = 10 ** 12        # a larger token count or percentage is no measurement (as in the usage report)
 MAX_TIME = 4_102_444_800    # Unix seconds of 2100-01-01: a later reset time is no measurement
+UTC_STD = (-720, 840)       # the standard offsets of the time zones in minutes, UTC-12 to UTC+14
 MACHINES = 'machines'
 ID_FILE = os.path.join('sync', 'machine_id')      # below the log folder
 
@@ -178,6 +181,12 @@ def _schema(value: object, name: str) -> object:
     raise FormatError(f'{name}: not a schema number')
 
 
+def _offset(value: object, name: str) -> object:
+    if isinstance(value, int) and not isinstance(value, bool) and UTC_STD[0] <= value <= UTC_STD[1]:
+        return value
+    raise FormatError(f'{name}: not an offset in minutes')
+
+
 def _choice(allowed: tuple) -> Check:
     def check(value: object, name: str) -> object:
         if value in allowed:
@@ -202,6 +211,7 @@ FIELDS: dict[str, dict[str, Check]] = {
     },
     'machine': {
         'name': _text(NAME), 'platform': _choice(PLATFORMS), 'schema': _schema, 'created': _time,
+        'utc_std': _offset,
     },
     'status': {
         'last_success': _time, 'tool_version': _text(TOOL_VERSION), 'schema': _schema,
@@ -372,6 +382,12 @@ def platform_name() -> str:
     if os.name == 'nt':
         return 'windows'
     return 'darwin' if sys.platform == 'darwin' else 'linux'
+
+
+def utc_std() -> int:
+    """`utc_std` of machine.json: the offset of local standard time to UTC in minutes, without daylight saving time
+    (Germany 60): it does not change when the clocks change."""
+    return -time.timezone // 60
 
 
 def display_name(machine_id: str, configured: str) -> str:
@@ -580,9 +596,10 @@ def _replace_file(path: str, data: bytes) -> None:
 
 
 def write_machine(root: str, machine_id: str, values: dict) -> bool:
-    """Writes `machine.json` of the own machine from `values` (name, platform, schema, created): if it is missing,
-    or if its `name` or `platform` differ (a file that cannot be read counts as different); a rewritten file keeps
-    its `created`. True if written, False if the file was kept as it is. Atomic, like status.json."""
+    """Writes `machine.json` of the own machine from `values` (name, platform, schema, created, utc_std): if it is
+    missing, or if its `name`, `platform` or `utc_std` differ (a file that cannot be read counts as different); a
+    rewritten file keeps its `created`. True if written, False if the file was kept as it is. Atomic, like
+    status.json."""
     folder = _folder(root, machine_dir(machine_id), True)
     path = os.path.join(folder, 'machine.json')
     record = _clean('machine', values)
@@ -594,7 +611,7 @@ def write_machine(root: str, machine_id: str, values: dict) -> bool:
         regular = stat.S_ISREG(info.st_mode)
         known = _single(root, path, info, 'machine', dict.fromkeys(COUNTERS, 0)) if regular else None
     if known is not None:
-        if (known['name'], known['platform']) == (record['name'], record['platform']):
+        if all(known[name] == record[name] for name in ('name', 'platform', 'utc_std')):
             return False
         record['created'] = known['created']
     _replace_file(path, (_dump(record) + '\n').encode('utf-8'))

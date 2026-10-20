@@ -26,7 +26,7 @@ HISTORY = {'t': '2026-10-13T12:30:00Z', 'five': 40, 'week': 61.5, 'five_resets':
 SEPTEMBER = dict(HISTORY, t='2026-09-13T12:30:00Z')
 GATE = {'t': '2026-10-13T12:31:00Z', 'hook': 'soft_stop', 'decision': 'deny', 'mode': 'enforce',
         'reason': 'checkpoint due'}
-MACHINE = {'name': 'laptop', 'platform': 'linux', 'schema': 1, 'created': '2026-10-01T08:00:00Z'}
+MACHINE = {'name': 'laptop', 'platform': 'linux', 'schema': 1, 'created': '2026-10-01T08:00:00Z', 'utc_std': 60}
 STATUS = {'last_success': '2026-10-13T12:40:00Z', 'tool_version': '1.6.0', 'schema': 1}
 DAY = '{"v":1,"day":"2026-10-12","stats":{"requests":3,"cost":1.5}}'
 RECORDS = {'request': REQUEST, 'history': HISTORY, 'gate': GATE, 'machine': MACHINE, 'status': STATUS}
@@ -133,7 +133,9 @@ def test_a_day_line_spread_over_lines_is_written_as_one_line():
     ('gate', {'hook': 'usage_clock'}), ('gate', {'decision': 'Deny!'}),
     ('gate', {'mode': ''}), ('gate', {'reason': 'a: b'}), ('gate', {'reason': 'x' * 61}), ('machine', {'name': ''}),
     ('machine', {'name': 'a\nb'}), ('machine', {'name': 'host/name'}), ('machine', {'platform': 'freebsd'}),
-    ('machine', {'schema': 0}), ('machine', {'schema': True}), ('status', {'tool_version': '1.6.0 beta'}),
+    ('machine', {'schema': 0}), ('machine', {'schema': True}), ('machine', {'utc_std': -721}),
+    ('machine', {'utc_std': 841}), ('machine', {'utc_std': 60.0}), ('machine', {'utc_std': True}),
+    ('machine', {'utc_std': None}), ('machine', {'utc_std': '60'}), ('status', {'tool_version': '1.6.0 beta'}),
     ('status', {'last_success': None}),
 ])
 def test_a_value_outside_the_format_is_refused_with_category_internal(kind, changes):
@@ -149,6 +151,21 @@ def test_a_missing_required_field_is_refused(field):
     del values[field]
     with pytest.raises(sf.FormatError, match=f'request.{field}: missing'):
         sf.encode('request', values)
+
+
+def test_a_machine_json_without_utc_std_is_refused():
+    values = dict(MACHINE)
+    del values['utc_std']
+    with pytest.raises(sf.FormatError, match='machine.utc_std: missing'):
+        sf.encode('machine', values)
+    with pytest.raises(sf.FormatError, match='machine.utc_std: missing'):
+        sf.decode('machine', json.dumps({'v': 1, **values}))
+
+
+@pytest.mark.parametrize('minutes', [-720, 0, 330, 840])
+def test_utc_std_from_minus_twelve_to_plus_fourteen_hours_is_kept(minutes):
+    assert sf.decode('machine', sf.encode('machine', dict(MACHINE, utc_std=minutes))) == record('machine',
+                                                                                              utc_std=minutes)
 
 
 def test_the_optional_fields_of_a_request_may_be_left_out_as_null():
@@ -272,6 +289,13 @@ def test_the_platform_is_one_of_three_names(monkeypatch):
             patch.setattr(sf.sys, 'platform', platform)
             result = sf.platform_name()
         assert result == expected
+
+
+@pytest.mark.parametrize('seconds_west, minutes', [(-3600, 60), (0, 0), (28800, -480), (-19800, 330),
+                                                   (43200, -720), (-50400, 840)])
+def test_utc_std_is_the_standard_offset_of_this_machine_in_minutes(monkeypatch, seconds_west, minutes):
+    monkeypatch.setattr(sf.time, 'timezone', seconds_west)
+    assert sf.utc_std() == minutes
 
 
 def test_the_display_name_is_the_configured_name_or_made_from_the_id_never_the_host_name():
@@ -461,7 +485,7 @@ def test_a_folder_made_by_another_process_at_the_same_time_is_used(tmp_path, mon
     assert os.path.isfile(os.path.join(str(tmp_path), 'machines', OWN, 'history', '2026-10.jsonl'))
 
 
-def test_machine_json_stays_as_it_is_while_name_and_platform_are_the_same(tmp_path):
+def test_machine_json_stays_as_it_is_while_name_platform_and_utc_std_are_the_same(tmp_path):
     root = str(tmp_path)
     assert sf.write_machine(root, OWN, MACHINE) is True
     path = os.path.join(root, 'machines', OWN, 'machine.json')
@@ -471,13 +495,22 @@ def test_machine_json_stays_as_it_is_while_name_and_platform_are_the_same(tmp_pa
     assert sf.read_repo(root).machines[OWN].machine == record('machine')
 
 
-@pytest.mark.parametrize('changes', [{'name': 'desktop'}, {'platform': 'windows'}])
-def test_machine_json_is_rewritten_when_name_or_platform_change_and_keeps_created(tmp_path, changes):
+@pytest.mark.parametrize('changes', [{'name': 'desktop'}, {'platform': 'windows'}, {'utc_std': -480},
+                                     {'name': 'desktop', 'utc_std': 0}])
+def test_machine_json_is_rewritten_when_name_platform_or_utc_std_change_and_keeps_created(tmp_path, changes):
     root = str(tmp_path)
     sf.write_machine(root, OWN, MACHINE)
     assert sf.write_machine(root, OWN, dict(MACHINE, created='2026-10-19T00:00:00Z', **changes)) is True
     assert sf.read_repo(root).machines[OWN].machine == record('machine', **changes)
     assert os.listdir(os.path.join(root, 'machines', OWN)) == ['machine.json']
+
+
+def test_a_machine_json_written_before_utc_std_is_rewritten(tmp_path):
+    root = str(tmp_path)
+    old = {key: value for key, value in MACHINE.items() if key != 'utc_std'}
+    machine_file(root, OWN, 'machine.json', json.dumps({'v': 1, **old}))
+    assert sf.write_machine(root, OWN, MACHINE) is True
+    assert sf.read_repo(root).machines[OWN].machine == record('machine')
 
 
 def test_a_machine_json_that_cannot_be_read_is_rewritten(tmp_path):

@@ -472,6 +472,16 @@ def test_machine_json_is_written_once_and_again_for_a_new_name(world, clone):
     assert machine['name'] == 'laptop' and machine['platform'] == sync_format.platform_name()
 
 
+def test_machine_json_carries_the_standard_offset_and_is_written_again_after_a_move(world, clone, monkeypatch):
+    monkeypatch.setattr(sync_format.time, 'timezone', 28800)
+    assert run(world, clone).machine_written
+    assert exported(world, clone).machine['utc_std'] == -480
+    assert not run(world, clone).machine_written
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    assert run(world, clone).machine_written
+    assert exported(world, clone).machine['utc_std'] == 60
+
+
 @pytest.mark.posix_only
 def test_the_cursor_is_private_and_written_atomically(world, clone):
     world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', out=10)])

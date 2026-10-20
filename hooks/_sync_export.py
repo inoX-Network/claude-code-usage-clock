@@ -12,8 +12,8 @@ and lets no other one pass):
   `gates/<YYYY-MM>.jsonl`
 - the day archive `usage-days.jsonl`: `days/<YYYY-MM>.jsonl`, the project names after `sync.project_labels`
 
-and machine.json (if it is missing or its name or platform changed). status.json, commit and push are the job of the
-push (0034-SYNC-PUSH), which calls `export` under the sync lock; the clone is its argument.
+and machine.json (if it is missing or its name, platform or standard offset to UTC changed). status.json, commit and
+push are the job of the push (0034-SYNC-PUSH), which calls `export` under the sync lock; the clone is its argument.
 
 **Cursor** `<log_dir>/sync/cursor.json` (0600, written atomically): per source file the byte offset after the last
 complete line exported, its size, its id (`st_dev:st_ino`; none where the system gives no inode number), its
@@ -321,7 +321,7 @@ def export(clone_root: str, log_dir: str, cfg: dict, projects_dir: str, now: flo
     try:
         run.result.machine_written = sync_format.write_machine(clone_root, machine_id, {
             'name': sync_format.display_name(machine_id, sync['machine_name']), 'platform': sync_format.platform_name(),
-            'schema': sync_format.SCHEMA, 'created': sync_format.iso_time(now)})
+            'schema': sync_format.SCHEMA, 'created': sync_format.iso_time(now), 'utc_std': sync_format.utc_std()})
     except (sync_format.FormatError, OSError) as error:
         raise _sync_core.SyncError('internal', f'machine.json cannot be written ({type(error).__name__})') from error
 
