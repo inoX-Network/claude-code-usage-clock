@@ -614,7 +614,11 @@ run the installer with --sync-repo`).
   tree: the own commits are rebased onto the remote, `rebased` (a conflict aborts the rebase: `conflict`, the own
   commits stay); apart with changes in the work tree: nothing, `diverged_dirty` (the push rebases after its commit,
   see 7b; the report keeps the clone as it is). A fetch that fails is `auth` (AUTH_TEXTS: no user name, permission
-  denied, repository not found, 401/403 …) or `network`.
+  denied, repository not found, 401/403 …) or `network`. Before every fast-forward or rebase (also those of 7b and of
+  the second push attempt) `_check_size` adds up the blobs of `git ls-tree -r -l -z` of the remote-tracking branch (a
+  submodule has no size); above `sync.max_clone_mb` (MB of 1024 KiB) or if git cannot tell: `internal` with a fixed
+  text, nothing checked out, HEAD, work tree and own commits as they were. Same or ahead: no check. A fetch of a few
+  MB that unpacks to gigabytes (measured: 1.67 MB to 1.5 GB) thus never reaches the work tree.
 - **5. Export** (`_sync_export.export`) and **5b. compacting** (`sync_format.compact`): the request months beyond
   `sync.keep_request_months` with a day line for every day with requests. The months that may go are taken before
   anything is removed and noted in `<log_dir>/sync/compacting.json` (0600) first; without the note nothing is

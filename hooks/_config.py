@@ -80,6 +80,7 @@ DEFAULTS: dict = {
         'label_salt': '',
         'include_gates': True,
         'keep_request_months': 3,
+        'max_clone_mb': 1024,
     },
 }
 
@@ -236,12 +237,14 @@ def load(log_problems: bool = True) -> dict:
         if not (math.isfinite(sync[key]) and sync[key] > 0):
             problems.append(f'sync.{key}: must be a positive number, using default')
             sync[key] = DEFAULTS['sync'][key]
-    # Whole months only; fewer than one would compact the month that just ended.
-    months = sync['keep_request_months']
-    if not (math.isfinite(months) and months >= 1 and months == int(months)):
-        problems.append('sync.keep_request_months: must be a whole number of at least 1, using default')
-        months = DEFAULTS['sync']['keep_request_months']
-    sync['keep_request_months'] = int(months)
+    # Whole months only; fewer than one would compact the month that just ended. Whole megabytes of at least one for
+    # the size of the sync repository a fast-forward or rebase may check out.
+    for key in ('keep_request_months', 'max_clone_mb'):
+        number = sync[key]
+        if not (math.isfinite(number) and number >= 1 and number == int(number)):
+            problems.append(f'sync.{key}: must be a whole number of at least 1, using default')
+            number = DEFAULTS['sync'][key]
+        sync[key] = int(number)
     # The name goes into machine.json and the commit message: no line break, no path, no quote.
     if not _MACHINE_NAME.fullmatch(sync['machine_name']):
         problems.append('sync.machine_name: at most 64 letters, digits, spaces and . + @ = - _, using default')

@@ -28,7 +28,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    (`network`, no push).
 4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
    went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
-   onto it if the work tree is clean, else after the commit (step 7b).
+   onto it if the work tree is clean, else after the commit (step 7b). Before every fast-forward or rebase (also those
+   of 7b and 9) the files of the remote are summed up (`_check_size`): above `sync.max_clone_mb` `internal`, nothing
+   is checked out.
 5. **Export** (`_sync_export.export`) and **compacting** (`sync_format.compact`) of the own request months beyond
    `sync.keep_request_months`. The months that may go are taken before anything is removed and noted in
    `<log_dir>/sync/compacting.json` first (no note, no removal); the note is cleared after the commit. A run that
@@ -80,6 +82,7 @@ URLS = {'https': 'https://github.com/{}.git', 'ssh': 'git@github.com:{}.git'}
 PROBE_URL = 'https://github.com/{}.git'
 NULL_CONFIG = '/dev/null'       # no global config; Git for Windows reads this name as NUL
 REGULAR = '100644'              # the only mode of a file the sync commits
+MEGABYTE = 1024 * 1024          # of sync.max_clone_mb
 DEFAULT_BRANCH = 'main'         # the branch pushed to if the clone does not know the default branch of the remote
 EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'      # SHA-1 of the empty tree: attributes from nowhere
 STALE_LOCK_S = _sync_core.running_window_s()  # a git lock in the clone older than any run of the sync is left over
@@ -154,12 +157,14 @@ def configured_repo(cfg: dict) -> str:
 
 @dataclasses.dataclass(frozen=True)
 class Clone:
-    """The clone of a run: its folder and branch; `git` runs git in it within the deadline of the run."""
+    """The clone of a run: its folder and branch; `git` runs git in it within the deadline of the run. `max_mb` is
+    `sync.max_clone_mb`, the most a fast-forward or rebase may check out (`_check_size`)."""
     path: str
     branch: str
     deadline: _sync_core.Deadline = dataclasses.field(repr=False)
     env: dict = dataclasses.field(repr=False)
     options: tuple = dataclasses.field(repr=False)
+    max_mb: int = dataclasses.field(repr=False)
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
         return _sync_core.run_command([_sync_core.GIT, *self.options, *args], self.deadline, self.env, self.path)
@@ -207,7 +212,7 @@ def open_clone(run: _sync_core.Run) -> Clone:
         raise _fail('internal', f'the sync clone cannot be read ({type(error).__name__})') from error
     options = tuple(arg for setting in (f'core.hooksPath={_empty_hooks(run.directory)}', *SETTINGS)
                     for arg in ('-c', setting))
-    clone = Clone(path, '', run.deadline, _clone_env(path, run.deadline), options)
+    clone = Clone(path, '', run.deadline, _clone_env(path, run.deadline), options, run.cfg['sync']['max_clone_mb'])
     expected = [remote_url(repo, run.cfg['sync']['transport'])]
     for which in ((), ('--push',)):
         done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
@@ -429,7 +434,26 @@ def _relation(clone: Clone) -> str:
     return APART
 
 
+def _check_size(clone: Clone) -> None:
+    """Before a fast-forward or rebase: the files of the fetched remote together (`git ls-tree -r -l -z`, blobs only;
+    a submodule has no size) at most `sync.max_clone_mb` MB of 1024 KiB. More, or a size that cannot be read:
+    `internal`, nothing is checked out. A repository whose small fetch unpacks to gigabytes (a zip bomb) never reaches
+    the work tree."""
+    done = clone.git('ls-tree', '-r', '-l', '-z', _tracking(clone))
+    if done.returncode != 0:
+        raise _fail('internal', 'the size of the sync repository could not be read: nothing was checked out')
+    total = 0
+    for entry in filter(None, done.stdout.split('\0')):
+        _mode, kind, _object, size = entry.partition('\t')[0].split()
+        if kind == 'blob':
+            total += int(size)
+    if total > clone.max_mb * MEGABYTE:
+        raise _fail('internal', f'the sync repository is larger than sync.max_clone_mb ({clone.max_mb} MB): nothing '
+                                'was checked out; raise the limit if this size is expected')
+
+
 def _merge_ff(clone: Clone) -> None:
+    _check_size(clone)
     if clone.git('merge', '--ff-only', '--quiet', _tracking(clone)).returncode != 0:
         raise _fail('conflict', 'the sync clone cannot be fast-forwarded to the remote')
 
@@ -471,8 +495,9 @@ def _rebasing(clone: Clone) -> bool:
 
 
 def _rebase(clone: Clone) -> None:
-    """The own commits onto the fetched remote. A conflict aborts the rebase (`conflict`): the clone is as before,
-    with its own commits."""
+    """The own commits onto the fetched remote, if it is not too large (`_check_size`). A conflict aborts the rebase
+    (`conflict`): the clone is as before, with its own commits."""
+    _check_size(clone)
     if clone.git('rebase', '--quiet', _tracking(clone)).returncode == 0:
         return
     if not _rebasing(clone):

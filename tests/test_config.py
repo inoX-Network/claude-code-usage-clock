@@ -449,6 +449,32 @@ def test_a_broken_sync_number_falls_back_to_its_default_and_logs(tmp_path, key, 
     assert f'sync.{key}: ' in log_lines(tmp_path)[0]['reason']
 
 
+def test_the_size_limit_of_the_sync_clone_is_whole_megabytes(tmp_path):
+    assert _config.load()['sync']['max_clone_mb'] == 1024
+    for given, taken in ((5.0, 5), (1, 1), (4096, 4096)):
+        write_config(tmp_path, {'sync': {'max_clone_mb': given}})
+        value = _config.load()['sync']['max_clone_mb']
+        assert value == taken and type(value) is int
+    assert log_lines(tmp_path) == []
+
+
+@pytest.mark.parametrize('value', [0, -1, 1.5, 0.5, float('inf'), float('nan'), 'x', '5', True, None])
+def test_a_size_limit_that_is_no_whole_number_of_at_least_1_falls_back_and_logs(tmp_path, value):
+    write_config(tmp_path, '{"sync": {"max_clone_mb": %s, "mode": "on"}}' % json.dumps(value))
+    cfg = _config.load()['sync']
+    assert (cfg['max_clone_mb'], cfg['mode']) == (1024, 'on')
+    reason = log_lines(tmp_path)[0]['reason']
+    assert 'sync.max_clone_mb: ' in reason and len(log_lines(tmp_path)) == 1
+
+
+def test_a_size_limit_below_1_or_not_whole_names_the_rule(tmp_path):
+    for value in (0, 2.5):
+        write_config(tmp_path, {'sync': {'max_clone_mb': value}})
+        _config.load()
+    assert [line['reason'] for line in log_lines(tmp_path)] == [
+        'sync.max_clone_mb: must be a whole number of at least 1, using default'] * 2
+
+
 @pytest.mark.parametrize('value', ['owner/name', 'inoX-Network/usage.sync', 'a/.github', 'o/_x-y.z',
                                    f'{"o" * 39}/{"n" * 100}'])
 def test_a_sync_repo_of_the_form_owner_name_is_taken(tmp_path, value):
