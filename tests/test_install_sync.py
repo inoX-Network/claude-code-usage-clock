@@ -118,7 +118,8 @@ def test_a_public_or_unclear_repo_stops_the_installation_with_exit_1(setup, retu
     setup.probe = probe = answer(returncode, errors)
     code, out = setup.sync()
     assert code == 1, out
-    assert ('is public' if returncode == 0 else 'could not be told') in out
+    public, unclear = 'it is public: nothing was installed', 'could not be told'
+    assert (public in out, unclear in out) == ((True, False) if returncode == 0 else (False, True)), out
     assert 'nothing was installed' in out
     assert setup.data() == {} and not setup.target.exists() and not setup.clone.exists() and setup.leftovers() == []
     assert len(probe.calls) == 1
