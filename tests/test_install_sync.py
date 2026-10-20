@@ -252,10 +252,15 @@ def test_sync_mode_is_written_and_kept_and_says_where_it_comes_from(setup):
 
 
 def test_a_first_installation_starts_in_shadow_whatever_the_config_says(setup):
-    setup.set_config(mode='on', repo=REPO)
+    setup.target.mkdir()
+    others = {'thresholds': {'deny': 90}, 'log_dir': str(setup.log), 'spawn_rules': {'exceptions': ['a', 'b']}}
+    setup.config.write_text(json.dumps({**others, 'sync': {'mode': 'on', 'repo': REPO, 'interval_min': 45,
+                                                            'project_aliases': {'x': 'y'}}}), encoding='utf-8')
     code, out = setup.sync()
     assert code == 0 and 'Sync mode: shadow (default, nothing installed yet)' in out
-    assert setup.config_data() == {'sync': {'mode': 'shadow', 'repo': REPO}}      # the other keys of the file stay
+    # the other keys of the file stay, in and outside the section sync
+    assert setup.config_data() == {**others, 'sync': {'mode': 'shadow', 'repo': REPO, 'interval_min': 45,
+                                                      'project_aliases': {'x': 'y'}}}
     assert len(setup.backups('config.json')) == 1
 
 
