@@ -3,7 +3,8 @@
 
 Shows the decisions per hook and mode, which starts and tool calls WOULD HAVE BEEN denied in shadow mode (with
 the reason), which were denied in enforce mode, internal errors, problems found in config.json, which input
-fields Claude Code really delivers to the spawn gate, and how many soft stop calls carried an agent_id.
+fields Claude Code really delivers to the spawn gate, how many soft stop calls carried an agent_id, and, once the
+sync runs, its pushes and pulls with their failures per category and what shadow mode would have pushed.
 
 Usage: python3 log_summary.py [PATH] [--since=<ISO time, e.g. 2026-01-14T10:00:00>] [--config PATH]
 
@@ -102,6 +103,35 @@ def summarise(entries: list[dict]) -> list[str]:
     types = Counter(str(e.get('agent_type') or '-') for e in stops if e.get('agent_id'))
     lines += ['', f'Soft stop calls with agent_id: {sum(types.values())} of {len(stops)} - agent_type: '
                   f'{dict(types.most_common(8))}']
+    return lines + sync_section([e for e in entries if e.get('hook') == 'sync'])
+
+
+def _count(value) -> int:
+    """A count of a log line: a whole number of at least 0, anything else 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def sync_section(entries: list[dict]) -> list[str]:
+    """The runs of the sync per action (each is a push or pull that was due, or started with --now), how many
+    succeeded, the failures per category, and in shadow mode what the commits that stayed here would have pushed."""
+    if not entries:
+        return []
+    lines = ['', 'Sync:']
+    for action in ('push', 'pull'):
+        ran = [e for e in entries if e.get('action') == action and e.get('decision') in ('success', 'failure')]
+        if not ran:
+            continue
+        failures = Counter(str(e.get('category')) if isinstance(e.get('category'), str) else '?'
+                           for e in ran if e['decision'] == 'failure')
+        succeeded = len(ran) - sum(failures.values())
+        detail = f' ({", ".join(f"{category} {n}" for category, n in failures.most_common())})' if failures else ''
+        lines.append(f'  {action}: {len(ran)} run{"" if len(ran) == 1 else "s"}, {succeeded} succeeded, '
+                     f'{sum(failures.values())} failed{detail}')
+    shadow = [e for e in entries if e.get('decision') == 'shadow']
+    if shadow:
+        lines.append(f'  shadow: {len(shadow)} run{"" if len(shadow) == 1 else "s"} committed here and pushed nothing; '
+                     f'they would have pushed {sum(_count(e.get("lines")) for e in shadow)} lines, '
+                     f'{sum(_count(e.get("bytes")) for e in shadow)} bytes')
     return lines
 
 

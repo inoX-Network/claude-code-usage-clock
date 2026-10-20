@@ -293,3 +293,72 @@ def test_config_option_expands_the_home_folder(home_env, tmp_path):
     put_log(home_env / 'mine-log')
     code, out = run('--config', '~/mine.json')
     assert code == 0 and 'general-purpose' in out, out
+
+
+# --- Sync: runs, successes, failures and what shadow mode would have pushed ---------------------------------------------
+
+def sync_line(time, decision, **more):
+    return json.dumps({'time': time, 'hook': 'sync', 'decision': decision, 'reason': more.pop('reason', ''), **more})
+
+
+SYNC_SHADOW = [
+    sync_line('2026-10-14T10:00:00+00:00', 'shadow', reason='committed, not pushed', lines=12, bytes=3400),
+    sync_line('2026-10-14T10:00:01+00:00', 'success', action='push', mode='shadow'),
+    sync_line('2026-10-14T10:30:00+00:00', 'failure', reason='the fetch did not reach the sync repo', action='push',
+              mode='shadow', category='network'),
+    sync_line('2026-10-14T11:00:00+00:00', 'shadow', reason='nothing new, not pushed', lines=0, bytes=0),
+    sync_line('2026-10-14T11:00:01+00:00', 'success', action='push', mode='shadow'),
+    sync_line('2026-10-14T11:30:00+00:00', 'failure', reason='the fetch was refused', action='push', mode='shadow',
+              category='auth'),
+    sync_line('2026-10-14T11:40:00+00:00', 'failure', reason='the fetch did not reach the sync repo', action='push',
+              mode='shadow', category='network'),
+    sync_line('2026-10-14T12:00:00+00:00', 'success', action='pull', mode='shadow'),
+    sync_line('2026-10-14T12:10:00+00:00', 'failure', reason='the run took too long', action='pull', mode='shadow',
+              category='timeout'),
+    sync_line('2026-10-14T12:20:00+00:00', 'shadow', reason='committed, not pushed', lines=3, bytes=600),
+    sync_line('2026-10-14T12:20:01+00:00', 'success', action='push', mode='shadow'),
+]
+
+
+def test_the_sync_section_counts_runs_failures_per_category_and_what_shadow_would_have_pushed(tmp_path):
+    code, out = run(write_log(tmp_path, SYNC_SHADOW + [SAMPLE[1]]))
+    assert code == 0, out
+    section = out[out.index('Sync:'):].split('\n\n')[0].splitlines()
+    assert section == ['Sync:',
+                       '  push: 6 runs, 3 succeeded, 3 failed (network 2, auth 1)',
+                       '  pull: 2 runs, 1 succeeded, 1 failed (timeout 1)',
+                       '  shadow: 3 runs committed here and pushed nothing; they would have pushed 15 lines, 4000 bytes']
+
+
+def test_without_sync_lines_there_is_no_sync_section(tmp_path):
+    code, out = run(write_log(tmp_path, SAMPLE))
+    assert code == 0 and 'Sync:' not in out
+
+
+def test_a_sync_section_without_shadow_lines_has_no_shadow_line(tmp_path):
+    code, out = run(write_log(tmp_path, [sync_line('2026-10-14T10:00:00+00:00', 'success', action='push', mode='on')]))
+    assert code == 0, out
+    assert '  push: 1 run, 1 succeeded, 0 failed' in out and 'shadow:' not in out and 'pull:' not in out
+
+
+def test_odd_sync_fields_do_not_crash_the_section(tmp_path):
+    odd = [sync_line('2026-10-14T10:00:00+00:00', 'shadow', lines='many', bytes=True),
+           sync_line('2026-10-14T10:00:01+00:00', 'shadow', lines=2.5, bytes=-1),
+           sync_line('2026-10-14T10:00:02+00:00', 'failure', action='push', category=['x']),
+           sync_line('2026-10-14T10:00:03+00:00', 'success', action=7)]
+    code, out = run(write_log(tmp_path, odd))
+    assert code == 0 and 'Traceback' not in out, out
+    assert '  push: 1 run, 0 succeeded, 1 failed (? 1)' in out
+    assert 'they would have pushed 0 lines, 0 bytes' in out
+
+
+def test_the_sync_section_reads_what_the_sync_core_writes(tmp_path, monkeypatch):
+    import _sync_core
+    log_dir = str(tmp_path / 'log')
+    _sync_core.log(log_dir, 'shadow', 'committed, not pushed', lines=4, bytes=100)
+    _sync_core.log(log_dir, 'success', action='push', mode='shadow')
+    _sync_core.log(log_dir, 'failure', 'the push was refused', action='push', mode='shadow', category='auth')
+    code, out = run()      # <CCUC_LOG_DIR>/log.jsonl
+    assert code == 0, out
+    assert '  push: 2 runs, 1 succeeded, 1 failed (auth 1)' in out
+    assert 'they would have pushed 4 lines, 100 bytes' in out
