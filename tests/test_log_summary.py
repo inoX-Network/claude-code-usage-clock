@@ -362,3 +362,13 @@ def test_the_sync_section_reads_what_the_sync_core_writes(tmp_path, monkeypatch)
     assert code == 0, out
     assert '  push: 2 runs, 1 succeeded, 1 failed (auth 1)' in out
     assert 'they would have pushed 4 lines, 100 bytes' in out
+
+
+def test_a_category_that_is_no_category_name_is_shown_as_a_question_mark(tmp_path):
+    """The log is a file a model could write: no control character or long text of it reaches the terminal."""
+    lines = [sync_line('2026-10-14T10:00:00+00:00', 'failure', action='push', category='auth\x1b[2J'),
+             sync_line('2026-10-14T10:00:01+00:00', 'failure', action='push', category='x' * 200),
+             sync_line('2026-10-14T10:00:02+00:00', 'failure', action='push', category='network')]
+    code, out = run(write_log(tmp_path, lines))
+    assert code == 0 and '\x1b' not in out and 'x' * 30 not in out, out
+    assert '  push: 3 runs, 0 succeeded, 3 failed (? 2, network 1)' in out

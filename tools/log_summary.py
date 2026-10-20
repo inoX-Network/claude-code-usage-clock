@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -111,6 +112,12 @@ def _count(value) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _category(value) -> str:
+    """The error category of a sync line as the core writes them (a short lower-case word), else `?`: the log is a
+    file, and no control character or long text of it reaches the terminal."""
+    return value if isinstance(value, str) and re.fullmatch(r'[a-z]{1,20}', value) else '?'
+
+
 def sync_section(entries: list[dict]) -> list[str]:
     """The runs of the sync per action (each is a push or pull that was due, or started with --now), how many
     succeeded, the failures per category, and in shadow mode what the commits that stayed here would have pushed."""
@@ -121,8 +128,7 @@ def sync_section(entries: list[dict]) -> list[str]:
         ran = [e for e in entries if e.get('action') == action and e.get('decision') in ('success', 'failure')]
         if not ran:
             continue
-        failures = Counter(str(e.get('category')) if isinstance(e.get('category'), str) else '?'
-                           for e in ran if e['decision'] == 'failure')
+        failures = Counter(_category(e.get('category')) for e in ran if e['decision'] == 'failure')
         succeeded = len(ran) - sum(failures.values())
         detail = f' ({", ".join(f"{category} {n}" for category, n in failures.most_common())})' if failures else ''
         lines.append(f'  {action}: {len(ran)} run{"" if len(ran) == 1 else "s"}, {succeeded} succeeded, '
