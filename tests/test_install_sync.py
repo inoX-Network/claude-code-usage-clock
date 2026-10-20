@@ -541,6 +541,17 @@ def test_a_clone_without_a_branch_is_refused(setup, monkeypatch):
     assert not setup.clone.exists() and setup.leftovers() == []
 
 
+def test_a_relative_log_folder_becomes_absolute(setup, tmp_path, monkeypatch):
+    """git clones with the sync folder as its working folder: a relative path would be nested below it (mkdtemp gives
+    a relative one before Python 3.12)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('CCUC_LOG_DIR', 'rel-log')
+    code, out = setup.sync()
+    assert code == 0, out
+    clone = tmp_path / 'rel-log' / 'sync' / 'repo'
+    assert f'Sync: cloned {REPO} to {clone}' in out and (clone / '.git').is_dir()
+
+
 def test_an_empty_remote_is_cloned_and_the_first_push_fills_it(tmp_path, capsys, monkeypatch):
     bare = tmp_path / 'remotes' / 'owner' / 'name.git'
     bare.parent.mkdir(parents=True)

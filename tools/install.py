@@ -726,7 +726,9 @@ def effective_config(path: str) -> dict:
 
 
 def log_dir_of(cfg: dict) -> str:
-    return os.path.normpath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
+    """The log folder the hooks use, absolute: git clones with the sync folder as its working folder, so a relative
+    path would land below it."""
+    return os.path.abspath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
 
 
 def read_config(path: str) -> dict:
