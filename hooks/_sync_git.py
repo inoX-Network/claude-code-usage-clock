@@ -276,8 +276,14 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
 
 
 def _remove_tree(path: str) -> None:
-    """Removes a folder make_clone made. Git makes its pack files read-only, which Windows refuses to delete."""
-    def writable(function, name, _error) -> None:
+    """Removes a folder make_clone made. Git makes its object files read-only, which Windows refuses to delete: only
+    such a file (Windows, a refused unlink, a regular file and no link) is made writable and removed again; every other
+    failure is raised, and nothing is changed through a link or in a folder."""
+    def writable(function, name, error) -> None:
+        error = error[1] if isinstance(error, tuple) else error        # onerror hands over sys.exc_info()
+        if (os.name != 'nt' or function not in (os.unlink, os.remove) or not isinstance(error, PermissionError)
+                or not stat.S_ISREG(os.lstat(name).st_mode)):
+            raise error
         os.chmod(name, stat.S_IWRITE)
         function(name)
     shutil.rmtree(path, **{'onexc' if sys.version_info >= (3, 12) else 'onerror': writable})

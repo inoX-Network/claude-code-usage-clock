@@ -9,6 +9,7 @@ import dataclasses
 import functools
 import json
 import os
+import stat
 import subprocess
 import time
 
@@ -1886,3 +1887,35 @@ def test_git_settings_of_the_review_are_set():
                     'http.sslVerify=true', f'attr.tree={_sync_git.EMPTY_TREE}', 'core.attributesFile='):
         assert setting in _sync_git.SETTINGS
 
+
+
+# --- Removing a clone that failed (make_clone) -----------------------------------------------------------------------
+
+def test_a_failed_clone_with_read_only_files_is_removed(tmp_path):
+    """git makes its object files read-only, which Windows refuses to delete: the clean-up makes them writable."""
+    folder = tmp_path / 'repo.tmp-x'
+    (folder / '.git' / 'objects').mkdir(parents=True)
+    pack = folder / '.git' / 'objects' / 'pack.idx'
+    pack.write_bytes(b'x')
+    os.chmod(pack, stat.S_IREAD)
+    _sync_git._remove_tree(str(folder))
+    assert not folder.exists()
+
+
+def test_the_clean_up_passes_on_every_other_error(tmp_path, monkeypatch):
+    """Only a read-only regular file is made writable; any other failure (a folder that cannot go, a link) is raised,
+    nothing is changed through it."""
+    folder = tmp_path / 'repo.tmp-x'
+    (folder / 'sub').mkdir(parents=True)
+    real = os.rmdir
+
+    def rmdir(path, *args, **kwargs):
+        if os.path.basename(path) == 'sub':
+            raise PermissionError(13, 'denied', path)
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'rmdir', rmdir)
+    chmods = []
+    monkeypatch.setattr(os, 'chmod', lambda *args, **kwargs: chmods.append(args))
+    with pytest.raises(PermissionError):
+        _sync_git._remove_tree(str(folder))
+    assert chmods == []
