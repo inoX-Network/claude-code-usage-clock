@@ -888,6 +888,42 @@ def test_open_clone_puts_the_attributes_back_and_a_fast_forward_takes_no_foreign
         assert f.read() == b'{"d":"abc"}\n'
 
 
+def refusing_lstat(monkeypatch, refused):
+    """os.lstat raises PermissionError for the path `refused`, as for a folder this user may not read."""
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == refused:
+            raise PermissionError(13, 'denied', path)
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'lstat', lstat)
+
+
+def test_a_clone_without_an_info_folder_gets_one_with_the_attributes(device):
+    info = os.path.join(device.clone, '.git', 'info')
+    for name in os.listdir(info):
+        os.unlink(os.path.join(info, name))
+    os.rmdir(info)
+    _sync_git.pin_attributes(device.clone)
+    with open(os.path.join(info, 'attributes'), 'rb') as f:
+        assert f.read() == _sync_git.INFO_ATTRIBUTES.encode()
+
+
+def test_an_info_folder_that_cannot_be_read_is_internal(device, monkeypatch):
+    refusing_lstat(monkeypatch, os.path.join(device.clone, '.git', 'info'))
+    assert failure_of(_sync_git.pin_attributes, device.clone) == (
+        'internal', 'the info folder of the sync clone cannot be read (PermissionError)')
+
+
+def test_locks_in_a_folder_below_git_that_cannot_be_read_are_left_alone(device, monkeypatch):
+    git_dir = os.path.join(device.clone, '.git')
+    with open(os.path.join(git_dir, 'refs', 'old.lock'), 'w', encoding='utf-8'):
+        pass
+    assert os.path.join(git_dir, 'refs', 'old.lock') in _sync_git._left_over(git_dir)[0]
+    refusing_lstat(monkeypatch, os.path.join(git_dir, 'refs'))
+    assert not [path for path in _sync_git._left_over(git_dir)[0] if 'old.lock' in path]
+
+
 def test_attributes_that_cannot_be_written_are_internal(device, monkeypatch):
     monkeypatch.setattr(_context_state, 'write_private', lambda *args: False)      # a link as .git/info
     assert failure_of(_sync_git.open_clone, run_of(device)) == (
