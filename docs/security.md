@@ -20,8 +20,10 @@
   Skill discovery covers your personal skills and the project folders from the start folder up to the repo
   root, not plugin or managed skills or folders added with `--add-dir`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
-- The [sync](sync.md) sends only after you opted in, and only into a private repository of yours: a repository that
-  is public, or whose answer does not say, stops the installation, and a push never writes to one. Sessions that are still running on another machine appear only
+- The [sync](sync.md) sends only after you opted in, and only into a repository of yours that was found private: one
+  that is public, or whose answer does not say, stops the installation, and a push never writes to one found public.
+  A private result is kept for 24 hours, so a repository made public later is found within 24 hours (by the next push
+  after that); until then pushes still go to it. Sessions that are still running on another machine appear only
   after that machine's next push. A push at the end of a session can be cut off when the computer shuts down;
   `SessionStart` catches it up at the next start of the same system. `usage_report.py --sync` pushes and pulls at
   once.

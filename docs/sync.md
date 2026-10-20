@@ -73,7 +73,8 @@ locally, no allocation across machines.
 
 ## Limits
 
-- The sync sends only after you installed it, and only into a private repository of yours.
+- The sync sends only after you installed it, and only into a repository of yours that was found private. A push never
+  writes to one found public; one made public later is found within 24 hours (a private result is kept that long).
 - Sessions that are still running on another machine appear in the report only after that machine's next push.
 - A push at the end of a session can be cut off when the computer shuts down; the next `SessionStart` on the same
   system catches it up.

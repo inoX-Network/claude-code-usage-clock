@@ -571,7 +571,8 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
 
 `_sync_git.push(run)` is the runner of `sync.py push`: it runs under the lock of the core, which wrote `last_attempt`
 before, and raises `SyncError` with a fixed text (never output of git) when it fails. Whatever is unclear ends without
-a push; a public repository is never written to. The clone `<log_dir>/sync/repo` is made by the installer
+a push; a repository found public is never written to (one made public later is found within 24 h, the age of the
+cache of a private result). The clone `<log_dir>/sync/repo` is made by the installer
 (`--sync-repo`, 0034-SYNC-INSTALL); the push never clones (a missing clone is `internal`, `the sync clone is missing,
 run the installer with --sync-repo`).
 

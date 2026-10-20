@@ -1,5 +1,6 @@
 """The git work of the sync: the push (0034-SYNC-PUSH), and the clone and the fast-forward the pull (0034-SYNC-REPORT)
-shares with it. Whatever is unclear ends without a push; a public repository is never written to.
+shares with it. Whatever is unclear ends without a push; a repository found public is never written to (one made public
+later is found within VISIBILITY_MAX_AGE_S, the age of the cache of a private result).
 
 The clone `<log_dir>/sync/repo` is made by the installer (`--sync-repo`, `make_clone`); push and pull never clone.
 Every git call in it (`Clone.git`) runs with GIT_DIR and GIT_WORK_TREE set to the clone (never a working folder, never a repository above
