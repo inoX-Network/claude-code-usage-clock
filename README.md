@@ -1,5 +1,10 @@
 # claude-code-usage-clock
 
+[![Release](https://img.shields.io/github/v/release/inoX-Network/claude-code-usage-clock)](https://github.com/inoX-Network/claude-code-usage-clock/releases/latest)
+[![Tests](https://github.com/inoX-Network/claude-code-usage-clock/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/inoX-Network/claude-code-usage-clock/actions/workflows/tests.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+
 New to Claude Code? Start with [docs/getting-started.md](docs/getting-started.md).
 
 Claude Code shows you your usage. This makes the model see it too, and lets two gates decide from those numbers
@@ -52,6 +57,7 @@ in its report. Run them that way for a while, read the log, then switch to `enfo
   Bash there). Windows has its own folder, [`windows/`](windows/README.md): the commands, the differences and the
   limits. In WSL it runs as on Linux.
 - No third-party packages at runtime.
+
 ## Install
 
 ```sh
@@ -62,8 +68,9 @@ python3 tools/install.py               # installs all five parts, gates in shado
 ```
 
 Restart Claude Code (or open `/hooks`) after installing. On Windows, run `python tools\install.py` instead
-([`windows/README.md`](windows/README.md)). Every installer option, `--check`, updating and uninstalling:
-[docs/install.md](docs/install.md).
+([`windows/README.md`](windows/README.md)). Every installer option, `--check`, [updating](docs/install.md#update)
+and uninstalling: [docs/install.md](docs/install.md). What is new: [CHANGELOG.md](CHANGELOG.md) and the
+[releases](https://github.com/inoX-Network/claude-code-usage-clock/releases).
 
 ## Documentation
 

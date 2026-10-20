@@ -60,6 +60,27 @@ Restart Claude Code (or open `/hooks`) after installing.
 On Windows, run `python tools\install.py` instead of `python3 tools/install.py`; the installer writes the commands for
 Git Bash with the Python that runs it ([`windows/README.md`](../windows/README.md)).
 
+### Update
+
+```sh
+cd claude-code-usage-clock
+git pull
+python3 tools/install.py --check     # names what is out of date
+python3 tools/install.py             # copies the new version, keeps the mode of the gates and of the sync
+```
+
+Every run copies all runtime files, so an installed sync gets its new version too, and its entries stay. Only
+`--week-ok-until` has to be given again (see above). If you use the desktop plugin, update it as well, then restart
+Claude Code:
+
+```sh
+claude plugin marketplace update usage-clock
+claude plugin update usage-clock-display@usage-clock
+```
+
+What changed in each release: [CHANGELOG.md](../CHANGELOG.md) and the
+[release notes](https://github.com/inoX-Network/claude-code-usage-clock/releases).
+
 ### Uninstall completely
 
 `python3 tools/install.py --uninstall` removes the hook entries and the status line entry that point to the
