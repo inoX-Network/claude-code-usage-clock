@@ -767,6 +767,11 @@ def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
     old_repo, old_mode = section.get('repo', ''), section.get('mode', 'off')
     mode, source, write_mode = resolve_sync_mode(data, args, target, old_mode)
     cfg = effective_config(path)
+    given = os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir'])
+    if not os.path.isabs(given):
+        raise UsageError(f'The component sync needs an absolute log folder, not {given!r} (log_dir or CCUC_LOG_DIR): '
+                         'the hooks would resolve it against the folder of each session, so no push would find the '
+                         'clone.')
     repo = args.sync_repo or cfg['sync']['repo']
     if not repo:
         raise UsageError(f'The component sync needs --sync-repo owner/name: sync.repo is not set in {path}.')
@@ -859,6 +864,9 @@ def plan_sync_off(target: str) -> SyncPlan | None:
     path = config_file(target)
     if not os.path.lexists(path) or effective_config(path)['sync']['mode'] == 'off':
         return None
+    if os.path.islink(path):      # the hooks follow it, this installer never writes through it
+        raise UsageError(f'config.json is a symlink: {path}. The status line pushes from its sync.mode alone: set '
+                         'sync.mode to "off" there by hand, then run --uninstall again; nothing changed.')
     old = read_config(path)['sync']['mode']
     cfg = effective_config(path)
     return SyncPlan(path, True, {'mode': 'off'}, [f'sync.mode {old!r} -> {"off"!r}'], 'off', '--uninstall', cfg['sync']['repo'],

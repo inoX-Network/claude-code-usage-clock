@@ -375,6 +375,18 @@ def test_a_config_json_that_is_a_link_is_refused(setup, tmp_path):
     assert os.path.islink(setup.config) and real.read_text(encoding='utf-8') == '{}'
 
 
+@pytest.mark.posix_only
+def test_uninstall_with_a_config_json_that_is_a_link_says_how_to_switch_the_sync_off(setup, tmp_path):
+    assert setup.sync('--sync-mode', 'on')[0] == 0
+    real = tmp_path / 'real-config.json'
+    os.rename(setup.config, real)
+    os.symlink(real, setup.config)
+    before = setup.data()
+    code, out = setup.run('--uninstall')
+    assert code == 2 and 'set sync.mode to "off" there by hand, then run --uninstall again' in out, out
+    assert setup.data() == before and json.loads(real.read_text(encoding='utf-8'))['sync']['mode'] == 'on'
+
+
 def test_the_config_file_of_ccuc_config_is_the_one_written(setup, tmp_path, monkeypatch):
     other = tmp_path / 'elsewhere.json'
     monkeypatch.setenv('CCUC_CONFIG', str(other))
@@ -541,15 +553,20 @@ def test_a_clone_without_a_branch_is_refused(setup, monkeypatch):
     assert not setup.clone.exists() and setup.leftovers() == []
 
 
-def test_a_relative_log_folder_becomes_absolute(setup, tmp_path, monkeypatch):
-    """git clones with the sync folder as its working folder: a relative path would be nested below it (mkdtemp gives
-    a relative one before Python 3.12)."""
+@pytest.mark.parametrize('where', ['env', 'config'])
+def test_a_relative_log_folder_is_refused_for_the_sync(setup, tmp_path, monkeypatch, where):
+    """The hooks resolve a relative log_dir against the working folder of each session, the installer against its own:
+    the clone would lie where no push looks for it."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('CCUC_LOG_DIR', 'rel-log')
+    if where == 'env':
+        monkeypatch.setenv('CCUC_LOG_DIR', 'rel-log')
+    else:
+        monkeypatch.delenv('CCUC_LOG_DIR')
+        setup.target.mkdir()
+        setup.config.write_text(json.dumps({'log_dir': 'rel-log'}), encoding='utf-8')
     code, out = setup.sync()
-    assert code == 0, out
-    clone = tmp_path / 'rel-log' / 'sync' / 'repo'
-    assert f'Sync: cloned {REPO} to {clone}' in out and (clone / '.git').is_dir()
+    assert code == 2 and "needs an absolute log folder, not 'rel-log'" in out, out
+    assert not (tmp_path / 'rel-log').exists() and setup.data() == {}
 
 
 def test_an_empty_remote_is_cloned_and_the_first_push_fills_it(tmp_path, capsys, monkeypatch):

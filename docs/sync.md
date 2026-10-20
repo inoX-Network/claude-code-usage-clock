@@ -45,6 +45,8 @@ The installer:
   `settings.json` and `config.json` stay as they are (in the log folder the run leaves the sync folder with its lock
   file and empty hooks folder; a cut-off clone may leave a `repo.tmp-*` folder, which `--check` names),
 - clones the repository to `<log_dir>/sync/repo/` (default `~/.cache/claude-usage-clock/sync/repo/`, folder 0700).
+  `log_dir` (or `CCUC_LOG_DIR`) must be an absolute path (`~` is fine): the hooks would resolve a relative one against
+  the folder of each session, so the installer stops with exit code 2.
   The size of the repository is checked before anything is checked out, as for every pull: above `sync.max_clone_mb`
   (default 1024 MB) or 100 000 files it stops with exit code 1 and checks nothing out. A folder that is already there
   and is a clone of this repository stays as it is; a folder of anything else stays untouched and stops the run.
@@ -118,4 +120,6 @@ Transcripts of another machine that the file sync put on this one are not counte
 in `config.json` to `off` (with a backup; the output says so): the status line starts a push from the mode alone, with
 or without the hooks. The clone and the data in the repository stay: see
 [Uninstall completely](install.md#uninstall-completely). `install.py --check` names a `sync.mode` that is not `off`
-while the hooks are missing as `FIX`, whichever `--components` you give it.
+while the hooks are missing as `FIX`, whichever `--components` you give it. If `config.json` is a symlink, the
+installer never writes through it: it stops with exit code 2 and changes nothing; set `sync.mode` to `off` there by
+hand, then run `--uninstall` again.

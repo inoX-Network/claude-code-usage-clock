@@ -97,3 +97,25 @@ def test_the_size_of_the_clone_leaves_out_a_junction_inside_it(setup, tmp_path):
     junction(setup.clone / 'machines-elsewhere', tmp_path / 'big')
     code, out = check(setup, '--components', 'sync')
     assert 'OK   Sync clone size: 0 MB' in out, out
+
+
+def test_a_junction_as_the_info_folder_of_the_clone_gets_no_attributes(tmp_path, remote):
+    device = Device(tmp_path / 'a')
+    info = os.path.join(device.clone, '.git', 'info')
+    elsewhere = tmp_path / 'elsewhere'
+    os.rename(info, elsewhere)
+    junction(info, elsewhere)
+    before = sorted(os.listdir(elsewhere))
+    assert failure_of(_sync_git.pin_attributes, device.clone) == (
+        'internal', 'the info folder of the sync clone is no folder')
+    assert sorted(os.listdir(elsewhere)) == before
+
+
+def test_an_old_lock_behind_a_junction_in_the_git_folder_is_not_taken(tmp_path, remote):
+    device = Device(tmp_path / 'a')
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (elsewhere / 'precious.lock').write_text('stays\n', encoding='utf-8')
+    junction(os.path.join(device.clone, '.git', 'refs', 'outside'), elsewhere)
+    locks, temporary = _sync_git._left_over(os.path.join(device.clone, '.git'))
+    assert not [path for path in locks + temporary if 'precious' in path]

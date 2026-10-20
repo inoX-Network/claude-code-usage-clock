@@ -1925,3 +1925,33 @@ def test_the_clean_up_passes_on_every_other_error(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         _sync_git._remove_tree(str(folder))
     assert chmods == []
+
+
+def test_a_clean_up_that_fails_keeps_the_error_of_the_clone(tmp_path, monkeypatch):
+    """The reason the clone failed is what the installer has to tell (`Nothing was installed.`, the hint on credentials);
+    a folder left over is named by --check."""
+    directory = _sync_core.ensure_dir(str(tmp_path / 'log'))
+    url = _sync_git.remote_url('no/such', 'https')
+    expected = failure_of(_sync_git.make_clone, directory, url, 1024, _sync_core.Deadline(60))
+
+    def busy(path):
+        raise PermissionError(13, 'in use', path)
+    monkeypatch.setattr(_sync_git, '_remove_tree', busy)
+    assert failure_of(_sync_git.make_clone, directory, url, 1024, _sync_core.Deadline(60)) == expected
+
+
+def test_a_rewritten_remote_is_refused_before_anything_is_checked_out(tmp_path, remote, git_alone, monkeypatch):
+    """An insteadOf leads the clone elsewhere: refused right after `git clone`, before the size check and the checkout
+    of what came from there."""
+    other = tmp_path / 'remotes' / 'someone' / 'else.git'
+    other.parent.mkdir(parents=True)
+    git('clone', '--quiet', '--bare', _sync_git.remote_url(REPO, 'https'), str(other))
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write(f'[url "{other.as_posix()}"]\n\tinsteadOf = {_sync_git.remote_url(REPO, "https")}\n')
+    sized = []
+    monkeypatch.setattr(_sync_git, '_check_size', sized.append)
+    directory = _sync_core.ensure_dir(str(tmp_path / 'log'))
+    category, detail = failure_of(_sync_git.make_clone, directory, _sync_git.remote_url(REPO, 'https'), 1024,
+                                  _sync_core.Deadline(60))
+    assert category == 'internal' and 'the remote of the new clone is not the URL of sync.repo' in detail
+    assert sized == [] and os.listdir(directory) == [_sync_git.NO_HOOKS_DIR]

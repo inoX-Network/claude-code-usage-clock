@@ -217,10 +217,17 @@ def clone_at(path: str, deadline: _sync_core.Deadline, max_mb: int, hooks: str |
 
 
 def pin_attributes(path: str) -> None:
-    """`<path>/.git/info/attributes` is INFO_ATTRIBUTES: written (atomically, never through a link) if it is missing or
-    holds anything else. Only ever switching conversions off, it may be put back over whatever is there; an `internal`
-    instead would stop the sync until someone acts. `internal` if it cannot be written."""
+    """`<path>/.git/info/attributes` is INFO_ATTRIBUTES: written (atomically, never through a link or a junction) if it
+    is missing or holds anything else. Only ever switching conversions off, it may be put back over whatever is there;
+    an `internal` instead would stop the sync until someone acts. `internal` if it cannot be written."""
     folder = os.path.join(path, '.git', 'info')
+    try:
+        if not _plat.is_folder(os.lstat(folder)):      # a junction on Windows: write_private refuses only links
+            raise _fail('internal', 'the info folder of the sync clone is no folder')
+    except FileNotFoundError:      # made by write_private below
+        pass
+    except OSError as error:
+        raise _fail('internal', f'the info folder of the sync clone cannot be read ({type(error).__name__})') from error
     try:
         if _sync_core._read_small(os.path.join(folder, 'attributes')) == INFO_ATTRIBUTES.encode():
             return
@@ -248,8 +255,8 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
     `<directory>/repo`, which must not exist. Into a temporary folder beside it first (CLONE_TEMP_PREFIX, 0700), with
     the settings and the environment of every git call of the sync (no prompt, no askpass, no hooks, core.autocrlf
     false: Git for Windows sets it to true in its system config, and a plain clone checks LF files out with CRLF), only
-    the default branch, no checkout; then the size check of a fast-forward (`_check_size`), then the checkout, then the
-    rename. Fails with SyncError (fixed text: `auth`, `network`, `internal`), and the temporary folder is removed: a
+    the default branch, no checkout; then its remote URL (`remote_matches`), the size check of a fast-forward
+    (`_check_size`), the checkout and the rename. Fails with SyncError (fixed text: `auth`, `network`, `internal`), and the temporary folder is removed: a
     clone left without its checkout would be checked out by the next push (`_restore_foreign`), past the limit."""
     temporary = tempfile.mkdtemp(prefix=CLONE_TEMP_PREFIX, dir=directory)
     try:
@@ -259,6 +266,9 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
                                        '--no-checkout', '--no-tags', '--', url, temporary], deadline, env, directory)
         if done.returncode != 0:
             raise _remote_error(done, 'clone')      # GIT_DIR of a clone that is to be made would break `git clone`
+        if not remote_matches(clone, url):      # as open_clone checks it on every push; before anything is checked out
+            raise _fail('internal', 'the remote of the new clone is not the URL of sync.repo (an insteadOf or '
+                                    'pushInsteadOf of the git config rewrites it): nothing was kept')
         done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
         branch = done.stdout.strip()
         if done.returncode != 0 or not BRANCH.fullmatch(branch):
@@ -269,12 +279,12 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
             _check_size(clone)
             if clone.git('checkout', '--quiet', branch).returncode != 0:
                 raise _fail('internal', 'the sync repository could not be checked out')
-        if not remote_matches(clone, url):      # as open_clone checks it on every push
-            raise _fail('internal', 'the remote of the new clone is not the URL of sync.repo (an insteadOf or '
-                                    'pushInsteadOf of the git config rewrites it): nothing was kept')
         os.rename(temporary, os.path.join(directory, CLONE_DIR))
     except BaseException:
-        _remove_tree(temporary)
+        try:
+            _remove_tree(temporary)
+        except OSError:      # the reason the clone failed says more; --check names the folder left over
+            pass
         raise
 
 
@@ -345,8 +355,14 @@ def _default_branch(clone: Clone) -> str:
 def _left_over(git_dir: str) -> tuple[list[str], list[str]]:
     """Below `git_dir`: the lock files of git (index, refs, packed-refs, HEAD, config …) outside `objects/`, and the
     temporary files of a fetch git ended inside it (TEMP_OBJECT_PREFIXES)."""
+    def real_folder(path: str) -> bool:
+        try:
+            return _plat.is_folder(os.lstat(path))
+        except OSError:
+            return False
     objects, locks, temporary = os.path.join(git_dir, 'objects'), [], []
-    for folder, _dirs, names in os.walk(git_dir):
+    for folder, dirs, names in os.walk(git_dir):
+        dirs[:] = [name for name in dirs if real_folder(os.path.join(folder, name))]      # os.walk enters junctions
         if folder == objects or folder.startswith(objects + os.sep):
             temporary += [os.path.join(folder, name) for name in names if name.startswith(TEMP_OBJECT_PREFIXES)]
         else:

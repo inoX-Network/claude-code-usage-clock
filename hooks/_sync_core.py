@@ -388,6 +388,10 @@ def run_command(argv: list[str], deadline: Deadline, env: dict | None = None, cw
         raise SyncError('timeout', f'{name} did not finish in time') from None
     except BaseException:       # Ctrl+C: the child leads a group of its own and would outlive the caller
         _plat.kill_tree(process)
+        try:
+            process.communicate(timeout=KILL_WAIT_S)
+        except subprocess.TimeoutExpired:
+            pass
         raise
     finally:
         _children.discard(process)
