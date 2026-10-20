@@ -101,8 +101,9 @@ FOREIGN_ENV_PREFIXES = ('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')       # the pair
 TEMP_OBJECT_PREFIXES = ('tmp_pack_', 'tmp_idx_', 'tmp_obj_')         # what a fetch git ended leaves in objects/
 NO_REMOTE_BRANCH = "couldn't find remote ref"
 # attr.tree and core.attributesFile: no .gitattributes of another machine (nor a global one) decides how the own files
-# are stored or checked out (filters such as git-lfs, working-tree-encoding, eol).
-SETTINGS = ('core.fsmonitor=false', 'commit.gpgSign=false', 'push.gpgSign=false', 'gc.auto=0',
+# are stored or checked out (filters such as git-lfs, working-tree-encoding, eol). core.autocrlf: nor does the config
+# of the user (Git for Windows sets it to true in its system config, which checks LF files out with CRLF).
+SETTINGS = ('core.fsmonitor=false', 'core.autocrlf=false', 'commit.gpgSign=false', 'push.gpgSign=false', 'gc.auto=0',
             'maintenance.auto=false', 'submodule.recurse=false', 'fetch.recurseSubmodules=false',
             'push.recurseSubmodules=no', 'rebase.autoStash=false', 'rebase.updateRefs=false',
             'merge.verifySignatures=false', 'push.followTags=false', f'attr.tree={EMPTY_TREE}',
