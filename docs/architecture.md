@@ -193,6 +193,19 @@ may block); the other hooks always end with `|| true`. Every hook entry gets a t
 entry gets `refreshInterval: 60`; an update of our own entry adds it only if it is missing, and
 `--replace-statusline` keeps the `refreshInterval` of the replaced status line.
 
+The component `sync` (0034-SYNC-INSTALL) is opt-in: not in the default selection of `--components` (but in that of
+`--uninstall`, and `--check` adds it when its entries are installed). It writes `SessionStart` and `SessionEnd`, each
+with its own command (`sync.py session-start` / `session-end`, `|| true`). Its mode and repository are config keys, so
+the installer writes `sync.mode` and `sync.repo` into `config.json` (`CCUC_CONFIG`, else the one in `--target`), with a
+backup and only when they change; every other key of that file is never written. `--sync-mode` sets the mode; without
+it an installed sync keeps the mode of the config and a first one gets `shadow`. `--sync-repo`, after the smoke test and
+before anything is written, under the sync lock: `check_visibility` once (public or unclear: exit 1), the cache of a
+private result, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clone --single-branch --no-checkout
+--no-tags` with `SETTINGS` and the clone environment without GIT_DIR, `_check_size`, checkout, rename to `repo`; a
+failed attempt removes the temporary folder). A folder already at `repo` stays: kept if it is a git folder whose remote
+is the URL of `sync.repo`, else exit 1. After the lock is released, `clear_visibility` lifts a block after
+`visibility`. `--check` reads the clone with `--no-optional-locks` and without a hooks folder, and changes nothing.
+
 `sync.mode` is `off`, `shadow` or `on` (anything else: `off`); `sync.interval_min`, `sync.backoff_max_h` and
 `sync.pull_timeout_s` must be finite numbers above 0, anything else falls back to the default with the usual log line.
 An interval below 10 minutes is valid in the config and raised by the sync core (see Sync core).

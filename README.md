@@ -26,6 +26,7 @@ repo closes that gap with a status line and four hooks (five parts):
 | **Context reporter** (`UserPromptSubmit`, `PostToolUse`) | Tells the model how full its context window is, from the numbers the status line measured: with every prompt, and after a tool call once the context is half full. Needs the status line; subagents get nothing. | available | on |
 | **Spawn gate** (`PreToolUse`: Agent, Workflow, Skill) | Stops new agent blocks above a usage threshold, and checks that every agent has a determinable model and effort (reports by default, can deny). | available | log only |
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
+| **Sync** (`SessionStart`, `SessionEnd`) | Optional, not one of the five: puts the usage data of each of your computers into a private GitHub repository of yours, so the report shows all of them. Opt-in, starts in shadow mode (commits locally, pushes nothing); what it sends and its limits: [docs/sync.md](docs/sync.md). | available | off |
 
 On top of these there are two optional helpers that need no settings entry: the [wake-up
 watcher](docs/statusline.md#the-wake-up-watcher), off by default, and the plugin in [`desktop/`](desktop/README.md), which draws the
@@ -74,6 +75,7 @@ Restart Claude Code (or open `/hooks`) after installing. On Windows, run `python
 | [Spawn gate and soft stop](docs/gates.md) | What the two gates decide, checkpoints, and how to go from shadow to enforce. |
 | [Usage reports](docs/reports.md) | `usage_report.py`, the overview, the `/report` pane, asking your agent about your usage. |
 | [Configuration reference](docs/configuration.md) | Every key of `config.json` with its default, model names, effort values and exceptions. |
+| [The sync across machines](docs/sync.md) | The optional sync: install, shadow mode, what it sends, its limits, and a file sync of `~/.claude` beside it. |
 | [Security: limits, threat model and guard hooks](docs/security.md) | What the tools cannot protect against, and which paths a guard should block. |
 | [All documentation](docs/README.md) | Every page, including the report details, the report format and the architecture. |
 

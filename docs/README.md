@@ -18,6 +18,8 @@
   definition.
 - [Configuration reference](configuration.md): every key of `config.json` with its default, and the rules for model
   names, effort values and exceptions.
+- [The sync across machines](sync.md): the optional sync of the usage data of several computers through a private
+  GitHub repository: install, shadow mode, what it sends, its limits, and a file sync of `~/.claude` beside it.
 
 ## Reports
 

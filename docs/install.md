@@ -28,20 +28,30 @@ when you leave them out:
   output line `Mode:` says which mode applies and where it comes from.
 - `--week-ok-until`: it is **not** kept. A run without it removes an earlier approval, and the output says
   so. Pass it again to keep it.
+- `--sync-mode`: the mode of an installed sync is kept (`shadow` on a first install of the sync). The output line
+  `Sync mode:` says which mode applies and where it comes from. Unlike the gates, the sync keeps its mode and its
+  repository in `config.json` (`sync.mode`, `sync.repo`): these two keys are the only ones the installer writes
+  there, with a backup, and only when they change.
+
+The sync is not part of the default selection: it is installed only with `--components ...,sync`. Without
+`--components`, `--uninstall` removes its entries too, and `--check` checks it if its entries are installed. All of
+it: [The sync across machines](sync.md).
 
 Options:
 
 | Option | Meaning |
 |---|---|
-| `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop` | Install only some parts. The context reporter adds two entries (`UserPromptSubmit` and `PostToolUse`) and says nothing without the status line. |
+| `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop,sync` | Install only some parts. Without it: all but `sync`, which is opt-in (for `--uninstall`: all). The context reporter adds two entries (`UserPromptSubmit` and `PostToolUse`) and says nothing without the status line; the sync adds two (`SessionStart` and `SessionEnd`). |
 | `--mode shadow\|enforce` | Mode of the two gates. Without it an existing installation keeps its mode; a first install starts in `shadow`. |
 | `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). Needs the component `spawn-gate`. |
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
+| `--sync-repo OWNER/NAME` | The private GitHub repository of the sync: sets `sync.repo`, checks once that it cannot be read without logging in (public or unclear: exit code 1, nothing installed) and clones it to `<log_dir>/sync/repo/`. Run again, it lifts the block after a push found the repository public. Needs the component `sync`. See [the sync](sync.md#install). |
+| `--sync-mode off\|shadow\|on` | Mode of the sync, in `config.json`. Without it an installed sync keeps its mode; a first install starts in `shadow` (commits locally, pushes nothing). Needs the component `sync`. |
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
-| `--check` | Check an existing installation and change nothing: the entries in `settings.json`, the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder. Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
+| `--check` | Check an existing installation and change nothing: the entries in `settings.json`, the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
 
 Restart Claude Code (or open `/hooks`) after installing.
 
@@ -61,7 +71,9 @@ the installer did. What stays, and how to remove it:
 | The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
-| The backups `settings.json.bak-usage-clock-*` | Delete them when you no longer need them. |
+| The backups `settings.json.bak-usage-clock-*` (and `config.json.bak-usage-clock-*`, if the installer set the sync keys) | Delete them when you no longer need them. |
+| The local clone of the sync, if you installed it: `<log_dir>/sync/` (the clone in `repo/`, its state, the cache of the visibility check and the machine id) | Part of the log folder: `rm -r ~/.cache/claude-usage-clock/sync`, or the whole log folder as above. Commits of shadow mode that were never pushed go with it. |
+| The data of this machine in the sync repository on GitHub (`machines/<machine id>/`): the uninstall never touches the remote | Delete that folder in the repository yourself (a commit that removes it), or the whole repository on GitHub. |
 
 If you use `--components`, the uninstall removes only the components you name.
 
