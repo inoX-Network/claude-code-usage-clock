@@ -70,6 +70,7 @@ from collections.abc import Callable
 
 import _config
 import _context_state
+import _plat
 import _sync_core
 import _sync_export
 import sync_format
@@ -199,7 +200,7 @@ def _empty_hooks(directory: str) -> str:
             os.mkdir(path, 0o700)
         except FileExistsError:
             pass
-        if stat.S_ISDIR(os.lstat(path).st_mode) and not os.listdir(path):
+        if _plat.is_folder(os.lstat(path)) and not os.listdir(path):
             return path
     except OSError as error:
         raise _fail('internal', f'{NO_HOOKS_DIR} cannot be made ({type(error).__name__})') from error
@@ -301,7 +302,7 @@ def open_clone(run: _sync_core.Run) -> Clone:
     repo = configured_repo(run.cfg)
     path = clone_dir(run.log_dir)
     try:
-        if not all(stat.S_ISDIR(os.lstat(folder).st_mode) for folder in (path, os.path.join(path, '.git'))):
+        if not all(_plat.is_folder(os.lstat(folder)) for folder in (path, os.path.join(path, '.git'))):
             raise _fail('internal', 'the sync clone is no git folder')      # a link or a file (a .git file, too)
     except FileNotFoundError:
         raise _fail('internal', 'the sync clone is missing, run the installer with --sync-repo') from None
@@ -609,7 +610,7 @@ def _rebasing(clone: Clone) -> bool:
             info = os.lstat(os.path.join(clone.path, '.git', name))
         except FileNotFoundError:
             continue
-        if not stat.S_ISDIR(info.st_mode):
+        if not _plat.is_folder(info):
             raise _fail('internal', 'the rebase state of the sync clone is no folder: nothing is aborted')
         found = True
     return found

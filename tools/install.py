@@ -791,7 +791,7 @@ def sync_blocked(plan: SyncPlan) -> bool:
 def git_folder(path: str) -> bool:
     """A real folder with a real `.git` folder (no link, no .git file), as the push opens it."""
     try:
-        return all(stat.S_ISDIR(os.lstat(folder).st_mode) for folder in (path, os.path.join(path, '.git')))
+        return all(_plat.is_folder(os.lstat(folder)) for folder in (path, os.path.join(path, '.git')))
     except OSError:
         return False
 

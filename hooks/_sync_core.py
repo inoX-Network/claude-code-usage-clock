@@ -223,7 +223,7 @@ def ensure_dir(log_dir: str) -> str:
         os.mkdir(directory, 0o700)
     except FileExistsError:
         pass
-    if not stat.S_ISDIR(os.lstat(directory).st_mode):
+    if not _plat.is_folder(os.lstat(directory)):
         raise OSError(f'{directory} is not a folder')      # a link or a file: never followed, never written into
     os.chmod(directory, 0o700)
     return directory

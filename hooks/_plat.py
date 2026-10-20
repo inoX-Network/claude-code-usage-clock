@@ -24,17 +24,24 @@ copies them with `_config.py`, so they import this file on Windows only and do t
 - `GROUP_OPTIONS`: the Popen arguments for a child whose whole tree `kill_tree(process)` can end after a timeout
   (git starts ssh or git-remote-https). POSIX: a session of its own and SIGKILL to its process group; Windows: a
   process group without a window and taskkill /T.
+- `is_folder(info)`: an `os.lstat` result is a real folder: no link and, on Windows, no reparse point (a junction is a
+  folder for lstat, only its file attributes tell it apart), so nothing that must stay inside is led elsewhere.
 - Open flags: `NO_FOLLOW` (no symlink as the last part of the path; Windows has no such flag, 0 there),
   `O_NONBLOCK` (a named pipe must not block the open; 0 on Windows) and `O_BINARY` (Windows opens in text mode
   otherwise: line breaks are translated and Ctrl-Z ends the file; 0 elsewhere).
 """
 import os
 import shlex
+import stat
 import sys
 
 NO_FOLLOW = getattr(os, 'O_NOFOLLOW', 0)
 O_NONBLOCK = getattr(os, 'O_NONBLOCK', 0)
 O_BINARY = getattr(os, 'O_BINARY', 0)
+
+
+def is_folder(info: os.stat_result) -> bool:
+    return stat.S_ISDIR(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
 
 if os.name == 'nt':
     try:
