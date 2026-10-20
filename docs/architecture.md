@@ -193,6 +193,21 @@ may block); the other hooks always end with `|| true`. Every hook entry gets a t
 entry gets `refreshInterval: 60`; an update of our own entry adds it only if it is missing, and
 `--replace-statusline` keeps the `refreshInterval` of the replaced status line.
 
+The component `sync` (0034-SYNC-INSTALL) is opt-in: not in the default selection of `--components` (but in that of
+`--uninstall`, and `--check` adds it when its entries are installed). It writes `SessionStart` and `SessionEnd`, each
+with its own command (`sync.py session-start` / `session-end`, `|| true`). Its mode and repository are config keys, so
+the installer writes `sync.mode` and `sync.repo` into `config.json` (`CCUC_CONFIG`, else the one in `--target`), with a
+backup and only when they change; every other key of that file is never written. `--sync-mode` sets the mode; without
+it an installed sync keeps the mode of the config and a first one gets `shadow`. `--sync-repo`, after the smoke test and
+before anything is written, under the sync lock: `check_visibility` once (public or unclear: exit 1), the cache of a
+private result, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clone --single-branch --no-checkout
+--no-tags` with `SETTINGS` and the clone environment without GIT_DIR, `_check_size`, checkout, rename to `repo`; a
+failed attempt removes the temporary folder). A folder already at `repo` stays: kept if it is a git folder whose remote
+is the URL of `sync.repo`, else exit 1. After the lock is released, `clear_visibility` lifts a block after
+`visibility`. `--uninstall` with the sync sets `sync.mode` to `off` (backup, only if it is not off): the status line (T1)
+starts pushes from the mode alone, so removing the hooks would not stop it; `--check` names a mode that is not `off`
+without the hooks as `FIX`, whatever `--components` says. `--check` reads the clone with `--no-optional-locks` and without a hooks folder, and changes nothing.
+
 `sync.mode` is `off`, `shadow` or `on` (anything else: `off`); `sync.interval_min`, `sync.backoff_max_h` and
 `sync.pull_timeout_s` must be finite numbers above 0, anything else falls back to the default with the usual log line.
 An interval below 10 minutes is valid in the config and raised by the sync core (see Sync core).
@@ -556,7 +571,8 @@ the fields of the format leave the machine (see docs/report-format.md); nothing 
 
 `_sync_git.push(run)` is the runner of `sync.py push`: it runs under the lock of the core, which wrote `last_attempt`
 before, and raises `SyncError` with a fixed text (never output of git) when it fails. Whatever is unclear ends without
-a push; a public repository is never written to. The clone `<log_dir>/sync/repo` is made by the installer
+a push; a repository found public is never written to (one made public later is found within 24 h, the age of the
+cache of a private result). The clone `<log_dir>/sync/repo` is made by the installer
 (`--sync-repo`, 0034-SYNC-INSTALL); the push never clones (a missing clone is `internal`, `the sync clone is missing,
 run the installer with --sync-repo`).
 
@@ -575,7 +591,13 @@ run the installer with --sync-repo`).
   value that does not resolve falls back to `.gitattributes`, measured with git 2.56), `core.attributesFile` is
   empty, `GIT_ATTR_NOSYSTEM=1` and a `GIT_ATTR_SOURCE` of the caller is dropped, so a `.gitattributes` another
   machine commits cannot run a filter of the user's config (git-lfs) or recode the own files
-  (`working-tree-encoding`, `eol`).
+  (`working-tree-encoding`, `eol`). git before 2.43 ignores `attr.tree` (an unknown `-c` passes silently), so the
+  clone also has `.git/info/attributes` with `* -text -eol -filter -diff -merge -ident -working-tree-encoding`: that
+  file has the highest precedence of all attribute files (gitattributes(5), the same text from 1.8 to 2.56), above
+  every `.gitattributes` in the tree, in a sub folder or behind a macro (measured with git 2.55 without `attr.tree`:
+  a smudge filter and `eol=crlf` of the remote apply without it and are unset with it). `make_clone` writes it before
+  the checkout, `open_clone` puts it back before anything is checked out if it is missing or differs (it only switches
+  conversions off; a write that fails is `internal`).
 - **2. Remote** (`open_clone`, shared with the pull): `sync.repo` set and `owner/name`; the clone a real folder with
   a `.git` folder (a link, a file or a `.git` file: `internal`); `git remote get-url --all origin` and `--push --all`
   (insteadOf and pushInsteadOf applied) each give exactly the one URL of `sync.repo` and `sync.transport`:

@@ -1,8 +1,9 @@
 """The git work of the sync: the push (0034-SYNC-PUSH), and the clone and the fast-forward the pull (0034-SYNC-REPORT)
-shares with it. Whatever is unclear ends without a push; a public repository is never written to.
+shares with it. Whatever is unclear ends without a push; a repository found public is never written to (one made public
+later is found within VISIBILITY_MAX_AGE_S, the age of the cache of a private result).
 
-The clone `<log_dir>/sync/repo` is made by the installer (`--sync-repo`); nothing here clones. Every git call in it
-(`Clone.git`) runs with GIT_DIR and GIT_WORK_TREE set to the clone (never a working folder, never a repository above
+The clone `<log_dir>/sync/repo` is made by the installer (`--sync-repo`, `make_clone`); push and pull never clone.
+Every git call in it (`Clone.git`) runs with GIT_DIR and GIT_WORK_TREE set to the clone (never a working folder, never a repository above
 it), the environment of `_sync_core.git_env` (no prompt, no askpass, ssh in batch mode, the core.sshCommand of the
 clone's own config), messages in C (`LC_ALL=C`: git translates them otherwise, and errors are told apart by their
 text), a fixed identity for the commit (`usage-clock`, in the environment: it beats any user.name and any GIT_AUTHOR_*
@@ -18,7 +19,8 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Then what an ended run left is cleared
    (`_heal`: old git locks and temporary objects, an interrupted rebase, half-written files outside the own folder),
    and the branch checked out must be the default branch of the remote,
-   the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree).
+   the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree, and
+   `.git/info/attributes` unsets them for a git that does not know attr.tree: `pin_attributes`).
 3. **Visibility** (`check_visibility`), unless a result `private` for this repository is younger than 24 h
    (`<log_dir>/sync/visibility.json`): `git ls-remote` of `https://github.com/<owner>/<name>.git` without any git
    config of the user or the system, without credential helper, prompt or askpass, HOME in the sync folder (no
@@ -58,18 +60,23 @@ import json
 import os
 import posixpath
 import re
+import shutil
 import stat
 import subprocess
+import sys
+import tempfile
 import time
 from collections.abc import Callable
 
 import _config
 import _context_state
+import _plat
 import _sync_core
 import _sync_export
 import sync_format
 
 CLONE_DIR = 'repo'
+CLONE_TEMP_PREFIX = 'repo.tmp-'  # the folder make_clone clones into before it becomes CLONE_DIR
 NO_HOOKS_DIR = 'no-hooks'
 VISIBILITY_FILE = 'visibility.json'
 JOURNAL_FILE = 'compacting.json'
@@ -109,6 +116,12 @@ SETTINGS = ('core.fsmonitor=false', 'core.autocrlf=false', 'commit.gpgSign=false
             'merge.verifySignatures=false', 'push.followTags=false', f'attr.tree={EMPTY_TREE}',
             'core.attributesFile=', 'color.ui=false', 'log.showRoot=true', 'log.showSignature=false',
             'fetch.writeCommitGraph=false', 'transfer.fsckObjects=true', 'http.sslVerify=true')
+# .git/info/attributes of the clone: every attribute that converts on checkout or runs a driver, unset for every path.
+# It has the highest precedence of all attribute files in every git version (gitattributes(5), unchanged from 1.8 to
+# 2.56), above every .gitattributes in the tree, also one in a sub folder or behind a macro, so it still holds where
+# attr.tree is unknown (git before 2.43 ignores an unknown -c). One line without a line end: written in text mode,
+# Windows would add a CR to it.
+INFO_ATTRIBUTES = '* -text -eol -filter -diff -merge -ident -working-tree-encoding'
 BRANCH = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,99}')
 REQUEST_FILE = re.compile(r'requests/(?P<month>[0-9]{4}-[0-9]{2})/[A-Za-z0-9_-]{1,128}\.jsonl')
 
@@ -187,11 +200,106 @@ def _empty_hooks(directory: str) -> str:
             os.mkdir(path, 0o700)
         except FileExistsError:
             pass
-        if stat.S_ISDIR(os.lstat(path).st_mode) and not os.listdir(path):
+        if _plat.is_folder(os.lstat(path)) and not os.listdir(path):
             return path
     except OSError as error:
         raise _fail('internal', f'{NO_HOOKS_DIR} cannot be made ({type(error).__name__})') from error
     raise _fail('internal', f'{NO_HOOKS_DIR} in the sync folder is no empty folder')
+
+
+def clone_at(path: str, deadline: _sync_core.Deadline, max_mb: int, hooks: str | None = None) -> Clone:
+    """The Clone of the folder `path`, nothing checked, no branch yet: git with SETTINGS and the environment of the
+    clone, core.hooksPath `hooks` if given (`--check` of the installer runs no command that starts a hook and writes no
+    hook folder)."""
+    settings = (f'core.hooksPath={hooks}',) if hooks else ()
+    options = tuple(arg for setting in (*settings, *SETTINGS) for arg in ('-c', setting))
+    return Clone(path, '', deadline, _clone_env(path, deadline), options, max_mb)
+
+
+def pin_attributes(path: str) -> None:
+    """`<path>/.git/info/attributes` is INFO_ATTRIBUTES: written (atomically, never through a link or a junction) if it
+    is missing or holds anything else. Only ever switching conversions off, it may be put back over whatever is there;
+    an `internal` instead would stop the sync until someone acts. `internal` if it cannot be written."""
+    folder = os.path.join(path, '.git', 'info')
+    try:
+        if not _plat.is_folder(os.lstat(folder)):      # a junction on Windows: write_private refuses only links
+            raise _fail('internal', 'the info folder of the sync clone is no folder')
+    except FileNotFoundError:      # made by write_private below
+        pass
+    except OSError as error:
+        raise _fail('internal', f'the info folder of the sync clone cannot be read ({type(error).__name__})') from error
+    try:
+        if _sync_core._read_small(os.path.join(folder, 'attributes')) == INFO_ATTRIBUTES.encode():
+            return
+    except (OSError, ValueError):      # missing, or no regular file: written below
+        pass
+    try:
+        written = _context_state.write_private(folder, 'attributes', INFO_ATTRIBUTES)
+    except OSError:
+        written = False
+    if not written:
+        raise _fail('internal', 'the attributes of the sync clone cannot be written')
+
+
+def remote_matches(clone: Clone, url: str) -> bool:
+    """`git remote get-url --all origin` and `--push --all` (insteadOf and pushInsteadOf applied) give exactly `url`."""
+    for which in ((), ('--push',)):
+        done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
+        if done.returncode != 0 or done.stdout.splitlines() != [url]:
+            return False
+    return True
+
+
+def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadline) -> None:
+    """For the installer (`--sync-repo`), which holds the sync lock and found the repository private: clones `url` into
+    `<directory>/repo`, which must not exist. Into a temporary folder beside it first (CLONE_TEMP_PREFIX, 0700), with
+    the settings and the environment of every git call of the sync (no prompt, no askpass, no hooks, core.autocrlf
+    false: Git for Windows sets it to true in its system config, and a plain clone checks LF files out with CRLF), only
+    the default branch, no checkout; then its remote URL (`remote_matches`), the size check of a fast-forward
+    (`_check_size`), the checkout and the rename. Fails with SyncError (fixed text: `auth`, `network`, `internal`), and the temporary folder is removed: a
+    clone left without its checkout would be checked out by the next push (`_restore_foreign`), past the limit."""
+    temporary = tempfile.mkdtemp(prefix=CLONE_TEMP_PREFIX, dir=directory)
+    try:
+        clone = clone_at(temporary, deadline, max_mb, _empty_hooks(directory))
+        env = {name: value for name, value in clone.env.items() if name not in ('GIT_DIR', 'GIT_WORK_TREE')}
+        done = _sync_core.run_command([_sync_core.GIT, *clone.options, 'clone', '--quiet', '--single-branch',
+                                       '--no-checkout', '--no-tags', '--', url, temporary], deadline, env, directory)
+        if done.returncode != 0:
+            raise _remote_error(done, 'clone')      # GIT_DIR of a clone that is to be made would break `git clone`
+        if not remote_matches(clone, url):      # as open_clone checks it on every push; before anything is checked out
+            raise _fail('internal', 'the remote of the new clone is not the URL of sync.repo (an insteadOf or '
+                                    'pushInsteadOf of the git config rewrites it): nothing was kept')
+        done = clone.git('symbolic-ref', '--quiet', '--short', 'HEAD')
+        branch = done.stdout.strip()
+        if done.returncode != 0 or not BRANCH.fullmatch(branch):
+            raise _fail('internal', 'the clone has no branch checked out')
+        clone = dataclasses.replace(clone, branch=branch)
+        pin_attributes(temporary)
+        if _commit_of(clone, _tracking(clone)):         # an empty repository has nothing to check out
+            _check_size(clone)
+            if clone.git('checkout', '--quiet', branch).returncode != 0:
+                raise _fail('internal', 'the sync repository could not be checked out')
+        os.rename(temporary, os.path.join(directory, CLONE_DIR))
+    except BaseException:
+        try:
+            _remove_tree(temporary)
+        except OSError:      # the reason the clone failed says more; --check names the folder left over
+            pass
+        raise
+
+
+def _remove_tree(path: str) -> None:
+    """Removes a folder make_clone made. Git makes its object files read-only, which Windows refuses to delete: only
+    such a file (Windows, a refused unlink, a regular file and no link) is made writable and removed again; every other
+    failure is raised, and nothing is changed through a link or in a folder."""
+    def writable(function, name, error) -> None:
+        error = error[1] if isinstance(error, tuple) else error        # onerror hands over sys.exc_info()
+        if (os.name != 'nt' or function not in (os.unlink, os.remove) or not isinstance(error, PermissionError)
+                or not stat.S_ISREG(os.lstat(name).st_mode)):
+            raise error
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+    shutil.rmtree(path, **{'onexc' if sys.version_info >= (3, 12) else 'onerror': writable})
 
 
 def _clone_env(path: str, deadline: _sync_core.Deadline) -> dict[str, str]:
@@ -213,20 +321,16 @@ def open_clone(run: _sync_core.Run) -> Clone:
     repo = configured_repo(run.cfg)
     path = clone_dir(run.log_dir)
     try:
-        if not all(stat.S_ISDIR(os.lstat(folder).st_mode) for folder in (path, os.path.join(path, '.git'))):
+        if not all(_plat.is_folder(os.lstat(folder)) for folder in (path, os.path.join(path, '.git'))):
             raise _fail('internal', 'the sync clone is no git folder')      # a link or a file (a .git file, too)
     except FileNotFoundError:
         raise _fail('internal', 'the sync clone is missing, run the installer with --sync-repo') from None
     except OSError as error:
         raise _fail('internal', f'the sync clone cannot be read ({type(error).__name__})') from error
-    options = tuple(arg for setting in (f'core.hooksPath={_empty_hooks(run.directory)}', *SETTINGS)
-                    for arg in ('-c', setting))
-    clone = Clone(path, '', run.deadline, _clone_env(path, run.deadline), options, run.cfg['sync']['max_clone_mb'])
-    expected = [remote_url(repo, run.cfg['sync']['transport'])]
-    for which in ((), ('--push',)):
-        done = clone.git('remote', 'get-url', '--all', *which, REMOTE)
-        if done.returncode != 0 or done.stdout.splitlines() != expected:
-            raise _fail('internal', 'the remote of the sync clone is not sync.repo')
+    clone = clone_at(path, run.deadline, run.cfg['sync']['max_clone_mb'], _empty_hooks(run.directory))
+    if not remote_matches(clone, remote_url(repo, run.cfg['sync']['transport'])):
+        raise _fail('internal', 'the remote of the sync clone is not sync.repo')
+    pin_attributes(path)      # before _heal: its checkout of foreign paths takes no attribute of the tree either
     try:
         machine_id = sync_format.load_machine_id(run.log_dir, create=False)
     except sync_format.FormatError as error:
@@ -251,8 +355,14 @@ def _default_branch(clone: Clone) -> str:
 def _left_over(git_dir: str) -> tuple[list[str], list[str]]:
     """Below `git_dir`: the lock files of git (index, refs, packed-refs, HEAD, config …) outside `objects/`, and the
     temporary files of a fetch git ended inside it (TEMP_OBJECT_PREFIXES)."""
+    def real_folder(path: str) -> bool:
+        try:
+            return _plat.is_folder(os.lstat(path))
+        except OSError:
+            return False
     objects, locks, temporary = os.path.join(git_dir, 'objects'), [], []
-    for folder, _dirs, names in os.walk(git_dir):
+    for folder, dirs, names in os.walk(git_dir):
+        dirs[:] = [name for name in dirs if real_folder(os.path.join(folder, name))]      # os.walk enters junctions
         if folder == objects or folder.startswith(objects + os.sep):
             temporary += [os.path.join(folder, name) for name in names if name.startswith(TEMP_OBJECT_PREFIXES)]
         else:
@@ -358,16 +468,22 @@ def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | 
     return judge(done.returncode, done.stderr)
 
 
-def cached_private(directory: str, repo: str, now: float) -> bool:
-    """True if `<directory>/visibility.json` says that `repo` was found private less than 24 h before `now`. A file
-    that is missing, broken, of another repository or from the future: False (check again)."""
+def private_checked(directory: str, repo: str) -> float | None:
+    """When `<directory>/visibility.json` says `repo` was found private (Unix seconds); None for a file that is
+    missing, broken or of another repository. `--check` of the installer shows its age."""
     try:
         data = json.loads(_sync_core._read_small(os.path.join(directory, VISIBILITY_FILE)))
         checked = _sync_core._moment(data['checked'], 'checked') if isinstance(data, dict) else None
     except (OSError, ValueError, RecursionError, KeyError):
-        return False
-    return (checked is not None and data.get('repo') == repo and data.get('result') == PRIVATE
-            and 0 <= now - checked < VISIBILITY_MAX_AGE_S)
+        return None
+    return checked if checked is not None and data.get('repo') == repo and data.get('result') == PRIVATE else None
+
+
+def cached_private(directory: str, repo: str, now: float) -> bool:
+    """True if `<directory>/visibility.json` says that `repo` was found private less than 24 h before `now`. A file
+    that is missing, broken, of another repository or from the future: False (check again)."""
+    checked = private_checked(directory, repo)
+    return checked is not None and 0 <= now - checked < VISIBILITY_MAX_AGE_S
 
 
 def remember_private(directory: str, repo: str, now: float) -> None:
@@ -519,7 +635,7 @@ def _rebasing(clone: Clone) -> bool:
             info = os.lstat(os.path.join(clone.path, '.git', name))
         except FileNotFoundError:
             continue
-        if not stat.S_ISDIR(info.st_mode):
+        if not _plat.is_folder(info):
             raise _fail('internal', 'the rebase state of the sync clone is no folder: nothing is aborted')
         found = True
     return found

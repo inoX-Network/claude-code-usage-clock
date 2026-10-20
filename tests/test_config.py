@@ -31,6 +31,15 @@ def test_missing_file_gives_defaults_without_log(tmp_path):
     assert log_lines(tmp_path) == []
 
 
+def test_a_given_path_is_read_instead_of_ccuc_config(tmp_path):
+    """The installer reads the config.json of --target this way, whatever CCUC_CONFIG says."""
+    write_config(tmp_path, {'sync': {'repo': 'env/one'}})
+    other = tmp_path / 'other.json'
+    other.write_text(json.dumps({'sync': {'repo': 'given/one'}}), encoding='utf-8')
+    assert _config.load(log_problems=False, path=str(other))['sync']['repo'] == 'given/one'
+    assert _config.load(log_problems=False)['sync']['repo'] == 'env/one'
+
+
 def test_tilde_in_paths_is_expanded_but_not_in_defaults(tmp_path):
     cfg = _config.load()
     home = str(tmp_path / 'home')

@@ -20,6 +20,13 @@
   Skill discovery covers your personal skills and the project folders from the start folder up to the repo
   root, not plugin or managed skills or folders added with `--add-dir`.
 - The date and time in the prompt line are your local time and go to the model with every prompt.
+- The [sync](sync.md) sends only after you opted in, and only into a repository of yours that was found private: one
+  that is public, or whose answer does not say, stops the installation, and a push never writes to one found public.
+  A private result is kept for 24 hours, so a repository made public later is found within 24 hours (by the next push
+  after that); until then pushes still go to it. Sessions that are still running on another machine appear only
+  after that machine's next push. A push at the end of a session can be cut off when the computer shuts down;
+  `SessionStart` catches it up at the next start of the same system. `usage_report.py --sync` pushes and pulls at
+  once.
 - The wake-up watcher is as good as the cache clock Claude Code passes to the status line (`prompt_cache`), which
   is not a versioned API either; without it the watcher never fires. It cannot wake a session whose computer is
   asleep or switched off, and it cannot know that the model will follow the wake-up call. Claude Code itself
@@ -42,6 +49,14 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
 | `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
 | `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, the context split of each session, measurement history, report archive, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
+
+With the [sync](sync.md), a model that can write to its clone can fake figures, and they then land on every machine.
+Write access to the whole sync folder `<log_dir>/sync/` gives more: the cached visibility result (`visibility.json`:
+for up to 24 hours no push checks again whether the repository is public) and the git config of the clone
+(`.git/config`: an ssh command or a filter driver that every push in the background then runs). All of it lies below
+`<log_dir>` (`~/.cache/claude-usage-clock/sync/`), so the last row above covers it already. Give git access to the
+sync repository only (a deploy key or a fine-grained token for that repository, see [the sync](sync.md#install)),
+so that even such a command cannot write elsewhere with your account.
 
 List these exact paths. Many guards read path lists literally, so a pattern such as `rate-limit.json*` matches
 nothing at all, not even the usage file itself. The temporary file `rate-limit.json.tmp.<pid>` needs no entry: it is

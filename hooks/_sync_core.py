@@ -223,7 +223,7 @@ def ensure_dir(log_dir: str) -> str:
         os.mkdir(directory, 0o700)
     except FileExistsError:
         pass
-    if not stat.S_ISDIR(os.lstat(directory).st_mode):
+    if not _plat.is_folder(os.lstat(directory)):
         raise OSError(f'{directory} is not a folder')      # a link or a file: never followed, never written into
     os.chmod(directory, 0o700)
     return directory
@@ -386,6 +386,13 @@ def run_command(argv: list[str], deadline: Deadline, env: dict | None = None, cw
         except subprocess.TimeoutExpired:
             pass
         raise SyncError('timeout', f'{name} did not finish in time') from None
+    except BaseException:       # Ctrl+C: the child leads a group of its own and would outlive the caller
+        _plat.kill_tree(process)
+        try:
+            process.communicate(timeout=KILL_WAIT_S)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
     finally:
         _children.discard(process)
     return subprocess.CompletedProcess(argv, process.returncode, out.decode('utf-8', 'replace'),

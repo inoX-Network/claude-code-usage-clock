@@ -17,6 +17,8 @@ What it does:
      spawn-gate   PreToolUse Agent|Workflow|Skill: usage thresholds and model rules
                   (enforce: broken -> exit 2, shadow: ... || true)
      soft-stop    PreToolUse *: soft stop for subagents near the usage limit            (... || true)
+     sync         SessionStart and SessionEnd: sync.py session-start / session-end, the sync across machines
+                  (... || true). Opt-in: not in the default selection, see below.
    The wake-up watcher (wake_watcher.py, _wake.py) needs no settings entry and is no component: it is copied
    with the other runtime files and started by the context reporter's hint once `wake_watcher.from_k` is set.
    Own entries are recognised by the full path of the script in --target, not by its file name. They are updated
@@ -28,16 +30,29 @@ A first installation starts in --mode shadow: nothing is blocked, every decision
 installed (the output says where the mode comes from); only --mode changes it. --week-ok-until belongs to the
 spawn gate command as well; a run without it removes an earlier value and says so.
 
+The sync (0034-SYNC-INSTALL) is installed only when --components names it. Its mode and repository live in config.json
+(sync.mode, sync.repo), so these two keys are the only ones the installer ever writes there, with a backup, and only
+when they change. --sync-repo owner/name sets sync.repo and, under the sync lock and before anything is written,
+checks once that the repository cannot be read without logging in (public or unclear: exit 1, nothing installed) and
+clones it into <log_dir>/sync/repo (no checkout before the size check of the push, a clone of another repository there
+is never touched). Run again, it lifts the lasting block after `visibility`. --sync-mode off|shadow|on sets sync.mode;
+without it the mode of an installed sync is kept and a first installation starts in shadow (the output line
+`Sync mode:` says which and where it comes from). Without --components, --uninstall removes the sync entries too and
+sets sync.mode to off (the status line pushes from the mode alone; the clone and the data in the remote stay), and
+--check checks the sync if its entries are installed; a sync.mode that is not off without them is a FIX.
+
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
 <target>/statusline.py. It deletes no files. --dry-run shows the changes and writes nothing.
 
 --check checks an existing installation and changes nothing: the entries in settings.json (matcher, mode), the
 files in --target (hooks and report) against this checkout, config.json as the hooks read it, Git Bash on Windows, the smoke test, the
-age of the usage numbers and the log folder. Each line is OK, FIX (something to repair) or NOTE (worth knowing).
+age of the usage numbers and the log folder, and for the sync its repository, clone, remote, visibility, last success,
+backoff and size. Each line is OK, FIX (something to repair) or NOTE (worth knowing).
 
-Exit codes: 0 ok, 1 smoke test or file operation failed or, on Windows, no Git Bash (nothing written to
-settings.json), or --check found something to fix, 2 bad arguments or unusable settings.json.
+Exit codes: 0 ok, 1 smoke test or file operation failed or, on Windows, no Git Bash, or the sync repository is public,
+unclear or cannot be cloned (nothing written to settings.json), or --check found something to fix, 2 bad arguments or
+an unusable settings.json or config.json.
 """
 from __future__ import annotations
 
@@ -53,7 +68,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timezone
+from typing import NamedTuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE_HOOKS = os.path.join(ROOT, 'hooks')
@@ -63,13 +80,22 @@ sys.path.append(SOURCE_HOOKS)
 import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
 import _config  # noqa: E402  --check reads config.json and the usage file as the hooks do
 import _usage  # noqa: E402
+import _sync_core  # noqa: E402  the sync: lock and state; the clone, visibility probe and size check of the push
+import _sync_git  # noqa: E402
 EXAMPLE_CONFIG = os.path.join(ROOT, 'config.example.json')
 
 TIMEOUT_S = 5
 SMOKE_TIMEOUT_S = 15  # generous: the smoke test may run on a loaded machine, the hook timeout stays 5
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
-COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')
+COMPONENTS = ('statusline', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop', 'sync')
+DEFAULT_COMPONENTS = COMPONENTS[:-1]        # the sync sends data off this machine: only when asked for
+SYNC_MODES = ('off', 'shadow', 'on')
+SYNC_COMMANDS = {'SessionStart': 'session-start', 'SessionEnd': 'session-end'}     # the argument of sync.py per event
+CLONE_TIMEOUT_S = 300           # the clone of --sync-repo, under the sync lock (no push runs meanwhile)
+CHECK_GIT_TIMEOUT_S = 15        # each git call of --check in the clone
+CLONE_NOTE_MB = 500             # --check notes a clone from this size on (sync.max_clone_mb stops a pull at 1024)
+MEGABYTE = 1024 * 1024
 REQUIRED_FILES = ('_config.py', '_context_state.py', '_history.py', '_hookio.py', '_plat.py', '_spawn_check.py',
                   '_sync_core.py', '_sync_export.py', '_sync_git.py', '_transcripts.py', '_usage.py', '_wake.py',
                   'statusline.py', 'usage_clock.py', 'context_reporter.py', 'spawn_gate.py', 'soft_stop.py', 'sync.py',
@@ -80,15 +106,17 @@ REPORT_FILES = ('usage_report.py', 'log_summary.py', 'prices.json')
 # copied with the hooks, named with the report.
 REPORT_MODULES = ('_transcripts.py',)
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
-           'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py'}
+           'spawn-gate': 'spawn_gate.py', 'soft-stop': 'soft_stop.py', 'sync': 'sync.py'}
 NEVER_BLOCK = ' || true'
 SPAWN_BROKEN = ' || { echo "spawn gate broken - start denied" >&2; exit 2; }'
 GATES = ('spawn-gate', 'soft-stop')  # the components that have a --mode
-# component -> [(event, matcher), ...]. None = no matcher. One command per component, one entry per event.
+# component -> [(event, matcher), ...]. None = no matcher. One command per component (the sync: one per event, see
+# SYNC_COMMANDS), one entry per event.
 HOOKS = {'usage-clock': [('UserPromptSubmit', None)],
          'context-reporter': [('UserPromptSubmit', None), ('PostToolUse', '*')],
          'spawn-gate': [('PreToolUse', 'Agent|Workflow|Skill')],
-         'soft-stop': [('PreToolUse', '*')]}
+         'soft-stop': [('PreToolUse', '*')],
+         'sync': [('SessionStart', None), ('SessionEnd', None)]}
 TOUCHED_EVENTS = tuple(dict.fromkeys(event for entries in HOOKS.values() for event, _ in entries))
 TEMP_SUFFIX = '.tmp-usage-clock'
 
@@ -103,6 +131,7 @@ SMOKE_INPUTS = {
                    'tool_input': {'subagent_type': 'smoke-agent', 'prompt': 'smoke test'}},
     'soft-stop': {'hook_event_name': 'PreToolUse', 'agent_id': 'smoke-test', 'tool_name': 'Read',
                   'tool_input': {'file_path': '/tmp/smoke-test'}},
+    'sync': {'hook_event_name': 'SessionStart', 'session_id': SMOKE_SESSION, 'source': 'startup'},
 }
 
 
@@ -117,8 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
         'Adds the usage-clock components to a Claude Code settings.json (or removes them).'))
     parser.add_argument('--settings', default=DEFAULT_SETTINGS, help=f'settings.json to edit (default {DEFAULT_SETTINGS})')
     parser.add_argument('--target', default=DEFAULT_TARGET, help=f'directory for the hook files (default {DEFAULT_TARGET})')
-    parser.add_argument('--components', default=','.join(COMPONENTS),
-                        help='comma-separated: ' + ', '.join(COMPONENTS) + ' (default: all)')
+    parser.add_argument('--components',
+                        help='comma-separated: ' + ', '.join(COMPONENTS) + ' (default: all but sync, which is opt-in; '
+                             '--uninstall: all)')
     parser.add_argument('--mode', choices=('shadow', 'enforce'),
                         help='shadow only logs, enforce blocks and warns (default: keep the mode of an existing '
                              'installation, shadow if there is none)')
@@ -127,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--replace-statusline', action='store_true',
                         help='replace an existing statusLine that runs something else')
     parser.add_argument('--auto-continue', action='store_true', help='set autoContinueAtUsageLimit to true')
+    parser.add_argument('--sync-repo', metavar='OWNER/NAME',
+                        help='sync: the private GitHub repository to sync into; checks that it is not public and '
+                             'clones it')
+    parser.add_argument('--sync-mode', choices=SYNC_MODES,
+                        help='sync: off, shadow (commits here, pushes nothing) or on (default: keep the mode of an '
+                             'installed sync, shadow if there is none)')
     parser.add_argument('--dry-run', action='store_true', help='show what would change, write nothing')
     parser.add_argument('--uninstall', action='store_true', help='remove the entries again (files stay)')
     parser.add_argument('--check', action='store_true',
@@ -145,11 +181,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    args.components_given = args.components is not None      # --check adds an installed sync to the default
+    if args.components is None:
+        args.components = ','.join(COMPONENTS if args.uninstall else DEFAULT_COMPONENTS)
     names = [name.strip() for name in args.components.split(',')]
     unknown = [name for name in names if name not in COMPONENTS]
     if unknown:
         raise UsageError(f'--components: unknown {", ".join(repr(n) for n in unknown)}; choose from {", ".join(COMPONENTS)}')
     args.components = tuple(dict.fromkeys(names))
+    if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
+        raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
+    if (args.sync_repo is not None or args.sync_mode) and 'sync' not in args.components:
+        raise UsageError('--sync-repo and --sync-mode need the component sync (for example --components sync).')
+    if args.uninstall and (args.sync_repo is not None or args.sync_mode):
+        raise UsageError('--uninstall takes no --sync-repo or --sync-mode: it switches the sync off.')
     if re.search(r'[\x00-\x1f\x7f]', args.target):
         raise UsageError('--target must not contain control characters or line breaks.')
     if args.week_ok_until is not None:
@@ -164,7 +209,7 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.replace_statusline and 'statusline' not in args.components:
         raise UsageError('--replace-statusline needs the component statusline.')
     if args.check and (args.dry_run or args.uninstall or args.mode or args.week_ok_until or args.replace_statusline
-                       or args.auto_continue):
+                       or args.auto_continue or args.sync_repo is not None or args.sync_mode):
         raise UsageError('--check changes nothing and takes only --settings, --target and --components.')
 
 
@@ -180,12 +225,15 @@ def fallback(component: str, mode: str | None) -> str:
 
 
 def hook_command(target: str, component: str, mode: str | None, week_ok_until: str | None,
-                 with_fallback: bool = True) -> str:
+                 with_fallback: bool = True, event: str | None = None) -> str:
+    """`event` picks the command of the sync (SYNC_COMMANDS); the other components have one for all their events."""
     extra = []
     if component in GATES:
         extra.append(f'--mode={mode}')
     if component == 'spawn-gate' and week_ok_until:
         extra.append(f'--week-ok-until={week_ok_until}')
+    if component == 'sync':
+        extra.append(SYNC_COMMANDS[event])
     command = core_command(target, SCRIPTS[component], *extra)
     return command + fallback(component, mode) if with_fallback else command
 
@@ -365,9 +413,9 @@ def plan_install(data: dict, args: argparse.Namespace, target: str, modes: dict[
     hooks = data.setdefault('hooks', {}) if hook_components else None
     for component in hook_components:
         mode = modes[component][0] if component in modes else None
-        command = hook_command(target, component, mode, args.week_ok_until)
         earlier = option_value(installed_command(data, component, target), 'week-ok-until')
         for event, matcher in HOOKS[component]:
+            command = hook_command(target, component, mode, args.week_ok_until, event=event)
             messages += upsert_hook(hooks, event, matcher, command, SCRIPTS[component],
                                     os.path.join(target, SCRIPTS[component]))
         if component == 'spawn-gate' and earlier and not args.week_ok_until:
@@ -474,6 +522,11 @@ def _check_evidence(component: str, stdout: str, log_dir: str) -> str | None:
         except (ValueError, KeyError, TypeError):
             return f'output is not the expected JSON: {stdout[:100]!r}'
         return None if context == SMOKE_CONTEXT else f'unexpected context line: {str(context)[:100]!r}'
+    if component == 'sync':
+        # Without a config (the smoke test has none) the sync is off and the hook only loads its modules: an exit 0
+        # proves those, as they are imported before the hook catches anything. The output of SessionStart would
+        # become context of the model.
+        return None if not stdout else f'printed {stdout[:100]!r}; a session hook must print nothing'
     records = _log_records(log_dir, SCRIPTS[component][:-len('.py')])
     if not records:
         return 'the hook ran but wrote no log line (a module failed to load?)'
@@ -516,7 +569,8 @@ def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]], shel
                    CCUC_CONFIG=os.path.join(tmp, 'no-config.json'))
         for component in args.components:
             mode = modes[component][0] if component in modes else None
-            command = hook_command(copy_dir, component, mode, args.week_ok_until, with_fallback=False)
+            command = hook_command(copy_dir, component, mode, args.week_ok_until, with_fallback=False,
+                                   event=SMOKE_INPUTS[component].get('hook_event_name'))
             script = SCRIPTS[component]
             try:
                 done = subprocess.run([shell, '-c', command], input=json.dumps(dict(SMOKE_INPUTS[component], cwd=tmp)),
@@ -529,7 +583,7 @@ def smoke_test(args: argparse.Namespace, modes: dict[str, tuple[str, str]], shel
                 errors.append(f'{script}: exit {done.returncode} - {done.stderr.strip()[:200]}')
                 continue
             stdout = done.stdout.strip()
-            if component != 'statusline' and stdout:
+            if component not in ('statusline', 'sync') and stdout:
                 try:
                     json.loads(stdout)
                 except ValueError:
@@ -614,9 +668,10 @@ def make_backup(path: str) -> str:
     raise RuntimeError(f'No free backup name for {path}')
 
 
-def write_settings(path: str, data: dict, existed: bool) -> str | None:
-    """Backup (if the file exists), then temp file + os.replace. Keeps the permissions. Returns the backup path."""
-    backup = make_backup(path) if existed else None
+def write_settings(path: str, data: dict, existed: bool, backup: bool | None = None) -> str | None:
+    """Backup (if the file exists, or as `backup` says), then temp file + os.replace. Keeps the permissions. Returns
+    the backup path. Writes config.json, too."""
+    backup = make_backup(path) if (existed if backup is None else backup) else None
     temp = path + TEMP_SUFFIX
     try:
         os.unlink(temp)  # a leftover of an aborted run, possibly a symlink: never write through it
@@ -632,6 +687,190 @@ def write_settings(path: str, data: dict, existed: bool) -> str | None:
         shutil.copymode(path, temp)
     _plat.replace(temp, path)
     return backup
+
+
+# --- Sync -------------------------------------------------------------------------------------------------------
+
+LOCK_HELD = 'Error: a sync run holds the lock right now. Run the installer again in a minute; nothing was installed.'
+CREDENTIALS = ('git has to reach the repository without asking: sign in once with a credential helper (the Git '
+               'Credential Manager of Git for Windows, or `gh auth setup-git`), or use sync.transport ssh with a key '
+               'whose host github.com is in known_hosts. The installer never asks for credentials itself.')
+
+
+class SyncPlan(NamedTuple):
+    """What a run does for the component sync. `updates` are the keys of the section sync that `changes` describes."""
+    path: str               # the config.json the hooks read
+    existed: bool
+    updates: dict
+    changes: list[str]
+    mode: str
+    source: str             # where the mode comes from
+    repo: str
+    transport: str
+    max_mb: int             # sync.max_clone_mb
+    log_dir: str
+
+    @property
+    def clone(self) -> str:
+        return _sync_git.clone_dir(self.log_dir)
+
+
+def config_file(target: str) -> str:
+    """The config.json the installed hooks read: CCUC_CONFIG, else the one in --target."""
+    return os.environ.get('CCUC_CONFIG') or os.path.join(target, 'config.json')
+
+
+def effective_config(path: str) -> dict:
+    """The configuration the hooks would use with the config.json `path`: defaults where it is missing or broken."""
+    return _config.load(log_problems=False, path=path)
+
+
+def log_dir_of(cfg: dict) -> str:
+    """The log folder the hooks use, absolute: git clones with the sync folder as its working folder, so a relative
+    path would land below it."""
+    return os.path.abspath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
+
+
+def read_config(path: str) -> dict:
+    """config.json as it is, to set the sync keys in; a missing one as create_config writes it (the example). One that
+    is a link or no JSON object is an argument error: nothing is changed."""
+    if os.path.islink(path):
+        raise UsageError(f'config.json must be a regular file, not a symlink: {path}. Set sync.repo and sync.mode '
+                         'there by hand; nothing changed.')
+    try:
+        with open(path if os.path.exists(path) else EXAMPLE_CONFIG, encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError, RecursionError) as error:
+        raise UsageError(f'{path} cannot be read as JSON ({type(error).__name__}), so sync.repo and sync.mode cannot '
+                         'be set; nothing changed.') from None
+    if not isinstance(data, dict) or not isinstance(data.get('sync', {}), dict):
+        raise UsageError(f'{path}: the top level and "sync" must be JSON objects, so sync.repo and sync.mode cannot '
+                         'be set; nothing changed.')
+    return data
+
+
+def resolve_sync_mode(data: dict, args: argparse.Namespace, target: str, current) -> tuple[str, str, bool]:
+    """(mode, where it comes from, whether config.json gets it), like resolve_modes for the gates. Call before
+    plan_install changes data."""
+    if args.sync_mode:
+        return args.sync_mode, '--sync-mode', True
+    if installed_command(data, 'sync', target) is None:
+        return 'shadow', 'default, nothing installed yet', True
+    if current in SYNC_MODES:
+        return current, 'kept from config.json', False
+    return 'off', 'kept from config.json, whose sync.mode is not valid: the hooks run as off', False
+
+
+def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
+    path = config_file(target)
+    section = read_config(path).get('sync', {})
+    old_repo, old_mode = section.get('repo', ''), section.get('mode', 'off')
+    mode, source, write_mode = resolve_sync_mode(data, args, target, old_mode)
+    cfg = effective_config(path)
+    given = os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir'])
+    if not os.path.isabs(given):
+        raise UsageError(f'The component sync needs an absolute log folder, not {given!r} (log_dir or CCUC_LOG_DIR): '
+                         'the hooks would resolve it against the folder of each session, so no push would find the '
+                         'clone.')
+    repo = args.sync_repo or cfg['sync']['repo']
+    if not repo:
+        raise UsageError(f'The component sync needs --sync-repo owner/name: sync.repo is not set in {path}.')
+    changes, updates = [], {}
+    if args.sync_repo and old_repo != repo:
+        updates['repo'] = repo
+        changes.append(f'sync.repo {old_repo!r} -> {repo!r}')
+    if write_mode and old_mode != mode:
+        updates['mode'] = mode
+        changes.append(f'sync.mode {old_mode!r} -> {mode!r}')
+    return SyncPlan(path, os.path.exists(path), updates, changes, mode, source, repo, cfg['sync']['transport'],
+                    cfg['sync']['max_clone_mb'], log_dir_of(cfg))
+
+
+def sync_blocked(plan: SyncPlan) -> bool:
+    """The push is blocked after `visibility` (an unreadable state blocks nothing: it counts as empty)."""
+    try:
+        return _sync_core.read_state(os.path.join(plan.log_dir, _sync_core.SYNC_DIR)).blocked
+    except _sync_core.BrokenState:
+        return False
+
+
+def git_folder(path: str) -> bool:
+    """A real folder with a real `.git` folder (no link, no .git file), as the push opens it."""
+    try:
+        return all(_plat.is_folder(os.lstat(folder)) for folder in (path, os.path.join(path, '.git')))
+    except OSError:
+        return False
+
+
+def prepare_clone(plan: SyncPlan) -> bool:
+    """--sync-repo, before anything is written and under the sync lock (a push or pull that started meanwhile would
+    find a half-made clone, and its clean-up of left-over git locks would break the clone): the visibility probe of the
+    push, once and shown, then the clone, unless one of this repository is there. False (with the reason printed) if
+    the repository is public or unclear or cannot be cloned, or a folder of another repository is in the way."""
+    url = _sync_git.remote_url(plan.repo, plan.transport)
+    directory = _sync_core.ensure_dir(plan.log_dir)
+    with _sync_core.try_lock(directory) as held:
+        if not held:
+            print(LOCK_HELD)
+            return False
+        result = _sync_git.check_visibility(plan.repo, directory)
+        if result == _sync_git.PUBLIC:
+            print(f'Error: {plan.repo} can be read without logging in, it is public: nothing was installed. The sync '
+                  'writes only to a private repository; make it private, then run again.')
+            return False
+        if result != _sync_git.PRIVATE:
+            print(f'Error: whether {plan.repo} is public could not be told (no network, or an answer this tool does '
+                  'not know): nothing was installed. Run again when GitHub can be reached.')
+            return False
+        _sync_git.remember_private(directory, plan.repo, time.time())
+        print(f'Sync: {plan.repo} is not public (reading it without logging in is refused).')
+        try:
+            if os.path.lexists(plan.clone):
+                if git_folder(plan.clone) and _sync_git.remote_matches(
+                        _sync_git.clone_at(plan.clone, _sync_core.Deadline(CHECK_GIT_TIMEOUT_S), plan.max_mb), url):
+                    print(f'Sync: the clone {plan.clone} is there and points to {plan.repo} - unchanged.')
+                    return True
+                print(f'Sync: {plan.clone} exists but is no clone of {url}. Move it away (it may hold commits that '
+                      'were never pushed), then run again. Nothing was installed.')
+                return False
+            _sync_git.make_clone(directory, url, plan.max_mb, _sync_core.Deadline(CLONE_TIMEOUT_S))
+        except _sync_core.SyncError as error:
+            print(f'Sync: {error.detail}')
+            if error.category == 'auth':
+                print(CREDENTIALS)
+            print('Nothing was installed.')
+            return False
+    print(f'Sync: cloned {plan.repo} to {plan.clone}.')
+    return True
+
+
+def write_sync_config(plan: SyncPlan) -> None:
+    if not plan.changes:
+        print('config.json: sync keys already set - unchanged')
+        return
+    # Read again: the clone may have taken minutes, and only the keys of this run are set into what is there now
+    content = read_config(plan.path)
+    content.setdefault('sync', {}).update(plan.updates)
+    backup = write_settings(plan.path, content, os.path.exists(plan.path), backup=plan.existed)
+    print(f'config.json: {", ".join(plan.changes)} written to {plan.path}')
+    if backup:
+        print(f'Backup:  {backup}')
+
+
+def plan_sync_off(target: str) -> SyncPlan | None:
+    """--uninstall with the sync: sync.mode back to `off`, or the status line would go on pushing (T1 needs no hook,
+    only the mode). None if there is nothing to switch off: no config.json, or one with which the hooks run as off (an
+    unreadable one gives the defaults)."""
+    path = config_file(target)
+    if not os.path.lexists(path) or effective_config(path)['sync']['mode'] == 'off':
+        return None
+    if os.path.islink(path):      # the hooks follow it, this installer never writes through it
+        raise UsageError(f'config.json is a symlink: {path}. The status line pushes from its sync.mode alone: set '
+                         'sync.mode to "off" there by hand, then run --uninstall again; nothing changed.')
+    old = read_config(path)['sync']['mode']
+    cfg = effective_config(path)
+    return SyncPlan(path, True, {'mode': 'off'}, [f'sync.mode {old!r} -> {"off"!r}'], 'off', '--uninstall', cfg['sync']['repo'],
+                    cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir_of(cfg))
 
 
 # --- Check ------------------------------------------------------------------------------------------------------
@@ -723,7 +962,7 @@ def check_usage(cfg: dict) -> list[tuple[str, str]]:
 
 
 def check_log_dir(cfg: dict) -> list[tuple[str, str]]:
-    log_dir = os.path.normpath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
+    log_dir = log_dir_of(cfg)
     if not os.path.isdir(log_dir):
         return [('NOTE', f'Log folder: {log_dir} does not exist yet; the first hook run creates it.')]
     if not os.access(log_dir, os.W_OK):
@@ -731,15 +970,124 @@ def check_log_dir(cfg: dict) -> list[tuple[str, str]]:
     return [('OK', f'Log folder: {log_dir}')]
 
 
+def _hours_ago(moment: float, now: float) -> str:
+    return f'{_sync_core._text(moment)} ({int((now - moment) // 3600)} h ago)'
+
+
+def check_clone(path: str, url: str, repo: str) -> list[tuple[str, str]]:
+    """The clone: there, a git folder, clean (`git status` without taking the index lock: changes nothing), and its
+    remote exactly the URL of sync.repo and sync.transport, as the push requires."""
+    again = f'install.py --components sync --sync-repo {repo}'
+    if not os.path.lexists(path):
+        return [('FIX', f'Sync clone: {path} is missing. Run {again}.')]
+    if not git_folder(path):
+        return [('FIX', f'Sync clone: {path} is no git folder. Move it away, then run {again}.')]
+    clone = _sync_git.clone_at(path, _sync_core.Deadline(CHECK_GIT_TIMEOUT_S), 0)
+    failed = [('FIX', f'Sync clone: git status failed in the clone {path}.')]
+    try:
+        status = clone.git('--no-optional-locks', 'status', '--porcelain', '--untracked-files=all')
+        matches = _sync_git.remote_matches(clone, url)
+    except _sync_core.SyncError:      # no git, or no answer in time
+        return failed
+    if status.returncode != 0:
+        return failed
+    results = [('OK', f'Sync clone: {path} is there and clean') if not status.stdout else
+               ('NOTE', f'Sync clone: {path} has changes that are not committed (a run that was cut off); the next '
+                        'push commits them or puts them back.')]
+    results.append(('OK', f'Sync remote: {url}') if matches else
+                   ('FIX', f'Sync remote: the remote of the clone is not {url}, so every push ends `internal`. Move '
+                           f'the clone away, then run {again}.'))
+    return results
+
+
+def check_sync_state(directory: str, repo: str, now: float) -> list[tuple[str, str]]:
+    """Visibility (from the cache of the push, with its age), last success, backoff and the category of the last
+    failure. `network` and `timeout` pass with the backoff; every other category needs a hand."""
+    try:
+        state = _sync_core.read_state(directory)
+    except _sync_core.BrokenState:
+        return [('NOTE', 'Sync state: state.json cannot be read, the next run counts it as empty.')]
+    checked = _sync_git.private_checked(directory, repo)
+    if state.blocked:
+        results = [('FIX', 'Sync visibility: the repo was found public, nothing is pushed. Make it private, then run '
+                           f'install.py --components sync --sync-repo {repo}.')]
+    elif checked is None or checked > now:
+        results = [('NOTE', 'Sync visibility: not checked yet; the next push checks it.')]
+    elif now - checked < _sync_git.VISIBILITY_MAX_AGE_S:
+        results = [('OK', f'Sync visibility: {repo} is not public (checked {int((now - checked) // 3600)} h ago)')]
+    else:
+        results = [('NOTE', f'Sync visibility: {repo} was found not public {int((now - checked) // 3600)} h ago; the '
+                            'next push checks again.')]
+    results.append(('OK', f'Sync last success: {_hours_ago(state.last_success, now)}') if state.last_success else
+                   ('NOTE', 'Sync last success: none yet; the first run starts when a session ends.'))
+    if state.last_error is None:
+        results.append(('OK', 'Sync errors: none, no backoff'))
+    else:
+        later = 'not before install.py --sync-repo runs again' if state.blocked else (
+            f'next try at {_sync_core._text(state.next_due)}' if state.next_due else 'next try with the next trigger')
+        results.append(('NOTE' if state.last_error in ('network', 'timeout') else 'FIX',
+                        f'Sync errors: the last run failed with {state.last_error}, backoff level '
+                        f'{state.backoff_level}, {later}. Details: log_summary.py, section Sync.'))
+    return results
+
+
+def _size(path: str) -> int:
+    """The bytes of the regular files below `path`, without entering a link or a junction (os.walk enters a junction on
+    Windows); a file a push removes meanwhile counts 0."""
+    def info(folder: str, name: str) -> os.stat_result | None:
+        try:
+            return os.lstat(os.path.join(folder, name))
+        except OSError:
+            return None
+    total = 0
+    for folder, folders, names in os.walk(path):
+        folders[:] = [name for name in folders if (found := info(folder, name)) and _plat.is_folder(found)]
+        total += sum(found.st_size for name in names if (found := info(folder, name)) and stat.S_ISREG(found.st_mode))
+    return total
+
+
+def check_clone_size(path: str, max_mb: int) -> list[tuple[str, str]]:
+    total = _size(path)
+    size = f'{total / MEGABYTE:.0f} MB'
+    if total < CLONE_NOTE_MB * MEGABYTE:
+        return [('OK', f'Sync clone size: {size}')]
+    return [('NOTE', f'Sync clone size: {size}, at least {CLONE_NOTE_MB} MB. Fewer kept request months '
+                     '(sync.keep_request_months) make it grow slower; a pull stops at sync.max_clone_mb '
+                     f'({max_mb} MB).')]
+
+
+def check_sync(cfg: dict) -> list[tuple[str, str]]:
+    sync = cfg['sync']
+    if not sync['repo']:
+        return [('FIX', 'Sync repo: sync.repo is not set. Run install.py --components sync --sync-repo owner/name.')]
+    log_dir = log_dir_of(cfg)
+    path, url = _sync_git.clone_dir(log_dir), _sync_git.remote_url(sync['repo'], sync['transport'])
+    results = [('OK', f'Sync repo: {sync["repo"]} ({sync["transport"]}, mode {sync["mode"]})')]
+    results += check_clone(path, url, sync['repo'])
+    directory = os.path.join(log_dir, _sync_core.SYNC_DIR)
+    results += check_sync_state(directory, sync['repo'], time.time())
+    if git_folder(path):
+        results += check_clone_size(path, sync['max_clone_mb'])
+    try:
+        left = sorted(name for name in os.listdir(directory) if name.startswith(_sync_git.CLONE_TEMP_PREFIX))
+    except OSError:      # no sync folder yet
+        left = []
+    results += [('NOTE', f'Sync: {os.path.join(directory, name)} is left over from a clone that was cut off; the sync '
+                         'never reads it. Remove it when no installer runs.') for name in left]
+    return results
+
+
 def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     """Checks an installation and changes nothing. FIX = something to repair (exit 1), NOTE = worth knowing only."""
     print(f'Settings: {settings_path}')
     print(f'Target:   {target}')
     data, existed = load_settings(settings_path)
+    if not args.components_given and installed_command(data, 'sync', target) is not None:
+        args.components += ('sync',)
     results = [] if existed else [('FIX', 'settings.json: does not exist. Run install.py to install.')]
     results += check_entries(data, args, target)
     results += check_files(target)
-    config_results, cfg = check_config(os.environ.get('CCUC_CONFIG') or os.path.join(target, 'config.json'))
+    config_results, cfg = check_config(config_file(target))
     results += config_results
     shell = _plat.hook_shell(data.get('env'))
     if shell is None:
@@ -752,6 +1100,14 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     if 'statusline' in args.components:
         results += check_usage(cfg)
     results += check_log_dir(cfg)
+    sync_mode = effective_config(config_file(target))['sync']['mode']
+    if sync_mode != 'off' and installed_command(data, 'sync', target) is None:
+        # Whatever --components says: the status line starts pushes from the mode alone, hooks or not
+        results.append(('FIX', f'Sync: sync.mode is {sync_mode} in {config_file(target)}, but the hooks of the sync '
+                               'are not installed, and the status line goes on pushing. Run install.py --uninstall '
+                               '--components sync to switch it off, or install.py --components sync to install it.'))
+    if 'sync' in args.components:
+        results += check_sync(effective_config(config_file(target)))
     for status, text in results:
         print(f'{status:<4} {text}')
     problems = sum(status == 'FIX' for status, _ in results)
@@ -770,8 +1126,10 @@ def run(args: argparse.Namespace) -> int:
     before = copy.deepcopy(data)
     print(f'Settings: {settings_path}' + ('' if existed else ' (does not exist yet)'))
     print(f'Target:   {target}')
+    sync = None
     if args.uninstall:
         messages = plan_uninstall(data, args, target)
+        sync = plan_sync_off(target) if 'sync' in args.components else None
     else:
         missing = missing_sources()
         if missing:
@@ -788,6 +1146,9 @@ def run(args: argparse.Namespace) -> int:
         modes = resolve_modes(data, args, target)
         if modes:
             print(f'Mode:     {describe_modes(modes)}')
+        if 'sync' in args.components:
+            sync = plan_sync(data, args, target)
+            print(f'Sync mode: {sync.mode} ({sync.source})')
         messages = plan_install(data, args, target, modes)
     print('\n'.join(messages))
     if not args.uninstall:
@@ -799,17 +1160,44 @@ def run(args: argparse.Namespace) -> int:
             return 1
         print(f'Smoke test: passed ({", ".join(args.components)}).')
     changed = data != before
+    if sync and not args.uninstall and not args.sync_repo:
+        if not os.path.lexists(sync.clone):
+            print(f'Sync: the clone {sync.clone} is missing; run again with --sync-repo {sync.repo} to make it.')
+        if sync_blocked(sync):
+            print(f'Sync: a push found {sync.repo} public, so nothing is pushed. Make it private, then run install.py '
+                  f'--components sync --sync-repo {sync.repo} to lift the block.')
     if args.dry_run:
         if not args.uninstall:
             note = 'would be created from config.example.json' if not config_exists(target) else 'exists, stays untouched'
             print(f'Files: {len(runtime_files())} runtime files would be copied to {target}; config.json {note}.')
             print(f'Report: {", ".join(REPORT_FILES + REPORT_MODULES)} would be copied to {target}.')
+        if sync:
+            print(f'config.json: {", ".join(sync.changes)} would be written' if sync.changes
+                  else 'config.json: sync keys already set - unchanged')
+        if sync and args.sync_repo:
+            print(f'Sync: would check that {sync.repo} is not public; the clone {sync.clone} stays if it points to it.'
+                  if os.path.lexists(sync.clone) else
+                  f'Sync: would check that {sync.repo} is not public, then clone it to {sync.clone} (at most '
+                  f'{sync.max_mb} MB).')
+            if sync_blocked(sync):
+                print('Sync: the block after a public repo would be lifted.')
         print('DRY RUN - nothing written.' + ('' if changed else ' settings.json would stay as it is.'))
         return 0
+    if sync and args.sync_repo:
+        blocked = sync_blocked(sync)
+        if not prepare_clone(sync):
+            return 1
+        if blocked:
+            if not _sync_core.clear_visibility(sync.log_dir, time.time()):
+                print(LOCK_HELD)
+                return 1
+            print('Sync: the block after a public repo is lifted, the next push is due.')
     if not args.uninstall:
         count = copy_runtime_files(target)
         note = 'created from config.example.json' if create_config(target) else 'kept as it is'
         print(f'Files: {count} runtime files copied to {target}; config.json {note}.')
+    if sync:
+        write_sync_config(sync)
     if not changed:
         print('settings.json is already up to date - not written.')
         return 0
@@ -822,6 +1210,8 @@ def run(args: argparse.Namespace) -> int:
         print('Start a new Claude Code session for the changes to take effect.')
         if any(mode == 'shadow' for mode, _ in modes.values()):
             print('Mode shadow: nothing is blocked, decisions are only logged. Use --mode enforce to switch them on.')
+        if sync and sync.mode == 'shadow':
+            print('Sync mode shadow: commits stay on this machine, nothing is pushed. Use --sync-mode on to push.')
     return 0
 
 

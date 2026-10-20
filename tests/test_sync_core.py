@@ -1063,3 +1063,44 @@ def test_the_outcome_of_a_push_names_how_it_ended(tmp_path):
     put_state(tmp_path, State(backoff_level=1, last_error='visibility'))
     assert outcome(forced=True) == _sync_core.Outcome('blocked', 'visibility')
     assert [push(tmp_path, forced=True)] == [1]                                # blocked is a failure as exit code
+
+
+def test_a_run_command_that_is_interrupted_ends_the_tree_of_its_child(monkeypatch):
+    """Ctrl+C in the installer while git clones: the child runs in a group of its own, so it would outlive the
+    installer and go on writing into the sync folder."""
+    import subprocess
+    ended = []
+
+    class Interrupted:
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+
+        def communicate(self, timeout=None):
+            raise KeyboardInterrupt
+    monkeypatch.setattr(subprocess, 'Popen', Interrupted)
+    monkeypatch.setattr(_plat, 'kill_tree', ended.append)
+    with pytest.raises(KeyboardInterrupt):
+        _sync_core.run_command(['git', 'clone'], _sync_core.Deadline(60))
+    assert len(ended) == 1 and ended[0].argv == ['git', 'clone'] and not _sync_core._children
+
+
+def test_an_interrupted_run_command_waits_briefly_for_its_ended_child(monkeypatch):
+    """As after the deadline: the ended child is waited for (no zombie, and on Windows no open handle that would break
+    the clean-up of the clone that follows), then the interruption goes on."""
+    import subprocess
+    calls = []
+
+    class Interrupted:
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+
+        def communicate(self, timeout=None):
+            calls.append(timeout)
+            if len(calls) == 1:
+                raise KeyboardInterrupt
+            raise subprocess.TimeoutExpired(self.argv, timeout)
+    monkeypatch.setattr(subprocess, 'Popen', Interrupted)
+    monkeypatch.setattr(_plat, 'kill_tree', lambda process: None)
+    with pytest.raises(KeyboardInterrupt):
+        _sync_core.run_command(['git', 'clone'], _sync_core.Deadline(60))
+    assert calls[1:] == [_sync_core.KILL_WAIT_S]

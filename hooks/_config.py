@@ -167,8 +167,9 @@ def _report(problems: list[str], log_dir: str) -> None:
                             'reason': '; '.join(problems)[:300]}, log_dir)
 
 
-def load(log_problems: bool = True) -> dict:
-    """The effective configuration: defaults, overridden by every valid key of config.json.
+def load(log_problems: bool = True, path: str | None = None) -> dict:
+    """The effective configuration: defaults, overridden by every valid key of config.json (`path`, else
+    config_path()).
 
     log_problems=False is for the status line, which runs every few seconds: a broken config would
     otherwise fill the log. The hooks report it.
@@ -176,7 +177,7 @@ def load(log_problems: bool = True) -> dict:
     problems: list[str] = []
     given = _MISSING
     try:
-        with open(config_path(), encoding='utf-8') as f:
+        with open(path or config_path(), encoding='utf-8') as f:
             given = json.load(f)
     except FileNotFoundError:
         pass

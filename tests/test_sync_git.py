@@ -9,6 +9,7 @@ import dataclasses
 import functools
 import json
 import os
+import stat
 import subprocess
 import time
 
@@ -862,6 +863,79 @@ def test_no_git_config_of_the_user_changes_the_line_ends_in_the_work_tree(device
         assert f.read() == b'{"d":1}\n{"d":2}\n'
 
 
+@pytest.mark.parametrize('before', [None, b'', b'* filter=lfs\n'], ids=['missing', 'empty', 'changed'])
+def test_open_clone_puts_the_attributes_back_and_a_fast_forward_takes_no_foreign_filter(device, remote, git_alone,
+                                                                                        monkeypatch, before):
+    """A clone without .git/info/attributes (made before they were written), or with other ones, gets them back on
+    opening: they only ever switch conversions off. git before 2.43 ignores attr.tree, so without them a .gitattributes
+    of another machine would apply to the fast-forward."""
+    monkeypatch.setattr(_sync_git, 'SETTINGS', tuple(s for s in _sync_git.SETTINGS if not s.startswith('attr.tree=')))
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write('[filter "lfs"]\n\tsmudge = tr a-z A-Z\n\tclean = cat\n')
+    info = os.path.join(device.clone, '.git', 'info')
+    if before is not None:
+        os.makedirs(info, exist_ok=True)
+        with open(os.path.join(info, 'attributes'), 'wb') as f:
+            f.write(before)
+    run = run_of(device)
+    clone = _sync_git.open_clone(run)
+    with open(os.path.join(info, 'attributes'), 'rb') as f:
+        assert f.read() == _sync_git.INFO_ATTRIBUTES.encode()
+    remote.foreign_commit('.gitattributes', b'* filter=lfs text eol=crlf\n')
+    remote.foreign_commit('machines/other/days/2026-10.jsonl', b'{"d":"abc"}\n')
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    with open(os.path.join(device.clone, 'machines', 'other', 'days', '2026-10.jsonl'), 'rb') as f:
+        assert f.read() == b'{"d":"abc"}\n'
+
+
+def refusing_lstat(monkeypatch, refused):
+    """os.lstat raises PermissionError for the path `refused`, as for a folder this user may not read."""
+    real = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if os.fspath(path) == refused:
+            raise PermissionError(13, 'denied', path)
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'lstat', lstat)
+
+
+def test_a_clone_without_an_info_folder_gets_one_with_the_attributes(device):
+    info = os.path.join(device.clone, '.git', 'info')
+    for name in os.listdir(info):
+        os.unlink(os.path.join(info, name))
+    os.rmdir(info)
+    _sync_git.pin_attributes(device.clone)
+    with open(os.path.join(info, 'attributes'), 'rb') as f:
+        assert f.read() == _sync_git.INFO_ATTRIBUTES.encode()
+
+
+def test_an_info_folder_that_cannot_be_read_is_internal(device, monkeypatch):
+    refusing_lstat(monkeypatch, os.path.join(device.clone, '.git', 'info'))
+    assert failure_of(_sync_git.pin_attributes, device.clone) == (
+        'internal', 'the info folder of the sync clone cannot be read (PermissionError)')
+
+
+def test_locks_in_a_folder_below_git_that_cannot_be_read_are_left_alone(device, monkeypatch):
+    git_dir = os.path.join(device.clone, '.git')
+    with open(os.path.join(git_dir, 'refs', 'old.lock'), 'w', encoding='utf-8'):
+        pass
+    assert os.path.join(git_dir, 'refs', 'old.lock') in _sync_git._left_over(git_dir)[0]
+    refusing_lstat(monkeypatch, os.path.join(git_dir, 'refs'))
+    assert not [path for path in _sync_git._left_over(git_dir)[0] if 'old.lock' in path]
+
+
+def test_attributes_that_cannot_be_written_are_internal(device, monkeypatch):
+    monkeypatch.setattr(_context_state, 'write_private', lambda *args: False)      # a link as .git/info
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'the attributes of the sync clone cannot be written')
+
+    def full(*args):
+        raise OSError(28, 'no space left')
+    monkeypatch.setattr(_context_state, 'write_private', full)
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'the attributes of the sync clone cannot be written')
+
+
 def test_shadow_gathers_commits_while_another_machine_pushes_and_on_sends_them(tmp_path, remote):
     first, second = Device(tmp_path / 'a', mode='shadow'), Device(tmp_path / 'b')
     for minute in range(3):
@@ -1539,7 +1613,15 @@ def test_a_young_git_lock_is_someone_elses_and_ends_the_run(device, remote, seco
     assert os.path.exists(path)
 
 
+def pinned(device):
+    """The attributes open_clone writes, there already: a test that breaks writing then reaches its own step."""
+    os.makedirs(os.path.join(device.clone, '.git', 'info'), exist_ok=True)
+    with open(os.path.join(device.clone, '.git', 'info', 'attributes'), 'wb') as f:
+        f.write(_sync_git.INFO_ATTRIBUTES.encode())
+
+
 def test_a_lock_that_cannot_be_removed_is_internal(device, remote, monkeypatch):
+    pinned(device)
     path = os.path.join(device.clone, '.git', 'index.lock')
     with open(path, 'w', encoding='utf-8') as f:
         f.write('')
@@ -1705,6 +1787,8 @@ def test_the_path_list_is_never_written_through_a_link(device, remote, tmp_path)
 
 
 def test_a_path_list_that_cannot_be_written_is_internal(device, monkeypatch):
+    pinned(device)
+
     def write_private(*args):
         raise OSError('full disk')
     monkeypatch.setattr(_context_state, 'write_private', write_private)
@@ -1845,3 +1929,65 @@ def test_git_settings_of_the_review_are_set():
                     'http.sslVerify=true', f'attr.tree={_sync_git.EMPTY_TREE}', 'core.attributesFile='):
         assert setting in _sync_git.SETTINGS
 
+
+
+# --- Removing a clone that failed (make_clone) -----------------------------------------------------------------------
+
+def test_a_failed_clone_with_read_only_files_is_removed(tmp_path):
+    """git makes its object files read-only, which Windows refuses to delete: the clean-up makes them writable."""
+    folder = tmp_path / 'repo.tmp-x'
+    (folder / '.git' / 'objects').mkdir(parents=True)
+    pack = folder / '.git' / 'objects' / 'pack.idx'
+    pack.write_bytes(b'x')
+    os.chmod(pack, stat.S_IREAD)
+    _sync_git._remove_tree(str(folder))
+    assert not folder.exists()
+
+
+def test_the_clean_up_passes_on_every_other_error(tmp_path, monkeypatch):
+    """Only a read-only regular file is made writable; any other failure (a folder that cannot go, a link) is raised,
+    nothing is changed through it."""
+    folder = tmp_path / 'repo.tmp-x'
+    (folder / 'sub').mkdir(parents=True)
+    real = os.rmdir
+
+    def rmdir(path, *args, **kwargs):
+        if os.path.basename(path) == 'sub':
+            raise PermissionError(13, 'denied', path)
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, 'rmdir', rmdir)
+    chmods = []
+    monkeypatch.setattr(os, 'chmod', lambda *args, **kwargs: chmods.append(args))
+    with pytest.raises(PermissionError):
+        _sync_git._remove_tree(str(folder))
+    assert chmods == []
+
+
+def test_a_clean_up_that_fails_keeps_the_error_of_the_clone(tmp_path, monkeypatch):
+    """The reason the clone failed is what the installer has to tell (`Nothing was installed.`, the hint on credentials);
+    a folder left over is named by --check."""
+    directory = _sync_core.ensure_dir(str(tmp_path / 'log'))
+    url = _sync_git.remote_url('no/such', 'https')
+    expected = failure_of(_sync_git.make_clone, directory, url, 1024, _sync_core.Deadline(60))
+
+    def busy(path):
+        raise PermissionError(13, 'in use', path)
+    monkeypatch.setattr(_sync_git, '_remove_tree', busy)
+    assert failure_of(_sync_git.make_clone, directory, url, 1024, _sync_core.Deadline(60)) == expected
+
+
+def test_a_rewritten_remote_is_refused_before_anything_is_checked_out(tmp_path, remote, git_alone, monkeypatch):
+    """An insteadOf leads the clone elsewhere: refused right after `git clone`, before the size check and the checkout
+    of what came from there."""
+    other = tmp_path / 'remotes' / 'someone' / 'else.git'
+    other.parent.mkdir(parents=True)
+    git('clone', '--quiet', '--bare', _sync_git.remote_url(REPO, 'https'), str(other))
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write(f'[url "{other.as_posix()}"]\n\tinsteadOf = {_sync_git.remote_url(REPO, "https")}\n')
+    sized = []
+    monkeypatch.setattr(_sync_git, '_check_size', sized.append)
+    directory = _sync_core.ensure_dir(str(tmp_path / 'log'))
+    category, detail = failure_of(_sync_git.make_clone, directory, _sync_git.remote_url(REPO, 'https'), 1024,
+                                  _sync_core.Deadline(60))
+    assert category == 'internal' and 'the remote of the new clone is not the URL of sync.repo' in detail
+    assert sized == [] and os.listdir(directory) == [_sync_git.NO_HOOKS_DIR]

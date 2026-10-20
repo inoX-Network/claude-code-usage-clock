@@ -63,6 +63,19 @@ def test_enforce_and_the_weekly_approval_end_up_in_the_spawn_gate_command(paths)
                        + ' || { echo "spawn gate broken - start denied" >&2; exit 2; }')
 
 
+def test_the_sync_commands_run_the_current_python_through_forward_slashes(paths):
+    """The dry run of the sync (nothing is checked or cloned) shows the two commands as they would be written."""
+    settings, target = paths
+    done = run('--settings', settings, '--target', target, '--components', 'sync', '--sync-repo', 'owner/name',
+               '--dry-run')
+    assert done.returncode == 0, done.stdout + done.stderr
+    for event, argument in (('SessionStart', 'session-start'), ('SessionEnd', 'session-end')):
+        command = expected(target, 'sync.py', argument) + ' || true'
+        assert f'{event}: sync.py added -> {command}' in done.stdout
+        assert 'python3' not in command and '\\' not in command
+    assert read(settings) == {} and not target.exists()
+
+
 def test_the_dry_run_shows_the_windows_commands_and_writes_nothing(paths):
     settings, target = paths
     done = run('--settings', settings, '--target', target, '--dry-run')

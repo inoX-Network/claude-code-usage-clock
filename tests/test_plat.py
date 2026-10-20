@@ -165,3 +165,14 @@ def test_a_detached_start_from_a_venv_runs_the_python_the_venv_was_made_from(tmp
     _win.start_detached([launcher, 'sync.py', 'push'], popen=lambda *args, **kwargs: calls.append(args[0]))
     _win.start_detached(['C:/other/python.exe', 'sync.py'], popen=lambda *args, **kwargs: calls.append(args[0]))
     assert calls == [[str(base), 'sync.py', 'push'], ['C:/other/python.exe', 'sync.py']]
+
+
+def test_is_folder_takes_a_folder_and_no_file(tmp_path):
+    (tmp_path / 'file').write_text('x', encoding='utf-8')
+    assert _plat.is_folder(os.lstat(tmp_path)) and not _plat.is_folder(os.lstat(tmp_path / 'file'))
+
+
+@pytest.mark.posix_only
+def test_is_folder_takes_no_link_to_a_folder(tmp_path):
+    os.symlink(tmp_path, tmp_path.parent / f'{tmp_path.name}-link')
+    assert not _plat.is_folder(os.lstat(tmp_path.parent / f'{tmp_path.name}-link'))

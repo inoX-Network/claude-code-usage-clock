@@ -248,6 +248,36 @@ python3 tools/install.py --mode enforce
 (On Windows: `python tools\install.py --mode enforce`.) To go back, run it with `--mode shadow`. The README explains
 what to look for in the log: [From shadow to enforce](gates.md#from-shadow-to-enforce).
 
+## Optional: several computers in one report
+
+Skip this if you use Claude Code on one computer only. Your limits count for all your computers together, and each
+computer only knows its own usage. The *sync* lets every computer put its numbers into a private GitHub repository of
+yours, so that the report on each one shows all of them. It is off until you install it.
+
+1. On GitHub, create a new **private** repository, for example `usage-sync`.
+2. Let `git` on this computer sign in to GitHub once; the tool itself never asks for a password. On Windows, type
+   `git ls-remote https://github.com/anna/usage-sync.git` (with your GitHub name instead of `anna`) and sign in in the
+   browser window that Git for Windows opens. On Linux and macOS the simplest way is the
+   [GitHub CLI](https://cli.github.com/): `gh auth login`, then `gh auth setup-git`. Both give git access to all
+   your repositories; the safer way, a key or token for this one repository only, is on
+   [the sync page](sync.md#install).
+3. In the folder from step 2 of the install, with your GitHub name instead of `anna`:
+
+```sh
+python3 tools/install.py --components sync --sync-repo anna/usage-sync
+```
+
+(On Windows: `python tools\install.py --components sync --sync-repo anna/usage-sync`.) The installer first checks that
+nobody can read the repository without logging in. If it is public, it stops and changes nothing in your settings. Then it starts the
+sync in shadow mode: it prepares everything on this computer but sends nothing yet. Do the same on your other
+computers, and switch it on everywhere once you are happy:
+
+```sh
+python3 tools/install.py --components sync --sync-mode on
+```
+
+What it sends, and what it never sends: [The sync across machines](sync.md).
+
 ## Uninstall
 
 Go into the folder from step 2 and run:
