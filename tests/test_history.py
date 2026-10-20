@@ -165,6 +165,18 @@ def test_a_last_line_from_the_future_does_not_block_the_heartbeat(tmp_path):
     assert len(lines(tmp_path)) == 2
 
 
+def test_a_session_that_took_its_time_before_the_last_writer_does_not_write_the_measurement_again(tmp_path):
+    """Two status lines started side by side: the later one gets the lock first and writes `t` cut to its second,
+    the earlier one's now lies before that second (seen once in the CI, 19.10.2026). Less than FUTURE_SLACK_S
+    ahead counts as now; from there on the line is from the future and the heartbeat writes."""
+    add(tmp_path, merged(), now=NOW + 0.02)
+    add(tmp_path, merged(), now=NOW - 0.02)
+    add(tmp_path, merged(), now=NOW - _history.FUTURE_SLACK_S + 1)
+    assert len(lines(tmp_path)) == 1
+    add(tmp_path, merged(), now=NOW - _history.FUTURE_SLACK_S)
+    assert len(lines(tmp_path)) == 2
+
+
 @pytest.mark.parametrize('garbage', ['not json\n', '[1,2]\n', '{"t": "x", "five": 40}\n', '{"t": 5}\n', '\n'])
 def test_an_unreadable_last_line_does_not_stop_the_history(tmp_path, garbage):
     (tmp_path / 'log').mkdir()

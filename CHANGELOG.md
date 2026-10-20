@@ -8,6 +8,8 @@ Each release with its date and its notes on GitHub. Versions follow [Semantic Ve
   install, status line, gates, reports, configuration and security. Links to the old README sections still work.
 - New: [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and this changelog.
 - New test `tests/test_doc_links.py`: every relative link and anchor in the documentation resolves.
+- Fixed: two status lines started side by side could write the same measurement twice into the history when a
+  second boundary fell between them. A last line less than a minute ahead now counts as current.
 
 ## [1.5.0] — 2026-10-19 — the report as tiles
 
