@@ -5,6 +5,7 @@ real ones in its own test), the visibility probe is a function handed in (`execu
 config and without the system config, so nothing of the real configuration takes part, and with the C locale as the
 push sets it."""
 import copy
+import dataclasses
 import functools
 import json
 import os
@@ -915,6 +916,17 @@ def big_file(device):
     return os.path.exists(os.path.join(device.clone, 'big.bin'))
 
 
+def ls_tree_fails(monkeypatch):
+    """scan_command of ls-tree ends with exit 128 and no output; the calls are recorded."""
+    calls = []
+
+    def scan_command(argv, deadline, take, env=None, cwd=None):
+        calls.append(argv)
+        return 128
+    monkeypatch.setattr(_sync_core, 'scan_command', scan_command)
+    return calls
+
+
 @pytest.mark.parametrize('relation', ['behind', 'apart'])
 def test_a_remote_over_the_limit_is_neither_fast_forwarded_nor_rebased(device, remote, relation):
     run, clone = limited(device)
@@ -949,20 +961,21 @@ def test_a_clone_over_the_limit_that_is_up_to_date_or_ahead_is_not_checked(devic
     run, clone = limited(device, mb=3)
     assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
     run, clone = limited(device)
-    scripted(monkeypatch, {'ls-tree': (128, '', 'fatal: not a tree object')})
+    calls = ls_tree_fails(monkeypatch)
     assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # same
     git('commit', '--quiet', '--allow-empty', '-m', 'local', cwd=device.clone)
     assert _sync_git.update_clone(run, clone) == 'up_to_date'                 # ahead
+    assert calls == []
 
 
 def test_a_size_that_cannot_be_read_is_internal_and_nothing_is_checked_out(device, remote, monkeypatch):
     run, clone = limited(device, mb=1024)
     remote.foreign_commit('README.md', 'news\n')
     head = device.head()
-    scripted(monkeypatch, {'ls-tree': (128, '', 'fatal: not a tree object')})
+    calls = ls_tree_fails(monkeypatch)
     assert failure_of(_sync_git.update_clone, run, clone) == (
         'internal', 'the size of the sync repository could not be read: nothing was checked out')
-    assert device.head() == head
+    assert device.head() == head and len(calls) == 1
 
 
 def plumbing(remote, data, *args):
@@ -973,9 +986,13 @@ def plumbing(remote, data, *args):
     return done.stdout.decode().strip()
 
 
-def test_names_with_spaces_tabs_and_line_breaks_are_counted_and_submodules_skipped(device, remote):
+@pytest.mark.parametrize('chunk', [65536, 7])
+def test_names_with_spaces_tabs_and_line_breaks_are_counted_and_submodules_skipped(device, remote, monkeypatch,
+                                                                                   chunk):
     """The tree is made without a work tree (Windows allows no line break in a file name): blobs whose names would
-    break a reading by lines, and a submodule, whose size git gives as `-`."""
+    break a reading by lines, and a submodule, whose size git gives as `-` (it counts as an entry). With pieces of 7
+    bytes every entry is cut in several."""
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', chunk)
     sizes = {'a b.bin': 300_000, 'c\nd.bin': 400_000, 'e\tf.bin': MB - base_size(remote) - 700_000}
     readme = git('rev-parse', 'refs/heads/main:README.md', cwd=remote.bare).stdout.strip()
     entries = [f'100644 blob {readme}\tREADME.md', f'160000 commit {remote.head()}\tsub']
@@ -990,10 +1007,134 @@ def test_names_with_spaces_tabs_and_line_breaks_are_counted_and_submodules_skipp
     run, clone = limited(device)
     _sync_git._fetch(clone)
     _sync_git._check_size(clone)                                    # exactly the limit
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 4)
+    assert failure_of(_sync_git._check_size, clone) == too_many(4)  # five entries with the submodule
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 5)
     empty, one = (plumbing(remote, data, 'hash-object', '-w', '--stdin') for data in (b'', b'x'))
     push_tree([f'100644 blob {empty}\tg\nh', f'100644 blob {one}\ti j'])
     _sync_git._fetch(clone)
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 7)
     assert failure_of(_sync_git._check_size, clone) == TOO_LARGE   # one byte more
+
+
+def too_many(files):
+    return 'internal', f'the sync repository has more than {files} files: nothing was checked out'
+
+
+def git_bomb(remote, levels, width=10):
+    """`width ** levels` empty files of `levels + 1` objects: every tree names the one below `width` times."""
+    name, mode, kind = plumbing(remote, b'', 'hash-object', '-w', '--stdin'), '100644', 'blob'
+    for _ in range(levels):
+        listing = ''.join(f'{mode} {kind} {name}\t{kind[0]}{number}\0' for number in range(width))
+        name, mode, kind = plumbing(remote, listing.encode(), 'mktree', '-z'), '040000', 'tree'
+    commit = plumbing(remote, b'bomb', 'commit-tree', name, '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+
+
+def counted_reads(monkeypatch):
+    """The sizes of the pieces scan_command hands on."""
+    pieces, real = [], _sync_core.scan_command
+
+    def scan_command(argv, deadline, take, env=None, cwd=None):
+        return real(argv, deadline, lambda chunk: pieces.append(len(chunk)) or take(chunk), env, cwd)
+    monkeypatch.setattr(_sync_core, 'scan_command', scan_command)
+    return pieces
+
+
+def test_a_git_bomb_of_a_million_empty_files_is_stopped_early(device, remote, monkeypatch):
+    """8 objects, 10**6 empty files, size 0: the number of entries stops it, after a tenth of the listing (about
+    79 bytes an entry: 79 MB in all)."""
+    git_bomb(remote, 6)
+    run, clone = limited(device)
+    pieces = counted_reads(monkeypatch)
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == too_many(100_000)
+    assert device.head() == head and device.status() == ''
+    assert sum(pieces) < 16 * MB
+
+
+def test_exactly_max_clone_files_entries_are_taken_one_more_is_not(device, remote, monkeypatch):
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 3)
+    run, clone = limited(device)
+    remote.foreign_commit('a.txt', 'a\n')
+    remote.foreign_commit('b.txt', 'b\n')                            # with README.md: three
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    remote.foreign_commit('c.txt', 'c\n')
+    head = device.head()
+    assert failure_of(_sync_git.update_clone, run, clone) == too_many(3)
+    assert device.head() == head and not os.path.exists(os.path.join(device.clone, 'c.txt'))
+
+
+def test_a_size_over_the_limit_stops_the_listing_where_it_is(device, remote, monkeypatch):
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 64)
+    big = plumbing(remote, b'x' * (2 * MB), 'hash-object', '-w', '--stdin')
+    empty = plumbing(remote, b'', 'hash-object', '-w', '--stdin')
+    listing = f'100644 blob {big}\ta.bin\0' + ''.join(f'100644 blob {empty}\tf{number:04}\0' for number in range(2000))
+    commit = plumbing(remote, b'big first', 'commit-tree', plumbing(remote, listing.encode(), 'mktree', '-z'),
+                      '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+    run, clone = limited(device)
+    pieces = counted_reads(monkeypatch)
+    assert failure_of(_sync_git.update_clone, run, clone) == TOO_LARGE
+    whole = len(git('ls-tree', '-r', '-l', '-z', 'refs/heads/main', cwd=remote.bare).stdout)
+    assert sum(pieces) < whole // 10
+
+
+def fetched_tree(remote, clone, tree):
+    """The remote gets a commit of `tree` on top of main, and the clone fetches it."""
+    commit = plumbing(remote, b'tree', 'commit-tree', tree, '-p', 'refs/heads/main')
+    git('update-ref', 'refs/heads/main', commit, cwd=remote.bare)
+    _sync_git._fetch(clone)
+
+
+LONG = ('internal', 'the sync repository has an entry of more than 200 bytes: nothing was checked out')
+
+
+def test_an_entry_longer_than_max_entry_bytes_stops_the_listing(device, remote, monkeypatch):
+    """An entry of ls-tree -l: `100644 blob <40 hex> <size in 7>\t<name>`, 61 bytes and the name. A name of 100 000
+    bytes is not read to its end: memory stays small however long the entry."""
+    monkeypatch.setattr(_sync_git, 'MAX_ENTRY_BYTES', 200)
+    blob = plumbing(remote, b'x', 'hash-object', '-w', '--stdin')
+    run, clone = limited(device)
+
+    def fetched(name):
+        fetched_tree(remote, clone, plumbing(remote, f'100644 blob {blob}\t{name}\0'.encode(), 'mktree', '-z'))
+    fetched('n' * 139)
+    _sync_git._check_size(clone)                                    # 200 bytes
+    fetched('n' * 140)
+    assert failure_of(_sync_git._check_size, clone) == LONG
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 64)
+    # fsck refuses a name above 4096 bytes, not a path of many: 100 parts of 1000 bytes
+    deep = plumbing(remote, f'100644 blob {blob}\t{"n" * 999}\0'.encode(), 'mktree', '-z')
+    for _ in range(99):
+        deep = plumbing(remote, f'040000 tree {deep}\t{"n" * 999}\0'.encode(), 'mktree', '-z')
+    fetched_tree(remote, clone, deep)
+    pieces = counted_reads(monkeypatch)
+    assert failure_of(_sync_git._check_size, clone) == LONG and sum(pieces) <= 200 + 2 * 64
+
+
+def test_the_deadline_ends_the_listing_and_its_process(device, remote, monkeypatch):
+    """The listing is read slowly (the bomb is packed in the clone: git lists it in a fifth of a second): the timer
+    ends git at the deadline."""
+    git_bomb(remote, 6)
+    monkeypatch.setattr(_sync_git, 'MAX_CLONE_FILES', 10 ** 9)
+    run, clone = limited(device)
+    _sync_git._fetch(clone)
+    real_take = _sync_git._Tally.take
+
+    def slow_take(self, chunk):
+        time.sleep(0.05)
+        return real_take(self, chunk)
+    monkeypatch.setattr(_sync_git._Tally, 'take', slow_take)
+    started, real = [], subprocess.Popen
+
+    def popen(*args, **kwargs):
+        started.append(real(*args, **kwargs))
+        return started[-1]
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    clone = dataclasses.replace(clone, deadline=_sync_core.Deadline(0.3))
+    assert failure_of(_sync_git._check_size, clone) == ('timeout', 'git did not finish in time')
+    assert started[0].poll() is not None and started[0].stdout.closed
 
 
 def test_a_push_over_the_limit_is_internal_and_exports_nothing(device, remote):

@@ -29,8 +29,8 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
 4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
    went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
    onto it if the work tree is clean, else after the commit (step 7b). Before every fast-forward or rebase (also those
-   of 7b and 9) the files of the remote are summed up (`_check_size`): above `sync.max_clone_mb` `internal`, nothing
-   is checked out.
+   of 7b and 9) the entries of the remote are counted and their sizes summed up, read in pieces (`_check_size`): above
+   MAX_CLONE_FILES entries or `sync.max_clone_mb` `internal`, nothing is checked out.
 5. **Export** (`_sync_export.export`) and **compacting** (`sync_format.compact`) of the own request months beyond
    `sync.keep_request_months`. The months that may go are taken before anything is removed and noted in
    `<log_dir>/sync/compacting.json` first (no note, no removal); the note is cleared after the commit. A run that
@@ -83,6 +83,9 @@ PROBE_URL = 'https://github.com/{}.git'
 NULL_CONFIG = '/dev/null'       # no global config; Git for Windows reads this name as NUL
 REGULAR = '100644'              # the only mode of a file the sync commits
 MEGABYTE = 1024 * 1024          # of sync.max_clone_mb
+MAX_CLONE_FILES = 100_000       # entries of the remote a fast-forward or rebase may check out (a real export: ~120 a
+                                # machine and month); a git bomb of repeated subtrees has size 0 but millions of files
+MAX_ENTRY_BYTES = 8192          # one entry of `ls-tree -r -l -z`: no path of a file system is that long
 DEFAULT_BRANCH = 'main'         # the branch pushed to if the clone does not know the default branch of the remote
 EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'      # SHA-1 of the empty tree: attributes from nowhere
 STALE_LOCK_S = _sync_core.running_window_s()  # a git lock in the clone older than any run of the sync is left over
@@ -168,6 +171,11 @@ class Clone:
 
     def git(self, *args: str) -> subprocess.CompletedProcess:
         return _sync_core.run_command([_sync_core.GIT, *self.options, *args], self.deadline, self.env, self.path)
+
+    def scan(self, take: Callable[[bytes], bool], *args: str) -> int | None:
+        """git `args` with its output handed to `take` piece by piece (`_sync_core.scan_command`)."""
+        return _sync_core.scan_command([_sync_core.GIT, *self.options, *args], self.deadline, take, self.env,
+                                       self.path)
 
 
 def _empty_hooks(directory: str) -> str:
@@ -434,22 +442,44 @@ def _relation(clone: Clone) -> str:
     return APART
 
 
+class _Tally:
+    """The entries of `git ls-tree -r -l -z` as they come, in pieces: their number (blobs and submodules) and the bytes
+    of the blobs (a submodule has no size). `take` says whether to read on; `over` names the limit passed. Only the
+    unfinished end of the last piece is kept."""
+
+    def __init__(self, max_mb: int):
+        self.max_mb, self.files, self.bytes, self.rest, self.over = max_mb, 0, 0, b'', ''
+
+    def take(self, chunk: bytes) -> bool:
+        *entries, self.rest = (self.rest + chunk).split(b'\0')
+        if len(self.rest) > MAX_ENTRY_BYTES or any(len(entry) > MAX_ENTRY_BYTES for entry in entries):
+            self.over = f'the sync repository has an entry of more than {MAX_ENTRY_BYTES} bytes: nothing was checked out'
+            return False
+        for entry in entries:
+            _mode, kind, _object, size = entry.partition(b'\t')[0].split()
+            self.files += 1
+            if kind == b'blob':
+                self.bytes += int(size)
+        if self.files > MAX_CLONE_FILES:
+            self.over = f'the sync repository has more than {MAX_CLONE_FILES} files: nothing was checked out'
+        elif self.bytes > self.max_mb * MEGABYTE:
+            self.over = (f'the sync repository is larger than sync.max_clone_mb ({self.max_mb} MB): nothing was '
+                         'checked out; raise the limit if this size is expected')
+        return not self.over
+
+
 def _check_size(clone: Clone) -> None:
-    """Before a fast-forward or rebase: the files of the fetched remote together (`git ls-tree -r -l -z`, blobs only;
-    a submodule has no size) at most `sync.max_clone_mb` MB of 1024 KiB. More, or a size that cannot be read:
-    `internal`, nothing is checked out. A repository whose small fetch unpacks to gigabytes (a zip bomb) never reaches
-    the work tree."""
-    done = clone.git('ls-tree', '-r', '-l', '-z', _tracking(clone))
-    if done.returncode != 0:
+    """Before a fast-forward or rebase: the fetched remote has at most MAX_CLONE_FILES entries (`git ls-tree -r`,
+    blobs and submodules) and its blobs together at most `sync.max_clone_mb` MB of 1024 KiB. More, an entry longer
+    than MAX_ENTRY_BYTES, or a listing that cannot be read: `internal`, nothing is checked out. The listing is read in
+    pieces and ended as soon as a limit is passed: neither a small fetch that unpacks to gigabytes (a zip bomb) nor
+    one of repeated subtrees with millions of files (a git bomb) reaches the work tree or the memory."""
+    tally = _Tally(clone.max_mb)
+    code = clone.scan(tally.take, 'ls-tree', '-r', '-l', '-z', _tracking(clone))
+    if tally.over:
+        raise _fail('internal', tally.over)
+    if code != 0:
         raise _fail('internal', 'the size of the sync repository could not be read: nothing was checked out')
-    total = 0
-    for entry in filter(None, done.stdout.split('\0')):
-        _mode, kind, _object, size = entry.partition('\t')[0].split()
-        if kind == 'blob':
-            total += int(size)
-    if total > clone.max_mb * MEGABYTE:
-        raise _fail('internal', f'the sync repository is larger than sync.max_clone_mb ({clone.max_mb} MB): nothing '
-                                'was checked out; raise the limit if this size is expected')
 
 
 def _merge_ff(clone: Clone) -> None:

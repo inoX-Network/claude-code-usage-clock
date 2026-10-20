@@ -382,6 +382,106 @@ def test_a_program_that_cannot_be_started_is_internal(tmp_path):
     assert error.value.category == 'internal' and 'no-git could not be started' in error.value.detail
 
 
+# --- scan_command: the output piece by piece, never all of it in memory --------------------------------------------
+
+# Writes without end; a pipe closed by the reader ends it with an error, which it ignores and sleeps on: only a kill
+# ends it soon.
+ENDLESS = textwrap.dedent('''
+    import sys, time
+    try:
+        while True:
+            sys.stdout.buffer.write(b'x' * 65536)
+            sys.stdout.buffer.flush()
+    except OSError:
+        pass
+    time.sleep(30)
+''')
+
+
+@pytest.fixture
+def started(monkeypatch):
+    """The Popen objects scan_command starts."""
+    found, real = [], subprocess.Popen
+
+    def popen(*args, **kwargs):
+        found.append(real(*args, **kwargs))
+        return found[-1]
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    return found
+
+
+def test_scan_command_hands_on_the_output_in_pieces_and_returns_the_exit_code(monkeypatch, started):
+    monkeypatch.setattr(_sync_core, 'SCAN_CHUNK_BYTES', 4)
+    pieces = []
+    code = _sync_core.scan_command([sys.executable, '-c', 'import sys; sys.stdout.write("0123456789"); sys.exit(3)'],
+                                   _sync_core.Deadline(30), lambda chunk: pieces.append(chunk) or True)
+    assert code == 3 and b''.join(pieces) == b'0123456789' and max(map(len, pieces)) <= 4
+    assert started[0].stdout.closed and not _sync_core._children
+
+
+def test_scan_command_ends_the_child_as_soon_as_take_says_stop(started):
+    pieces = []
+    begin = time.monotonic()
+    code = _sync_core.scan_command([sys.executable, '-c', ENDLESS], _sync_core.Deadline(30),
+                                   lambda chunk: pieces.append(len(chunk)) or len(pieces) < 3)
+    assert code is None and len(pieces) == 3 and time.monotonic() - begin < 5
+    assert started[0].poll() is not None and started[0].stdout.closed and not _sync_core._children
+
+
+def test_scan_command_ends_the_child_and_its_tree_at_the_deadline(started):
+    begin = time.monotonic()
+    with pytest.raises(_sync_core.SyncError) as error:
+        _sync_core.scan_command([sys.executable, '-c', HANGING], _sync_core.Deadline(0.5), lambda chunk: True)
+    assert (error.value.category, error.value.detail) == ('timeout', f'{os.path.basename(sys.executable)} did not '
+                                                                     'finish in time')
+    assert time.monotonic() - begin < _sync_core.KILL_WAIT_S        # the grandchild held the pipe for 60 s
+    assert started[0].poll() is not None and not _sync_core._children
+
+
+def test_scan_command_reads_on_while_a_slow_writer_is_within_the_deadline():
+    pieces = []
+    child = 'import sys, time\nfor _ in range(3):\n    sys.stdout.write("ab"); sys.stdout.flush(); time.sleep(0.2)'
+    assert _sync_core.scan_command([sys.executable, '-c', child], _sync_core.Deadline(30),
+                                   lambda chunk: pieces.append(chunk) or True) == 0
+    assert b''.join(pieces) == b'ababab'
+
+
+def test_scan_command_drops_the_error_output_so_a_full_pipe_cannot_block_it():
+    child = 'import sys; sys.stderr.write("e" * 4_000_000); sys.stdout.write("done")'
+    pieces = []
+    assert _sync_core.scan_command([sys.executable, '-c', child], _sync_core.Deadline(30),
+                                   lambda chunk: pieces.append(chunk) or True) == 0
+    assert b''.join(pieces) == b'done'
+
+
+def test_scan_command_ends_the_child_when_take_fails(started):
+    def take(chunk):
+        raise ValueError('broken')
+    with pytest.raises(ValueError):
+        _sync_core.scan_command([sys.executable, '-c', ENDLESS], _sync_core.Deadline(30), take)
+    assert started[0].poll() is not None and not _sync_core._children
+
+
+def test_scan_command_gives_up_waiting_for_a_child_that_survives_the_kill(monkeypatch, started):
+    monkeypatch.setattr(_plat, 'kill_tree', lambda process: None)
+    monkeypatch.setattr(_sync_core, 'KILL_WAIT_S', 0.1)
+    assert _sync_core.scan_command([sys.executable, '-c', ENDLESS], _sync_core.Deadline(30), lambda chunk: False) \
+        is None
+    assert started[0].poll() is None and not _sync_core._children
+    started[0].kill()
+    started[0].wait()
+
+
+def test_scan_command_starts_nothing_after_the_deadline_or_without_the_program(tmp_path):
+    with pytest.raises(_sync_core.SyncError) as error:
+        _sync_core.scan_command([sys.executable, '-c', 'pass'], _sync_core.Deadline(-1), lambda chunk: True)
+    assert error.value.category == 'timeout'
+    with pytest.raises(_sync_core.SyncError) as error:
+        _sync_core.scan_command([str(tmp_path / 'no-git')], _sync_core.Deadline(10), lambda chunk: True)
+    assert (error.value.category, error.value.detail) == ('internal', 'no-git could not be started '
+                                                                      '(FileNotFoundError)')
+
+
 def test_a_finished_child_returns_its_exit_code_and_its_output_as_text():
     done = _sync_core.run_command([sys.executable, '-c', 'import sys; print("out"); sys.exit(3)'],
                                   _sync_core.Deadline(30))
