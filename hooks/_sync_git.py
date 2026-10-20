@@ -19,7 +19,8 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    exactly the one URL made of `sync.repo` and `sync.transport` (URLS). Then what an ended run left is cleared
    (`_heal`: old git locks and temporary objects, an interrupted rebase, half-written files outside the own folder),
    and the branch checked out must be the default branch of the remote,
-   the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree).
+   the only one pushed. Else `internal`. No attributes of the repository apply (`attr.tree` is the empty tree, and
+   `.git/info/attributes` unsets them for a git that does not know attr.tree: `pin_attributes`).
 3. **Visibility** (`check_visibility`), unless a result `private` for this repository is younger than 24 h
    (`<log_dir>/sync/visibility.json`): `git ls-remote` of `https://github.com/<owner>/<name>.git` without any git
    config of the user or the system, without credential helper, prompt or askpass, HOME in the sync folder (no
@@ -114,6 +115,12 @@ SETTINGS = ('core.fsmonitor=false', 'core.autocrlf=false', 'commit.gpgSign=false
             'merge.verifySignatures=false', 'push.followTags=false', f'attr.tree={EMPTY_TREE}',
             'core.attributesFile=', 'color.ui=false', 'log.showRoot=true', 'log.showSignature=false',
             'fetch.writeCommitGraph=false', 'transfer.fsckObjects=true', 'http.sslVerify=true')
+# .git/info/attributes of the clone: every attribute that converts on checkout or runs a driver, unset for every path.
+# It has the highest precedence of all attribute files in every git version (gitattributes(5), unchanged from 1.8 to
+# 2.56), above every .gitattributes in the tree, also one in a sub folder or behind a macro, so it still holds where
+# attr.tree is unknown (git before 2.43 ignores an unknown -c). One line without a line end: written in text mode,
+# Windows would add a CR to it.
+INFO_ATTRIBUTES = '* -text -eol -filter -diff -merge -ident -working-tree-encoding'
 BRANCH = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,99}')
 REQUEST_FILE = re.compile(r'requests/(?P<month>[0-9]{4}-[0-9]{2})/[A-Za-z0-9_-]{1,128}\.jsonl')
 
@@ -208,6 +215,24 @@ def clone_at(path: str, deadline: _sync_core.Deadline, max_mb: int, hooks: str |
     return Clone(path, '', deadline, _clone_env(path, deadline), options, max_mb)
 
 
+def pin_attributes(path: str) -> None:
+    """`<path>/.git/info/attributes` is INFO_ATTRIBUTES: written (atomically, never through a link) if it is missing or
+    holds anything else. Only ever switching conversions off, it may be put back over whatever is there; an `internal`
+    instead would stop the sync until someone acts. `internal` if it cannot be written."""
+    folder = os.path.join(path, '.git', 'info')
+    try:
+        if _sync_core._read_small(os.path.join(folder, 'attributes')) == INFO_ATTRIBUTES.encode():
+            return
+    except (OSError, ValueError):      # missing, or no regular file: written below
+        pass
+    try:
+        written = _context_state.write_private(folder, 'attributes', INFO_ATTRIBUTES)
+    except OSError:
+        written = False
+    if not written:
+        raise _fail('internal', 'the attributes of the sync clone cannot be written')
+
+
 def remote_matches(clone: Clone, url: str) -> bool:
     """`git remote get-url --all origin` and `--push --all` (insteadOf and pushInsteadOf applied) give exactly `url`."""
     for which in ((), ('--push',)):
@@ -238,6 +263,7 @@ def make_clone(directory: str, url: str, max_mb: int, deadline: _sync_core.Deadl
         if done.returncode != 0 or not BRANCH.fullmatch(branch):
             raise _fail('internal', 'the clone has no branch checked out')
         clone = dataclasses.replace(clone, branch=branch)
+        pin_attributes(temporary)
         if _commit_of(clone, _tracking(clone)):         # an empty repository has nothing to check out
             _check_size(clone)
             if clone.git('checkout', '--quiet', branch).returncode != 0:
@@ -284,6 +310,7 @@ def open_clone(run: _sync_core.Run) -> Clone:
     clone = clone_at(path, run.deadline, run.cfg['sync']['max_clone_mb'], _empty_hooks(run.directory))
     if not remote_matches(clone, remote_url(repo, run.cfg['sync']['transport'])):
         raise _fail('internal', 'the remote of the sync clone is not sync.repo')
+    pin_attributes(path)      # before _heal: its checkout of foreign paths takes no attribute of the tree either
     try:
         machine_id = sync_format.load_machine_id(run.log_dir, create=False)
     except sync_format.FormatError as error:

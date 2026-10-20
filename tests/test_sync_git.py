@@ -862,6 +862,37 @@ def test_no_git_config_of_the_user_changes_the_line_ends_in_the_work_tree(device
         assert f.read() == b'{"d":1}\n{"d":2}\n'
 
 
+@pytest.mark.parametrize('before', [None, b'', b'* filter=lfs\n'], ids=['missing', 'empty', 'changed'])
+def test_open_clone_puts_the_attributes_back_and_a_fast_forward_takes_no_foreign_filter(device, remote, git_alone,
+                                                                                        monkeypatch, before):
+    """A clone without .git/info/attributes (made before they were written), or with other ones, gets them back on
+    opening: they only ever switch conversions off. git before 2.43 ignores attr.tree, so without them a .gitattributes
+    of another machine would apply to the fast-forward."""
+    monkeypatch.setattr(_sync_git, 'SETTINGS', tuple(s for s in _sync_git.SETTINGS if not s.startswith('attr.tree=')))
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write('[filter "lfs"]\n\tsmudge = tr a-z A-Z\n\tclean = cat\n')
+    info = os.path.join(device.clone, '.git', 'info')
+    if before is not None:
+        os.makedirs(info, exist_ok=True)
+        with open(os.path.join(info, 'attributes'), 'wb') as f:
+            f.write(before)
+    run = run_of(device)
+    clone = _sync_git.open_clone(run)
+    with open(os.path.join(info, 'attributes'), 'rb') as f:
+        assert f.read() == _sync_git.INFO_ATTRIBUTES.encode()
+    remote.foreign_commit('.gitattributes', b'* filter=lfs text eol=crlf\n')
+    remote.foreign_commit('machines/other/days/2026-10.jsonl', b'{"d":"abc"}\n')
+    assert _sync_git.update_clone(run, clone) == 'fast_forwarded'
+    with open(os.path.join(device.clone, 'machines', 'other', 'days', '2026-10.jsonl'), 'rb') as f:
+        assert f.read() == b'{"d":"abc"}\n'
+
+
+def test_attributes_that_cannot_be_written_are_internal(device, monkeypatch):
+    monkeypatch.setattr(_context_state, 'write_private', lambda *args: False)      # a link as .git/info
+    assert failure_of(_sync_git.open_clone, run_of(device)) == (
+        'internal', 'the attributes of the sync clone cannot be written')
+
+
 def test_shadow_gathers_commits_while_another_machine_pushes_and_on_sends_them(tmp_path, remote):
     first, second = Device(tmp_path / 'a', mode='shadow'), Device(tmp_path / 'b')
     for minute in range(3):
@@ -1539,7 +1570,15 @@ def test_a_young_git_lock_is_someone_elses_and_ends_the_run(device, remote, seco
     assert os.path.exists(path)
 
 
+def pinned(device):
+    """The attributes open_clone writes, there already: a test that breaks writing then reaches its own step."""
+    os.makedirs(os.path.join(device.clone, '.git', 'info'), exist_ok=True)
+    with open(os.path.join(device.clone, '.git', 'info', 'attributes'), 'wb') as f:
+        f.write(_sync_git.INFO_ATTRIBUTES.encode())
+
+
 def test_a_lock_that_cannot_be_removed_is_internal(device, remote, monkeypatch):
+    pinned(device)
     path = os.path.join(device.clone, '.git', 'index.lock')
     with open(path, 'w', encoding='utf-8') as f:
         f.write('')
@@ -1705,6 +1744,8 @@ def test_the_path_list_is_never_written_through_a_link(device, remote, tmp_path)
 
 
 def test_a_path_list_that_cannot_be_written_is_internal(device, monkeypatch):
+    pinned(device)
+
     def write_private(*args):
         raise OSError('full disk')
     monkeypatch.setattr(_context_state, 'write_private', write_private)

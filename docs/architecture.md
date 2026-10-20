@@ -591,7 +591,13 @@ run the installer with --sync-repo`).
   value that does not resolve falls back to `.gitattributes`, measured with git 2.56), `core.attributesFile` is
   empty, `GIT_ATTR_NOSYSTEM=1` and a `GIT_ATTR_SOURCE` of the caller is dropped, so a `.gitattributes` another
   machine commits cannot run a filter of the user's config (git-lfs) or recode the own files
-  (`working-tree-encoding`, `eol`).
+  (`working-tree-encoding`, `eol`). git before 2.43 ignores `attr.tree` (an unknown `-c` passes silently), so the
+  clone also has `.git/info/attributes` with `* -text -eol -filter -diff -merge -ident -working-tree-encoding`: that
+  file has the highest precedence of all attribute files (gitattributes(5), the same text from 1.8 to 2.56), above
+  every `.gitattributes` in the tree, in a sub folder or behind a macro (measured with git 2.55 without `attr.tree`:
+  a smudge filter and `eol=crlf` of the remote apply without it and are unset with it). `make_clone` writes it before
+  the checkout, `open_clone` puts it back before anything is checked out if it is missing or differs (it only switches
+  conversions off; a write that fails is `internal`).
 - **2. Remote** (`open_clone`, shared with the pull): `sync.repo` set and `owner/name`; the clone a real folder with
   a `.git` folder (a link, a file or a `.git` file: `internal`); `git remote get-url --all origin` and `--push --all`
   (insteadOf and pushInsteadOf applied) each give exactly the one URL of `sync.repo` and `sync.transport`:

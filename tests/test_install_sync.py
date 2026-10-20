@@ -369,6 +369,36 @@ def test_no_git_config_of_the_user_changes_the_line_ends_of_the_clone(setup, rem
     assert (setup.clone / 'README.md').read_bytes() == readme       # as stored, whatever this system wrote
 
 
+def without_attr_tree(monkeypatch):
+    """git before 2.43 ignores attr.tree, as it ignores every unknown -c: the settings as such a git takes them."""
+    monkeypatch.setattr(_sync_git, 'SETTINGS', tuple(s for s in _sync_git.SETTINGS if not s.startswith('attr.tree=')))
+
+
+def smudging(git_alone):
+    """A filter driver `lfs` in the config of the user, as `git lfs install` writes one: its smudge changes the bytes."""
+    with open(git_alone, 'a', encoding='utf-8') as f:
+        f.write('[filter "lfs"]\n\tsmudge = tr a-z A-Z\n\tclean = cat\n')
+
+
+@pytest.mark.parametrize('old_git', [False, True], ids=['git-2.43+', 'git-before-2.43'])
+def test_attributes_of_the_remote_change_nothing_in_the_clone(setup, remote, git_alone, monkeypatch, old_git):
+    """A .gitattributes of another machine (a filter such as git-lfs, whose smudge would also pass max_clone_mb, or an
+    eol, in a sub folder too and through a macro) never applies: .git/info/attributes unsets them all, whatever the
+    version of git."""
+    if old_git:
+        without_attr_tree(monkeypatch)
+    smudging(git_alone)
+    remote.foreign_commit('.gitattributes', b'[attr]evil filter=lfs text eol=crlf ident\n* filter=lfs\n')
+    remote.foreign_commit('machines/other/.gitattributes', b'*.jsonl evil\n')
+    remote.foreign_commit('machines/other/days/2026-10.jsonl', b'{"d":"abc $Id$"}\n')
+    assert setup.sync()[0] == 0
+    assert (setup.clone / 'machines' / 'other' / 'days' / '2026-10.jsonl').read_bytes() == b'{"d":"abc $Id$"}\n'
+    attributes = git('check-attr', '-a', 'machines/other/days/2026-10.jsonl', cwd=setup.clone).stdout
+    for name in ('text', 'eol', 'filter', 'ident', 'diff', 'merge', 'working-tree-encoding'):
+        assert f': {name}: unset' in attributes, attributes
+    assert (setup.clone / '.git' / 'info' / 'attributes').read_bytes() == _sync_git.INFO_ATTRIBUTES.encode()
+
+
 def big(remote, size):
     remote.foreign_commit('big.bin', b'x' * size)
 
