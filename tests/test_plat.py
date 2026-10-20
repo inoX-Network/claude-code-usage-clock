@@ -149,3 +149,19 @@ def test_the_windows_start_uses_the_three_flags_and_the_null_device():
     assert kwargs['creationflags'] == 0x00000008 | 0x00000200 | 0x08000000   # DETACHED, NEW_PROCESS_GROUP, NO_WINDOW
     assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
     assert _win.GROUP_FLAGS == 0x00000200 | 0x08000000
+
+
+def test_a_detached_start_from_a_venv_runs_the_python_the_venv_was_made_from(tmp_path, monkeypatch):
+    """The python.exe of a venv is a launcher that starts the real one as its child; without a console of its own
+    (DETACHED_PROCESS) that child gets a new, visible console window (measured on Windows 11, 20.10.2026)."""
+    base = tmp_path / 'Python314' / 'python.exe'
+    base.parent.mkdir()
+    base.write_bytes(b'')
+    launcher = str(tmp_path / '.venv' / 'Scripts' / 'python.exe')
+    monkeypatch.setattr(sys, 'executable', launcher)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / '.venv'))
+    monkeypatch.setattr(sys, 'base_prefix', str(base.parent))
+    calls = []
+    _win.start_detached([launcher, 'sync.py', 'push'], popen=lambda *args, **kwargs: calls.append(args[0]))
+    _win.start_detached(['C:/other/python.exe', 'sync.py'], popen=lambda *args, **kwargs: calls.append(args[0]))
+    assert calls == [[str(base), 'sync.py', 'push'], ['C:/other/python.exe', 'sync.py']]
