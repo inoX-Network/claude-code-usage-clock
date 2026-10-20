@@ -12,7 +12,8 @@ FENCE = re.compile(r'^\s*(```|~~~)')
 
 
 def doc_files():
-    paths = [os.path.join(ROOT, name) for name in ('README.md', 'CONTRIBUTING.md', 'SECURITY.md', 'CHANGELOG.md')]
+    paths = [os.path.join(ROOT, name) for name in ('README.md', 'CONTRIBUTING.md', 'SECURITY.md', 'CHANGELOG.md',
+                                                   'AGENTS.md')]
     paths += glob.glob(os.path.join(ROOT, 'docs', '*.md'))
     paths += [os.path.join(ROOT, 'windows', 'README.md'), os.path.join(ROOT, 'desktop', 'README.md')]
     return [path for path in paths if os.path.isfile(path)]
