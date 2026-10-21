@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import select
 import shlex
 import subprocess
@@ -973,3 +974,128 @@ def test_a_sync_switched_off_before_is_current_on_a_first_install(machine):
     machine.config.write_text('{"sync": {"mode": "off"}}', encoding='utf-8')
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
     labels(out, (STATUSLINE, '[Y/n]' + DEFAULT), (SYNC, '[y/N]' + CURRENT))
+
+
+# --- v6: step counter and the info with i or ? --------------------------------------------------------------------
+
+STEP = re.compile(r'^Step (\d)/8 - (.*)$')
+INFO_KEYS = ('statusline', 'replace', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop', 'enforce',
+             'auto-continue', 'sync', 'repo', 'name')
+
+
+def steps(out):
+    """The step of every main question in the order shown (one per question, re-asked or not)."""
+    found = []
+    for line in out.splitlines():
+        match = STEP.match(line)
+        if match and any(match.group(2).startswith(q) for q in QUESTIONS if q not in (REPLACE, SYNC_REPO, SYNC_NAME)):
+            if not found or found[-1] != (int(match.group(1)), match.group(2)[:20]):
+                found.append((int(match.group(1)), match.group(2)[:20]))
+    return [number for number, _ in found]
+
+
+def info_lines(module, key):
+    return module.INFO[key]
+
+
+def test_every_main_question_starts_with_its_step(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, '', 'n')
+    assert steps(out) == [1, 2, 3, 4, 5, 6, 7, 8]
+    for number, question in ((1, STATUSLINE), (2, USAGE_CLOCK), (3, CONTEXT), (4, SPAWN_GATE), (5, SOFT_STOP),
+                             (6, ENFORCE), (7, AUTO_CONTINUE), (8, SYNC)):
+        assert prompt_of(out, question).startswith(f'Step {number}/8 - {question} '), question
+
+
+def test_without_the_status_line_step_2_is_followed_by_step_4(machine):
+    code, out = machine.ask('n', '', '', '', '', '', '', 'n')
+    assert steps(out) == [1, 2, 4, 5, 6, 7, 8]
+
+
+def test_without_a_gate_step_5_is_followed_by_step_7(machine):
+    code, out = machine.ask('', '', '', 'n', 'n', '', '', 'n')
+    assert steps(out) == [1, 2, 3, 4, 5, 7, 8]
+
+
+def test_the_sub_questions_carry_the_step_of_their_main_question(machine):
+    machine.foreign_statusline()
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'y', REPO, '', 'n')
+    assert prompt_of(out, REPLACE).startswith(f'Step 1/8 - {REPLACE} ')
+    assert prompt_of(out, SYNC_REPO).startswith(f'Step 8/8 - {SYNC_REPO}')
+    assert prompt_of(out, SYNC_NAME).startswith(f'Step 8/8 - {SYNC_NAME} ')
+    assert prompt_of(out, 'Install now?') == 'Install now? [Y/n] n'
+
+
+def test_the_head_line_names_i_once(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
+    head = next(line for line in out.splitlines() if line.startswith('usage-clock installer'))
+    assert 'i = more about a question' in head and out.count('i = more about a question') == 1
+
+
+def test_three_times_i_then_an_answer_is_no_failed_attempt(machine):
+    code, out = machine.ask('i', 'I', '?', 'n', '', '', '', '', '', 'n', 'n')
+    assert code == 0, out
+    first = info_lines(machine.module, 'statusline')[0]
+    assert out.count(first) == 3 and 'Please answer y or n.' not in out
+    assert runs(machine.module, out)[0][:2] == ['--components', 'usage-clock,spawn-gate,soft-stop']
+
+
+def test_i_does_not_reset_the_count_of_failed_attempts(machine):
+    code, out = machine.ask('x', 'i', 'x', '?', 'x', 'n')
+    assert code == 2 and machine.left == ['n'] and out.count('Please answer y or n.') == 3
+
+
+@pytest.mark.parametrize('key,answers', [
+    ('statusline', ['?']), ('usage-clock', ['', 'i']), ('context-reporter', ['', '', 'i']),
+    ('spawn-gate', ['', '', '', 'i']), ('soft-stop', ['', '', '', '', 'i']), ('enforce', ['', '', '', '', '', 'i']),
+    ('auto-continue', ['', '', '', '', '', '', 'i']), ('sync', ['', '', '', '', '', '', '', 'i']),
+    ('repo', ['', '', '', '', '', '', '', 'y', '?']), ('name', ['', '', '', '', '', '', '', 'y', REPO, '?'])])
+def test_i_or_question_mark_prints_the_info_of_that_question_and_asks_it_again(machine, key, answers):
+    code, out = machine.ask(*answers)
+    lines = info_lines(machine.module, key)
+    assert '\n'.join(lines) in out
+    others = [k for k in INFO_KEYS if k != key]
+    assert not any(info_lines(machine.module, k)[0] in out for k in others)
+
+
+def test_the_info_of_replace(machine):
+    machine.foreign_statusline()
+    code, out = machine.ask('', 'i')
+    assert '\n'.join(info_lines(machine.module, 'replace')) in out
+    assert out.count(f'Step 1/8 - {REPLACE}') == 2
+
+
+def test_i_is_no_info_at_the_repository_but_an_answer_that_is_no_owner_name(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', 'i', 'I', 'i', REPO)
+    assert code == 2 and out.count('That is no owner/name') == 3 and machine.left == [REPO]
+    assert info_lines(machine.module, 'repo')[0] not in out
+
+
+def test_i_at_the_name_is_a_name(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'i', 'n')
+    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'i']
+    assert info_lines(machine.module, 'name')[0] not in out
+
+
+def test_install_now_has_no_info(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'i', 'n')
+    assert code == 0 and 'Please answer y or n.' in out
+
+
+def test_every_info_has_at_most_5_lines_names_what_it_writes_and_links_its_section(machine):
+    module = machine.module
+    assert set(module.INFO) == set(INFO_KEYS)
+    for key, lines in module.INFO.items():
+        text = '\n'.join(lines)
+        assert 1 <= len(lines) <= 5 and all(len(line) <= 120 for line in lines), key
+        assert 'settings.json' in text or 'config.json' in text, key
+        assert len(re.findall(r'https://\S+', text)) == 1, key
+
+
+def test_every_info_link_points_to_a_heading_of_the_documentation(machine):
+    import test_doc_links
+    prefix = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/'
+    for key, lines in machine.module.INFO.items():
+        link = re.search(r'https://\S+', '\n'.join(lines)).group(0).rstrip('.')
+        assert link.startswith(prefix), key
+        path, anchor = link[len(prefix):].split('#')
+        assert anchor in test_doc_links.anchors(os.path.join(ROOT, path)), (key, link)
