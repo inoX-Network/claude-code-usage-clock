@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { DEFAULTS } from './config'
+import { GATE_MARKER_CASES } from './gate-markers-fixture'
 import { CACHE_TTL_MS, gateMarkers, parts, resetText, rounded } from './line'
 
 const NOW = Date.parse('2026-10-17T06:00:00Z')
@@ -119,32 +120,24 @@ const gateSettings = (...entries: [string, string][]) => ({
   hooks: {
     PreToolUse: [{
       matcher: '*',
-      hooks: entries.map(([script, mode]) => ({ type: 'command', command: `"C:/Python314/python.exe" -X utf8 "${FOLDER}/${script}" --mode=${mode} || true` })),
+      hooks: entries.map(([script, options]) => ({ type: 'command', command: `"C:/Python314/python.exe" -X utf8 "${FOLDER}/${script}" ${options} || true` })),
     }],
   },
 })
-const gates = (modules: Record<string, string>) => JSON.stringify({ modules })
+const gates = (modules: object) => JSON.stringify({ modules })
 
-test('a marker names an installed gate that modules switches off or down to shadow', () => {
-  const cases: [string, string, string[]][] = [
-    ['off', 'enforce', ['spawn gate off']], ['off', 'shadow', ['spawn gate off']], ['shadow', 'enforce', ['spawn gate shadow']],
-    ['shadow', 'shadow', []], ['', 'enforce', []], ['enforce', 'shadow', []], ['enforce', 'enforce', []],
-  ]
-  for (const [value, mode, expected] of cases) {
-    expect(gateMarkers(gates({ spawn_gate: value }), gateSettings(['spawn_gate.py', mode]))).toEqual(expected)
-  }
-})
-
-test('both gates get a marker each, in a fixed order', () => {
-  const settings = gateSettings(['soft_stop.py', 'enforce'], ['spawn_gate.py', 'enforce'])
-  expect(gateMarkers(gates({ spawn_gate: 'shadow', soft_stop: 'off' }), settings)).toEqual(['spawn gate shadow', 'soft stop off'])
-})
+// The cases tests/test_statusline.py runs against hooks/statusline.py as well: both sides give the same markers
+for (const [i, { modules, entries, markers }] of GATE_MARKER_CASES.entries()) {
+  test(`case ${i + 1} of the shared fixture gives its markers word for word: ${JSON.stringify(modules)}`, () => {
+    expect(gateMarkers(gates(modules), gateSettings(...(entries as [string, string][])))).toEqual(markers)
+  })
+}
 
 test('a gate installed elsewhere, or a missing or broken file, gives no marker', () => {
   const elsewhere = { ...gateSettings(), hooks: { PreToolUse: [{ hooks: [{ command: 'python3 /other/spawn_gate.py --mode=enforce || true' }] }] } }
   expect(gateMarkers(gates({ spawn_gate: 'off' }), elsewhere)).toEqual([])
-  expect(gateMarkers(undefined, gateSettings(['spawn_gate.py', 'enforce']))).toEqual([])
-  expect(gateMarkers('{broken', gateSettings(['spawn_gate.py', 'enforce']))).toEqual([])
+  expect(gateMarkers(undefined, gateSettings(['spawn_gate.py', '--mode=enforce']))).toEqual([])
+  expect(gateMarkers('{broken', gateSettings(['spawn_gate.py', '--mode=enforce']))).toEqual([])
   expect(gateMarkers(gates({ spawn_gate: 'off' }), { hooks: { PreToolUse: 'x' } })).toEqual([])
   expect(gateMarkers(gates({ spawn_gate: 'off' }), null)).toEqual([])
 })
