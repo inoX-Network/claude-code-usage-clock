@@ -204,6 +204,16 @@ def names_of(value: str, option: str, known: tuple[str, ...]) -> tuple[str, ...]
     return tuple(dict.fromkeys(names))
 
 
+WEB_NAME_TAKEN = (f'{sync_format.WEB_NAME} is the name of Claude Code on the web (tools/web_export.py), which the report '
+                  'does not warn about; give this computer another one.')
+
+
+def web_name_elsewhere(name: str) -> bool:
+    """The name of the chats of Claude Code on the web, outside of it: a computer of that name would get none of the
+    warnings of the report."""
+    return name == sync_format.WEB_NAME and os.environ.get('CLAUDE_CODE_REMOTE') != 'true'
+
+
 def validate_args(args: argparse.Namespace) -> None:
     args.on = () if args.on is None else names_of(args.on, '--on', SWITCHES)
     args.off = () if args.off is None else names_of(args.off, '--off', SWITCHES)
@@ -224,6 +234,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
     if args.sync_name is not None and not _config._MACHINE_NAME.fullmatch(args.sync_name):
         raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _, not only spaces.')
+    if args.sync_name is not None and web_name_elsewhere(args.sync_name):
+        raise UsageError(f'--sync-name: {WEB_NAME_TAKEN}')
     if ((args.sync_repo is not None or args.sync_name is not None or args.sync_mode not in (None, 'off'))
             and 'sync' not in args.components):
         raise UsageError('--sync-repo, --sync-name and --sync-mode shadow|on need the component sync (for example '
@@ -1135,6 +1147,10 @@ def ask_name(default: str, origin: str) -> str:
             print('\n'.join(INFO['name']))
             continue
         answer = typed or default
+        if typed and web_name_elsewhere(typed):
+            failed += 1
+            print(WEB_NAME_TAKEN)
+            continue
         if _config._MACHINE_NAME.fullmatch(answer):
             return answer
         failed += 1

@@ -841,6 +841,43 @@ def test_the_name_of_a_second_run_is_the_one_in_config_json_and_enter_keeps_it(m
     assert runs(machine.module, out) == [['--components', 'sync', '--sync-name=desk']]
 
 
+def web_export_argv(machine):
+    """The run of the installer that tools/web_export.py starts in Claude Code on the web, with its name."""
+    spec = importlib.util.spec_from_file_location('web_export_name_under_test', os.path.join(ROOT, 'tools', 'web_export.py'))
+    web = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(web)
+    return ['--settings', str(machine.settings), '--target', str(machine.target), '--components', 'sync',
+            '--sync-repo', REPO, '--sync-mode', 'shadow', '--sync-name', web.MACHINE_NAME]
+
+
+@pytest.mark.parametrize('remote', [None, 'false', '1'])
+def test_the_name_of_claude_code_on_the_web_is_refused_on_a_computer(machine, monkeypatch, remote):
+    if remote is None:
+        monkeypatch.delenv('CLAUDE_CODE_REMOTE', raising=False)
+    else:
+        monkeypatch.setenv('CLAUDE_CODE_REMOTE', remote)
+    before, screen = machine.files(), io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', screen)
+    with pytest.raises(SystemExit) as stop:
+        machine.module.main(web_export_argv(machine))
+    assert stop.value.code == 2 and 'claude-web is the name of Claude Code on the web' in screen.getvalue()
+    assert machine.files() == before
+
+
+def test_the_installer_run_of_web_export_names_its_chats_claude_web(machine, monkeypatch, private):
+    monkeypatch.setenv('CLAUDE_CODE_REMOTE', 'true')
+    code, out = machine.cli(*web_export_argv(machine))
+    assert code == 0, out
+    assert machine.config_data()['sync']['machine_name'] == sync_format.WEB_NAME
+
+
+def test_the_assistant_asks_again_at_the_name_of_claude_code_on_the_web(machine, monkeypatch):
+    monkeypatch.delenv('CLAUDE_CODE_REMOTE', raising=False)
+    code, out = machine.ask('n', 'n', 'n', 'n', 'n', 'y', REPO, sync_format.WEB_NAME, 'laptop', 'n')
+    assert out.count(SYNC_NAME) == 2 and 'claude-web is the name of Claude Code on the web' in out
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=laptop']
+
+
 @pytest.mark.parametrize('name', ['-pc', '--sync-mode=on', '-'])
 def test_a_name_that_starts_with_a_dash_is_installed_as_typed(machine, private, name):
     code, out = machine.ask('n', 'n', 'n', 'n', 'n', 'y', REPO, name, '')
