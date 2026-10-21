@@ -318,6 +318,36 @@ def test_set_repo_after_a_private_check_sets_the_repo_and_clones_it(machine):
     assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 1
 
 
+def relative_log_dir(machine, where):
+    """A log folder the hooks would resolve against the folder of each session; the tab runs in the folder of its own."""
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    machine.monkeypatch.chdir(machine.tmp)
+    if where == 'env':
+        machine.monkeypatch.setenv('CCUC_LOG_DIR', 'rel-log')
+    else:
+        machine.monkeypatch.delenv('CCUC_LOG_DIR')
+        machine.config.write_text(json.dumps(dict(machine.config_data(), log_dir='rel-log')), encoding='utf-8')
+    return machine.tree()
+
+
+@pytest.mark.parametrize('where', ['env', 'config'])
+def test_set_repo_with_a_relative_log_folder_clones_nothing(machine, where):
+    before = relative_log_dir(machine, where)
+    code, done = machine.cli('set-repo', OTHER)
+    assert code == 2 and "needs an absolute log folder, not 'rel-log'" in done['error']
+    assert machine.tree() == before and not (machine.tmp / 'rel-log').exists()
+
+
+@pytest.mark.parametrize('where', ['env', 'config'])
+def test_set_sync_mode_with_a_relative_log_folder_switches_only_off(machine, where):
+    before = relative_log_dir(machine, where)
+    for mode in ('shadow', 'on'):
+        code, done = machine.cli('set', 'sync.mode', mode)
+        assert code == 2 and 'absolute log folder' in done['error'] and machine.tree() == before
+    code, done = machine.cli('set', 'sync.mode', 'off')
+    assert code == 0 and machine.config_data()['sync']['mode'] == 'off'
+
+
 @pytest.mark.parametrize('probe,access,result', [((0, ''), 'reachable', 'public'),
                                                  ((128, ASKS), 'not_found_or_no_access', 'not_found_or_no_access'),
                                                  ((1, ''), 'reachable', 'unclear')])

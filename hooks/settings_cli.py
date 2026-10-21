@@ -112,6 +112,8 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
                                 'sync.mode to off|shadow|on.')
     if component not in parts:
         raise not_installed(component)
+    if key == 'sync.mode' and value != 'off':      # off pushes nothing, wherever the log folder is
+        _setup.sync_log_dir(_config.load(log_problems=False, path=path))
     current = _setup.read_config(path).get(section, {})
     changed = name not in current or current[name] != stored
     backup = _setup.write_keys(path, {section: {name: stored}}, True) if changed else None
@@ -137,13 +139,14 @@ def checked(repo: str, result: str) -> dict:
 
 
 def set_repo(repo: str, cfg: dict, path: str) -> int:
+    log_dir = _setup.sync_log_dir(cfg)      # before the check: a relative one would clone below the folder of the tab
     result = check(repo, cfg)
     if result != 'private_ok':
         return answer(checked(repo, result), 1)
     old = cfg['sync']['repo']
     plan = _setup.SyncPlan(path, True, {'repo': repo} if old != repo else {},
                            [f'sync.repo {old!r} -> {repo!r}'] if old != repo else [], cfg['sync']['mode'], 'config.json',
-                           repo, cfg['sync']['transport'], cfg['sync']['max_clone_mb'], _setup.log_dir_of(cfg))
+                           repo, cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir)
     try:
         other = os.path.lexists(plan.clone) and not _setup.clone_points_to(plan)
     except _sync_core.SyncError:      # git could not tell: prepare_clone asks again and names the reason

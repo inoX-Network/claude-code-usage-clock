@@ -372,6 +372,17 @@ def log_dir_of(cfg: dict) -> str:
     return os.path.abspath(os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir']))
 
 
+def sync_log_dir(cfg: dict) -> str:
+    """log_dir_of for the sync, which needs it absolute as written: the hooks resolve a relative one against the folder
+    of each session, so no push would find the clone. UsageError for a relative one."""
+    given = os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir'])
+    if not os.path.isabs(given):
+        raise UsageError(f'The component sync needs an absolute log folder, not {given!r} (log_dir or CCUC_LOG_DIR): '
+                         'the hooks would resolve it against the folder of each session, so no push would find the '
+                         'clone.')
+    return log_dir_of(cfg)
+
+
 def sync_blocked(plan: SyncPlan) -> bool:
     """The push is blocked after `visibility` (an unreadable state blocks nothing: it counts as empty)."""
     try:
