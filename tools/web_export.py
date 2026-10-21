@@ -188,9 +188,14 @@ def run(argv: list[str]) -> int:
 
 
 def _sync_lines(log_dir: str, offset: int) -> list[dict]:
-    """The lines of hook `sync` that log.jsonl got from byte `offset` on."""
+    """The lines of hook `sync` that log.jsonl got from byte `offset` on; none from anything but a regular file (a
+    link is never followed, a FIFO never waited on)."""
+    path = os.path.join(log_dir, 'log.jsonl')
+    if os.path.islink(path):      # Windows has no O_NOFOLLOW
+        return []
     try:
-        with open(os.path.join(log_dir, 'log.jsonl'), 'rb') as f:
+        descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_NONBLOCK | _plat.O_BINARY)
+        with os.fdopen(_regular(descriptor, path), 'rb') as f:
             f.seek(offset)
             raws = f.read().splitlines()
     except OSError:
@@ -208,13 +213,23 @@ def _sync_lines(log_dir: str, offset: int) -> list[dict]:
 
 def _log_size(log_dir: str) -> int:
     try:
-        return os.path.getsize(os.path.join(log_dir, 'log.jsonl'))
+        return os.lstat(os.path.join(log_dir, 'log.jsonl')).st_size
     except OSError:
         return 0
 
 
+def _shown(value: object) -> str:
+    """A text of the log as the terminal gets it: every character that is not printable (an escape, a control, a
+    change of direction, a line separator) as `?`."""
+    return ''.join(c if c.isprintable() else '?' for c in value) if isinstance(value, str) else ''
+
+
+def _count(value: object) -> int | str:
+    return value if isinstance(value, int) and not isinstance(value, bool) else '?'
+
+
 def push_text(lines: list[dict], repo: str, mode: str) -> str:
-    """What the push did, from the log lines it wrote."""
+    """What the push did, from the log lines it wrote (their text never raw: it goes to the terminal)."""
     outcome = next((line for line in reversed(lines) if line.get('decision') in ('success', 'failure')), None)
     if outcome is None:
         return 'push: no outcome in the log'
@@ -222,11 +237,13 @@ def push_text(lines: list[dict], repo: str, mode: str) -> str:
     if outcome['decision'] == 'success' and shadow is not None:       # shadow, then the core's success
         outcome = shadow
     if outcome['decision'] == 'shadow':
-        return (f'shadow: committed here, pushed nothing ({outcome.get("lines", 0)} lines, {outcome.get("bytes", 0)} '
-                'bytes). Run /usage-export on to push for real.')
+        return (f'shadow: committed here, pushed nothing ({_count(outcome.get("lines", 0))} lines, '
+                f'{_count(outcome.get("bytes", 0))} bytes). Run /usage-export on to push for real.')
     if outcome['decision'] == 'success':
         return f'pushed to {repo}' if mode == 'on' else 'push: done'
-    return f'push failed ({outcome.get("category", "?")}): {outcome.get("reason", "")}'
+    category = outcome.get('category')
+    category = category if isinstance(category, str) and sync_format.WORD.fullmatch(category) else '?'
+    return f'push failed ({category}): {_shown(outcome.get("reason", ""))}'
 
 
 def side_text(found: DebugLog | None) -> list[str]:

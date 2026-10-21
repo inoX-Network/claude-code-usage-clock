@@ -466,3 +466,77 @@ def test_a_last_line_without_its_line_feed_is_not_yet_a_line(web, tmp_path):
     found = web.read_debug_log(str(path))
     assert [run['t'] for run in found.runs] == ['2026-10-21T07:09:39.057Z', '2026-10-21T08:04:49.531Z']
     assert found.last == '2026-10-21T08:26:37.479Z'
+
+
+# --- Security review v1.7 S-A7: log.jsonl never through a link or a FIFO, its text never raw on the terminal --------
+
+def sync_line(**fields):
+    return json.dumps({'hook': 'sync', **fields}) + '\n'
+
+
+def test_a_log_that_is_a_link_is_not_read(web, tmp_path):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    target = tmp_path / 'elsewhere.jsonl'
+    target.write_text(sync_line(decision='success', action='push') * 100, encoding='utf-8')
+    os.symlink(target, log_dir / 'log.jsonl')
+    assert web._sync_lines(str(log_dir), 0) == []
+    assert web._log_size(str(log_dir)) != target.stat().st_size
+
+
+@pytest.mark.posix_only
+def test_o_nofollow_alone_refuses_a_linked_log(web, tmp_path, monkeypatch):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    target = tmp_path / 'elsewhere.jsonl'
+    target.write_text(sync_line(decision='success', action='push'), encoding='utf-8')
+    os.symlink(target, log_dir / 'log.jsonl')
+    monkeypatch.setattr(os.path, 'islink', lambda path: False)
+    assert web._sync_lines(str(log_dir), 0) == []
+
+
+@pytest.mark.posix_only
+def test_a_log_that_is_a_fifo_is_passed_over_without_waiting_for_a_writer(web, tmp_path):
+    import threading
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    fifo = log_dir / 'log.jsonl'
+    os.mkfifo(fifo)
+    seen = []
+    reader = threading.Thread(target=lambda: seen.append(web._sync_lines(str(log_dir), 0)), daemon=True)
+    reader.start()
+    reader.join(2)
+    waited = reader.is_alive()
+    if waited:                                              # free the reader that waits for a writer
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(5)
+    assert not waited and seen == [[]] and web._log_size(str(log_dir)) == 0
+    writer = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)      # a writer that holds it open, with a line in it
+    try:
+        os.write(writer, sync_line(decision='success', action='push').encode('utf-8'))
+        assert web._sync_lines(str(log_dir), 0) == []
+    finally:
+        os.close(writer)
+
+
+def test_a_log_that_is_a_device_is_passed_over(web, tmp_path, monkeypatch):
+    """No device node can be made without root: fstat says the file is one (a seek would refuse a FIFO by itself)."""
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    (log_dir / 'log.jsonl').write_text(sync_line(decision='success', action='push'), encoding='utf-8')
+    device = os.stat_result((stat.S_IFCHR | 0o600, *os.stat(log_dir / 'log.jsonl')[1:]))
+    monkeypatch.setattr(os, 'fstat', lambda descriptor: device)
+    assert web._sync_lines(str(log_dir), 0) == []
+
+
+def test_the_text_of_the_log_reaches_the_terminal_without_escapes_or_controls(web):
+    lines = [{'hook': 'sync', 'decision': 'failure', 'category': 'auth\x1b[31m', 'action': 'push',
+              'reason': 'refused\x1b]0;title\x07 ‮gnp.exe next'}]
+    text = web.push_text(lines, 'owner/name', 'on')
+    assert text == 'push failed (?): refused?]0;title? ?gnp.exe?next'
+    shadow = [{'hook': 'sync', 'decision': 'shadow', 'lines': '\x1b[2J', 'bytes': True},
+              {'hook': 'sync', 'decision': 'success', 'action': 'push'}]
+    assert web.push_text(shadow, 'owner/name', 'shadow').startswith('shadow: committed here, pushed nothing (? lines, '
+                                                                    '? bytes)')
+    assert web.push_text([{'decision': 'failure', 'category': 'network', 'reason': None}], 'o/n', 'on') == \
+        'push failed (network): '
