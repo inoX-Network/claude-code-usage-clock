@@ -25,7 +25,7 @@ answer `h`, `i`, `?`, `help` or `--help` (in any case) prints a few lines about 
 `settings.json` or `config.json` and a link to its section here, then asks again; it does not count as a wrong answer,
 and a wrong answer says so: `Please answer y or n (i = more about this question).` At the repository and the name only
 `?`, `help` and `--help` work, as `h` and `i` are answers there; a wrong answer there ends with
-`(? = more about this question)`. `Install now?` has no such lines and says only `Please answer y or n.` Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
+`(? = more about this question)`. `Install now?` has no such lines and says only `Please answer y or n.` Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`; on Windows `python tools\install.py` with double quotes for cmd and PowerShell),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).
 
@@ -49,7 +49,8 @@ parts read its measurement): answered with no it stays, and the summary names `-
 `autoContinueAtUsageLimit` stays as well. An installed `--week-ok-until` is passed on, so that Enter keeps it. It
 does not ask for the thresholds, `--week-ok-until`, `--settings`, `--target` or the transport `ssh`: they stay options
 and [configuration](configuration.md#configuration). Any option, or a stdin or stdout that is no terminal (a script, the
-CI or a `!` command in Claude Code), and it asks nothing: the options alone decide. `python3 tools/install.py --dry-run`
+CI or a `!` command in Claude Code), and it asks nothing: the options alone decide. Without any option it then installs
+the default selection and says so in one line on stderr (the exit code is that of the run). `python3 tools/install.py --dry-run`
 shows what would change, and `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop` installs the
 five parts of the default selection without a question.
 

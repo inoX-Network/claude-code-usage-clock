@@ -53,7 +53,8 @@ purpose (the assistant's answer no); with the hooks of the sync installed it is 
 Run in a terminal without any option, the installer asks first (the assistant): one y/n question per part, the defaults
 being what is installed, then a summary with the equivalent command line, which it runs through main() as if it had
 been typed. No to an installed part switches it off (--off, the sync --sync-mode off) and removes nothing. Any option,
-or a stdin or stdout that is no terminal, and it asks nothing.
+or a stdin or stdout that is no terminal, and it asks nothing; without any option it then says on stderr that it installs
+the default selection without a question. The summary's command line is quoted for cmd and PowerShell on Windows.
 
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
@@ -1278,6 +1279,12 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
     return argv, summary
 
 
+def same_as(argv: list[str], windows: bool = os.name == 'nt') -> str:
+    """The options of the equivalent command line, quoted for the shell PROGRAM is spelt for: cmd and PowerShell on
+    Windows (double quotes), a POSIX shell elsewhere."""
+    return subprocess.list2cmdline(argv) if windows else shlex.join(argv)
+
+
 def assistant() -> int:
     """Asks for each part, shows the equivalent command line and runs it through main(), as if it were typed."""
     settings_path = os.path.abspath(os.path.expanduser(DEFAULT_SETTINGS))
@@ -1300,7 +1307,7 @@ def assistant() -> int:
         if argv is None:
             print('Nothing selected, nothing to install.')
             return 0
-        print(f'Same as: {PROGRAM} {shlex.join(argv)}')
+        print(f'Same as: {PROGRAM} {same_as(argv)}')
         if not ask(None, 'Install now?', True):
             print('Nothing changed.')
             return 0
@@ -1449,6 +1456,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv and interactive():
         return assistant()
+    if not argv:      # a script, or a terminal without a console (mintty without winpty): on stderr, the exit code stays
+        print('install.py: no terminal to ask in, so the default selection is installed without a question; --dry-run '
+              'shows first what would change, --help lists the options.', file=sys.stderr)
     args = parse_args(argv)
     try:
         return run(args)

@@ -34,8 +34,13 @@ or `blocked`), the context is past 300k.
 git clone https://github.com/inoX-Network/claude-code-usage-clock
 cd claude-code-usage-clock
 python tools\install.py --dry-run     # shows the commands that would be written
-python tools\install.py               # installs all five parts, gates in shadow mode
+python tools\install.py               # asks for each part; Enter takes the five parts without the sync, gates in shadow mode
 ```
+
+The installer asks only in a console (PowerShell, cmd, Windows Terminal). In the mintty window of Git Bash without
+`winpty` there is none: it asks nothing, installs the default selection and says so in one line. Run it from PowerShell
+there, or as `winpty python tools/install.py`, or look first with `--dry-run`. The `Same as:` line of its summary is
+quoted for cmd and PowerShell.
 
 The commands look like the hooks that Windows users write by hand:
 

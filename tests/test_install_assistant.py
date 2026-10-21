@@ -291,6 +291,41 @@ def test_without_a_terminal_it_runs_as_before_and_reads_nothing(machine, monkeyp
     assert 'statusLine' in machine.data() and 'SessionStart' not in hooks and len(hooks['PreToolUse']) == 2
 
 
+NO_QUESTIONS = ('install.py: no terminal to ask in, so the default selection is installed without a question; '
+                '--dry-run shows first what would change, --help lists the options.')
+
+
+@pytest.mark.parametrize('stdin_tty,stdout_tty', [(False, False), (False, True), (True, False)])
+def test_without_a_terminal_and_options_one_line_on_stderr_says_it_installs_without_a_question(machine, monkeypatch,
+                                                                                              capsys, stdin_tty,
+                                                                                              stdout_tty):
+    monkeypatch.setattr(sys, 'stdin', Unreadable(tty=stdin_tty))
+    screen = Screen() if stdout_tty else io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', screen)
+    code = machine.module.main([])
+    monkeypatch.setattr(sys, 'stdout', sys.__stdout__)
+    assert code == 0 and NO_QUESTIONS not in screen.getvalue()
+    assert capsys.readouterr().err == NO_QUESTIONS + '\n'
+
+
+def test_with_options_and_without_a_terminal_nothing_is_said_on_stderr(machine, capsys):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    assert capsys.readouterr().err == ''
+
+
+def test_a_failing_run_without_a_terminal_keeps_its_exit_code(machine, monkeypatch, capsys):
+    machine.settings.write_text('[1]', encoding='utf-8')
+    monkeypatch.setattr(sys, 'stdin', Unreadable(tty=False))
+    assert machine.cli()[0] == 2 and capsys.readouterr().err == NO_QUESTIONS + '\n'
+
+
+def test_the_same_as_line_is_quoted_for_the_shell_of_each_system(machine):
+    argv = ['--components', 'sync', '--sync-repo', REPO, '--sync-name=Anna laptop']
+    assert machine.module.same_as(argv, windows=True) == '--components sync --sync-repo owner/name "--sync-name=Anna laptop"'
+    assert machine.module.same_as(argv, windows=False) == "--components sync --sync-repo owner/name '--sync-name=Anna laptop'"
+    assert shlex.split(machine.module.same_as(argv, windows=True)) == argv
+
+
 def test_without_stdin_at_all_it_runs_as_before(machine, monkeypatch):
     monkeypatch.setattr(sys, 'stdin', None)
     screen = Screen()
