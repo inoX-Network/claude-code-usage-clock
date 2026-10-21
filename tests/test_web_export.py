@@ -244,10 +244,10 @@ def test_the_run_installs_the_sync_as_claude_web_in_shadow_mode_then_pushes_once
     install, push = steps.calls
     target = os.path.expanduser('~/.claude/hooks/usage-clock')
     settings = str(cloud / 'log' / 'web-settings.json')
-    assert install[1:] == [os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
+    assert install[1:] == ['-I', os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
                            '--components', 'sync', '--sync-repo', 'owner/name', '--sync-mode', 'shadow',
                            '--sync-name', 'claude-web']
-    assert push[1:] == [os.path.join(target, 'sync.py'), 'push', '--now']
+    assert push[1:] == ['-I', os.path.join(target, 'sync.py'), 'push', '--now']      # S-A9: no PYTHONPATH, no user site
     assert json.loads((cloud / 'log' / 'web-settings.json').read_text(encoding='utf-8')) == {}
     sides = (cloud / 'log' / 'side-calls.jsonl').read_text(encoding='utf-8').splitlines()
     assert [json.loads(line)['kind'] for line in sides] == ['side', 'side', 'side_window']

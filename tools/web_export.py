@@ -304,9 +304,10 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     settings = os.path.join(log_dir, SETTINGS_FILE)
     if not os.path.lexists(settings):
         _context_state.write_private(log_dir, SETTINGS_FILE, '{}')
-    if run([sys.executable, os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
-            '--components', 'sync', '--sync-repo', args.sync_repo, '--sync-mode', args.sync_mode,
-            '--sync-name', MACHINE_NAME]) != 0:
+    # both steps with -I, as the skill starts this script: no PYTHONPATH and no user site of the VM take part
+    if run([sys.executable, '-I', os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings,
+            '--target', target, '--components', 'sync', '--sync-repo', args.sync_repo,
+            '--sync-mode', args.sync_mode, '--sync-name', MACHINE_NAME]) != 0:
         print('usage-export: the installer stopped (see above); nothing was exported.')
         return 1
     found = read_debug_log(args.debug_log)
@@ -316,7 +317,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print(f'usage-export: {_sync_export.SIDE_FILE} cannot be written ({error}); nothing was pushed.')
         return 1
     offset = _log_size(log_dir)
-    code = run([sys.executable, os.path.join(target, 'sync.py'), 'push', '--now'])
+    code = run([sys.executable, '-I', os.path.join(target, 'sync.py'), 'push', '--now'])
     print('\n'.join(['usage-export:', *(f'  {text}' for text in side_text(found)),
                      f'  {push_text(_sync_lines(log_dir, offset), args.sync_repo, args.sync_mode)}',
                      f'  {held_text(log_dir, session)}']))
