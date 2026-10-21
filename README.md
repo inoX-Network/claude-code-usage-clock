@@ -101,8 +101,9 @@ and uninstalling: [docs/install.md](docs/install.md). What is new: [CHANGELOG.md
 On their own these tools are a seatbelt, not a lock. The usage file and the counters are ordinary files: a model
 that can write them can fake them, and a model that can edit `settings.json` or the config can switch the gates
 off. Pair them with a guard hook that blocks those paths. The usage numbers come from `rate_limits`, which Claude
-Code documents but does not version; when it is missing, every part reports `unknown` instead of guessing. The full
-list of limits and the paths to protect: [docs/security.md](docs/security.md).
+Code documents but does not version; when it is missing, every part reports `unknown` instead of guessing. The report
+counts what is in the transcripts: sessions started with `claude -p` count like any other, a session started with
+`--no-session-persistence` writes no transcript and is not counted. The full list of limits and the paths to protect: [docs/security.md](docs/security.md).
 
 ## Contributing
 

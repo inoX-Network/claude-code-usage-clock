@@ -19,6 +19,11 @@
   managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
   Skill discovery covers your personal skills and the project folders from the start folder up to the repo
   root, not plugin or managed skills or folders added with `--add-dir`.
+- The usage report counts the requests in the transcripts below `~/.claude/projects`. A session in print mode
+  (`claude -p`) writes one and is counted like any other (checked with Claude Code 2.1.306: the cost matched the one
+  Claude Code logs). A session started with `--no-session-persistence` writes no transcript, so the report cannot
+  see it. With the [desktop plugin](../desktop/README.md) installed, `statusline.py` runs in print mode as well, at
+  the end of each turn (same version).
 - The date and time in the prompt line are your local time and go to the model with every prompt.
 - The [sync](sync.md) sends only after you opted in, and only into a repository of yours that was found private: one
   that is public, or whose answer does not say, stops the installation, and a push never writes to one found public.
