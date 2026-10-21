@@ -183,6 +183,24 @@ def test_a_broken_list_of_sessions_logs_again_and_is_written_new(tmp_path):
     assert json.loads((folder / 'usage_clock.json').read_text(encoding='utf-8')) == ['']
 
 
+def test_a_list_of_sessions_nested_too_deep_logs_again_and_never_raises(tmp_path):
+    folder = tmp_path / 'log' / 'disabled'
+    folder.mkdir(parents=True)
+    (folder / 'spawn_gate.json').write_text('[' * 100_000 + ']' * 100_000, encoding='utf-8')
+    _hookio.log_disabled('spawn_gate', 'spawn_gate', {'session_id': 's'})
+    assert len(log(tmp_path, 'spawn_gate')) == 1
+    assert json.loads((folder / 'spawn_gate.json').read_text(encoding='utf-8')) == ['s']
+
+
+def test_the_spawn_gate_switched_off_stays_silent_with_a_list_of_sessions_nested_too_deep(tmp_path):
+    folder = tmp_path / 'log' / 'disabled'
+    folder.mkdir(parents=True)
+    (folder / 'spawn_gate.json').write_text('[' * 100_000 + ']' * 100_000, encoding='utf-8')
+    config(tmp_path, spawn_gate='off')
+    assert run('spawn_gate.py', AGENT, '--mode=enforce') == ''
+    assert [r['decision'] for r in log(tmp_path, 'spawn_gate')] == ['disabled']
+
+
 def test_logging_disabled_never_raises(tmp_path, monkeypatch):
     def broken(*args):
         raise OSError('disk full')
@@ -256,15 +274,45 @@ def test_a_dry_run_with_mode_writes_no_config(setup):
     assert (setup.target / 'config.json').read_bytes() == before
 
 
-@pytest.mark.parametrize('value,expected', [('', 'mode enforce from settings.json'), ('shadow', 'mode shadow from config'),
-                                            ('off', 'mode off from config')])
-def test_check_names_where_the_mode_comes_from(setup, value, expected):
+GATE_OFF = ('NOTE spawn_gate.py: switched off in config.json (modules.spawn_gate "off"), it lets every start through. '
+            'Switch it on with install.py --on spawn-gate or in the Settings tab of /report.')
+GATE_SHADOW = ('NOTE spawn_gate.py: runs in shadow mode from config.json (modules.spawn_gate "shadow") although its entry '
+               'has --mode=enforce: it blocks nothing.')
+
+
+@pytest.mark.parametrize('value,expected,note', [('', 'mode enforce from settings.json', None),
+                                                 ('enforce', 'mode enforce from config', None),
+                                                 ('shadow', 'mode shadow from config', GATE_SHADOW),
+                                                 ('off', 'mode off from config', GATE_OFF)])
+def test_check_names_where_the_mode_comes_from_and_notes_a_gate_switched_off(setup, value, expected, note):
     assert setup('--components', 'spawn-gate', '--mode', 'enforce')[0] == 0
     cfg = setup.config()
     cfg['modules']['spawn_gate'] = value
     (setup.target / 'config.json').write_text(json.dumps(cfg), encoding='utf-8')
     code, out = setup('--check', '--components', 'spawn-gate')
-    assert f'PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, {expected})' in out
+    assert f'OK   PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, {expected})' in out
+    assert [line for line in out.splitlines() if line.startswith('NOTE spawn_gate')] == ([note] if note else [])
+    assert code == 0, out
+
+
+def test_check_notes_no_gate_in_shadow_mode_from_its_own_entry(setup):
+    assert setup('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    assert 'NOTE soft_stop' not in setup('--check', '--components', 'soft-stop')[1]
+
+
+@pytest.mark.parametrize('component,script,key', [('usage-clock', 'usage_clock.py', 'usage_clock'),
+                                                  ('context-reporter', 'context_reporter.py', 'context_reporter'),
+                                                  ('soft-stop', 'soft_stop.py', 'soft_stop')])
+def test_check_notes_each_part_switched_off_once(setup, component, script, key):
+    assert setup('--components', f'statusline,{component}')[0] == 0
+    assert setup('--off', component)[0] == 0
+    code, out = setup('--check', '--components', f'statusline,{component}')
+    value = '"off"' if component == 'soft-stop' else 'false'
+    notes = [line for line in out.splitlines() if line.startswith(f'NOTE {script}')]
+    assert len(notes) == 1 and f'switched off in config.json (modules.{key} {value})' in notes[0], out
+    assert f'install.py --on {component}' in notes[0] and code == 0
+    assert setup('--on', component)[0] == 0
+    assert f'NOTE {script}' not in setup('--check', '--components', f'statusline,{component}')[1]
 
 
 def test_install_with_mode_and_a_config_json_that_cannot_be_read_notes_it_and_installs(setup):
@@ -273,3 +321,28 @@ def test_install_with_mode_and_a_config_json_that_cannot_be_read_notes_it_and_in
     code, out = setup('--components', 'spawn-gate', '--mode', 'enforce')
     assert code == 0 and 'Note: modules.spawn_gate not written' in out and "set it to 'enforce' by hand" in out
     assert (setup.target / 'config.json').read_text(encoding='utf-8') == '{broken'
+
+
+def env_config(setup, tmp_path, value):
+    data = json.loads((tmp_path / 'settings.json').read_text(encoding='utf-8'))
+    data['env'] = {'CCUC_CONFIG': value}
+    (tmp_path / 'settings.json').write_text(json.dumps(data), encoding='utf-8')
+
+
+def test_check_notes_a_config_json_that_only_the_env_of_settings_json_names(setup, tmp_path):
+    assert setup('--components', 'usage-clock')[0] == 0
+    env_config(setup, tmp_path, str(tmp_path / 'elsewhere.json'))
+    code, out = setup('--check', '--components', 'usage-clock')
+    assert (f"NOTE config.json: the env of settings.json sets CCUC_CONFIG to {str(tmp_path / 'elsewhere.json')!r}, so the "
+            f'hooks read that file, but this installer and the Settings tab read and write {setup.target / "config.json"}'
+            in out), out
+
+
+@pytest.mark.parametrize('same', ['target', 'environment'])
+def test_check_notes_nothing_when_the_env_of_settings_json_names_the_same_config_json(setup, tmp_path, monkeypatch, same):
+    assert setup('--components', 'usage-clock')[0] == 0
+    path = str(setup.target / 'config.json') if same == 'target' else str(tmp_path / 'elsewhere.json')
+    if same == 'environment':
+        monkeypatch.setenv('CCUC_CONFIG', path)
+    env_config(setup, tmp_path, path)
+    assert 'CCUC_CONFIG' not in setup('--check', '--components', 'usage-clock')[1]

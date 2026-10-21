@@ -92,6 +92,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 - [docs/security.md](docs/security.md#limits-and-threat-model) names what `/usage-export` reads and runs in the VM,
   and that the skill pins a release tag, not a commit.
 
+The installer, the Settings tab and `modules` (part B of the security review after 1.6.0):
+
+- A gate that `modules` of `config.json` switches off, or sets to shadow while its entry says `--mode=enforce`, now
+  shows: `spawn gate off` / `soft stop shadow` in red after the week, in the status line and in the line of the desktop
+  app (plugin 0.9.2), and as a `NOTE` of `install.py --check`, which also notes the usage clock or the context
+  reporter switched off. `log_summary.py` lists the lines `disabled` per hook. [docs/security.md](docs/security.md#working-with-a-guard-hook)
+  and [docs/configuration.md](docs/configuration.md#configuration) say that `settings_cli.py set` and
+  `install.py --off`/`--on`/`--mode` write `config.json` themselves, which a guard that checks only paths does not see,
+  and how to make it a lock.
+- `config.json`: a backup never reads through a link, the ten newest `config.json.bak-usage-clock-*` stay (the tab
+  wrote one per click), and the tab and the installer write it one at a time under `config.json.lock-usage-clock`.
+- The Settings tab: a relative log folder is refused for the sync as the installer refuses it (the clone landed below
+  the folder of the plugin); a failed file operation is a JSON answer with exit 1 and leaves no temporary file;
+  control characters of `config.json` or of a typed name never reach the pane; a name that is no owner/name starts no
+  process; Save waits as long as `set-repo` can take (360 s, checked against the budgets of the code).
+- The installer: the name `claude-web` is refused outside Claude Code on the web (the report spares that name its
+  warnings); a name of only spaces is refused; the assistant passes the name and `--week-ok-until` as one word, so a
+  name that starts with a dash or a weekly approval that is no date no longer stops it after `Install now?`; run without
+  options and without a terminal it says on stderr that it installs without a question; its `Same as` line is quoted
+  for cmd and PowerShell on Windows; `--check` notes a `CCUC_CONFIG` that only the `env` of `settings.json` sets.
+- A part switched off whose list of sessions is nested too deep no longer makes the spawn gate report an internal
+  failure.
+
 ## [1.6.0] — 2026-10-20 — sync across machines
 
 ### Added

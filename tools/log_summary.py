@@ -2,7 +2,8 @@
 """Summarises the JSONL log of the hooks: the basis for deciding when to switch from shadow to enforce.
 
 Shows the decisions per hook and mode, which starts and tool calls WOULD HAVE BEEN denied in shadow mode (with
-the reason), which were denied in enforce mode, internal errors, problems found in config.json, which input
+the reason), which were denied in enforce mode, internal errors, problems found in config.json, the parts switched off
+in its `modules` (their lines `disabled`, one per session), which input
 fields Claude Code really delivers to the spawn gate, how many soft stop calls carried an agent_id, and, once the
 sync runs, its pushes and pulls with their failures per category and what shadow mode would have pushed.
 
@@ -96,6 +97,12 @@ def summarise(entries: list[dict]) -> list[str]:
     if config:
         lines += ['', 'Problems found in config.json (the affected keys ran on their defaults):']
         lines += [f'  {n:4d}x {reason[:200]}' for reason, n in config.most_common(5)]
+    switched = [e for e in entries if e.get('decision') == 'disabled']
+    if switched:
+        sessions = Counter(str(e.get('hook')) for e in switched)
+        last = {str(e.get('hook')): str(e.get('time')) for e in switched}      # the log is in the order of time
+        lines += ['', 'Switched off in config.json (modules; one line per session):']
+        lines += [f'  {hook:14s} {n} session{"" if n == 1 else "s"}, last {last[hook]}' for hook, n in sorted(sessions.items())]
     fields = Counter((str(e.get('tool_name')), _key_list(e.get('tool_input_keys')))
                      for e in entries if e.get('hook') == 'spawn_gate')
     lines += ['', 'Input fields of the spawn gate, as Claude Code delivers them:']

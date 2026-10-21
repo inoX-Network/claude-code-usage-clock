@@ -17,7 +17,7 @@ settings.json and adds or removes no hook: the parts read their switch from conf
 
 Each key is written as the installer writes it (_setup.write_keys: checked, with a backup, atomically), and only when it
 changes. Every answer is one JSON object on stdout. Exit codes: 0 done, 1 the repository did not pass or could not be
-cloned, 2 bad arguments, a part that is not installed (install.py installs it), or an unusable settings.json or
+cloned, or a file operation failed ({"error": ...}), 2 bad arguments, a part that is not installed (install.py installs it), or an unusable settings.json or
 config.json.
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -46,6 +47,7 @@ PARTS = (('statusline', 'statusline', None, 'Status line'),
 SWITCH_VALUES = ('true', 'false')
 GATE_VALUES = ('off', 'shadow', 'enforce')
 SYNC_MODES = ('off', 'shadow', 'on')
+CONTROL = re.compile('[\x00-\x09\x0b-\x1f\x7f-\x9f]')
 RESULTS = {
     'private_ok': '{repo} is private and this login reaches it.',
     'public': '{repo} can be read without logging in: it is public. The sync writes only to a private repository.',
@@ -60,8 +62,20 @@ RESULTS = {
 }
 
 
+def printable(value):
+    """Every text of the answer without control characters (C0 but the line break, DEL, C1): a key of config.json or a
+    typed name could carry an escape sequence the tab would draw."""
+    if isinstance(value, str):
+        return CONTROL.sub('?', value)
+    if isinstance(value, list):
+        return [printable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: printable(item) for key, item in value.items()}
+    return value
+
+
 def answer(value: dict, code: int = 0) -> int:
-    print(json.dumps(value, ensure_ascii=False))
+    print(json.dumps(printable(value), ensure_ascii=False))
     return code
 
 
@@ -112,6 +126,8 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
                                 'sync.mode to off|shadow|on.')
     if component not in parts:
         raise not_installed(component)
+    if key == 'sync.mode' and value != 'off':      # off pushes nothing, wherever the log folder is
+        _setup.sync_log_dir(_config.load(log_problems=False, path=path))
     current = _setup.read_config(path).get(section, {})
     changed = name not in current or current[name] != stored
     backup = _setup.write_keys(path, {section: {name: stored}}, True) if changed else None
@@ -137,13 +153,14 @@ def checked(repo: str, result: str) -> dict:
 
 
 def set_repo(repo: str, cfg: dict, path: str) -> int:
+    log_dir = _setup.sync_log_dir(cfg)      # before the check: a relative one would clone below the folder of the tab
     result = check(repo, cfg)
     if result != 'private_ok':
         return answer(checked(repo, result), 1)
     old = cfg['sync']['repo']
     plan = _setup.SyncPlan(path, True, {'repo': repo} if old != repo else {},
                            [f'sync.repo {old!r} -> {repo!r}'] if old != repo else [], cfg['sync']['mode'], 'config.json',
-                           repo, cfg['sync']['transport'], cfg['sync']['max_clone_mb'], _setup.log_dir_of(cfg))
+                           repo, cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir)
     try:
         other = os.path.lexists(plan.clone) and not _setup.clone_points_to(plan)
     except _sync_core.SyncError:      # git could not tell: prepare_clone asks again and names the reason
@@ -197,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         return set_repo(args.repo, cfg, path)
     except _setup.UsageError as error:
         return answer({'error': str(error)}, 2)
+    except OSError as error:      # a file operation failed (on Windows a replace another program holds): as install.py
+        return answer({'error': str(error)}, 1)
 
 
 if __name__ == '__main__':

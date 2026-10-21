@@ -25,7 +25,7 @@ answer `h`, `i`, `?`, `help` or `--help` (in any case) prints a few lines about 
 `settings.json` or `config.json` and a link to its section here, then asks again; it does not count as a wrong answer,
 and a wrong answer says so: `Please answer y or n (i = more about this question).` At the repository and the name only
 `?`, `help` and `--help` work, as `h` and `i` are answers there; a wrong answer there ends with
-`(? = more about this question)`. `Install now?` has no such lines and says only `Please answer y or n.` Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
+`(? = more about this question)`. `Install now?` has no such lines and says only `Please answer y or n.` Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`; on Windows `python tools\install.py` with double quotes for cmd and PowerShell),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).
 
@@ -34,10 +34,10 @@ else asks again, three times, then it stops without a change (exit code 2, as on
 | Status line | the component `statusline`; with a status line of another tool there, a second question: replace it (`--replace-statusline`, default no) |
 | Usage clock | `usage-clock` |
 | Context reporter (asked only with the status line) | `context-reporter` |
-| Spawn gate, soft stop | `spawn-gate`, `soft-stop` |
+| Spawn gate, soft stop | `spawn-gate`, `soft-stop`; an installed spawn gate keeps its `--week-ok-until` if it is a date YYYY-MM-DD, any other value is left out, with a line in the summary |
 | Let the gates block for real (asked only with a gate) | `--mode enforce`, no: `--mode shadow`; two gates in different modes keep theirs on Enter |
 | Continue automatically after a usage limit resets | `--auto-continue` |
-| Sync, then the name of your private repository and the name of this computer in the report | `sync` with `--sync-repo owner/name` (checked as the option checks it) and `--sync-name NAME` (default: the platform, `linux`, `darwin` or `windows`; on a second run the name in `config.json`; never the host name). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed `sync` with `--sync-mode off`, so that its hooks, `sync.repo` and `sync.machine_name` stay. Yes to an installed sync that is off: `--sync-mode shadow`, the safe start |
+| Sync, then the name of your private repository and the name of this computer in the report | `sync` with `--sync-repo owner/name` (checked as the option checks it) and `--sync-name=NAME`, one word, so that a name that starts with a dash stays a name (default: the platform, `linux`, `darwin` or `windows`; on a second run the name in `config.json`; never the host name). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed `sync` with `--sync-mode off`, so that its hooks, `sync.repo` and `sync.machine_name` stay. Yes to an installed sync that is off: `--sync-mode shadow`, the safe start |
 
 The assistant removes nothing. No to a part that is installed switches it off and leaves it installed: `--off` for the
 usage clock, the context reporter and the gates (`modules` in `config.json`, the hook stays in `settings.json`), and
@@ -49,7 +49,8 @@ parts read its measurement): answered with no it stays, and the summary names `-
 `autoContinueAtUsageLimit` stays as well. An installed `--week-ok-until` is passed on, so that Enter keeps it. It
 does not ask for the thresholds, `--week-ok-until`, `--settings`, `--target` or the transport `ssh`: they stay options
 and [configuration](configuration.md#configuration). Any option, or a stdin or stdout that is no terminal (a script, the
-CI or a `!` command in Claude Code), and it asks nothing: the options alone decide. `python3 tools/install.py --dry-run`
+CI or a `!` command in Claude Code), and it asks nothing: the options alone decide. Without any option it then installs
+the default selection and says so in one line on stderr (the exit code is that of the run). `python3 tools/install.py --dry-run`
 shows what would change, and `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop` installs the
 five parts of the default selection without a question.
 
@@ -93,13 +94,13 @@ Options:
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
 | `--sync-repo OWNER/NAME` | The private GitHub repository of the sync: sets `sync.repo`, checks once that it cannot be read without logging in (public or unclear: exit code 1, no hook added and `settings.json` and `config.json` unchanged) and clones it to `<log_dir>/sync/repo/`. Run again, it lifts the block after a push found the repository public. Needs the component `sync`. See [the sync](sync.md#install). |
-| `--sync-name NAME` | The name of this machine in the report of every machine: sets `sync.machine_name` in `config.json` (at most 64 letters, digits, spaces and `. + @ = - _`; anything else: exit code 2, nothing changed). Without it the name stays as it is; empty gives `machine-` and the start of the machine id, the host name is never used. Needs the component `sync`. |
+| `--sync-name NAME` | The name of this machine in the report of every machine: sets `sync.machine_name` in `config.json` (at most 64 letters, digits, spaces and `. + @ = - _`, not only spaces; anything else: exit code 2, nothing changed). `claude-web` is the name of the chats of Claude Code on the web (`/usage-export`), which the report does not warn about: anywhere else (without `CLAUDE_CODE_REMOTE=true`) it is refused, and the assistant asks again. Without it the name stays as it is; empty gives `machine-` and the start of the machine id, the host name is never used. Needs the component `sync`. |
 | `--on COMPONENTS`, `--off COMPONENTS` | Switch installed parts on or off in `config.json`, comma-separated from `usage-clock`, `context-reporter`, `spawn-gate`, `soft-stop`; their hooks stay in `settings.json`. `--off` sets `modules.usage_clock` / `context_reporter` to `false` and `modules.spawn_gate` / `soft_stop` to `off`; `--on` sets `true` and `""` (the mode of the hook entry; with `--mode` and the gate in `--components`, that mode). The same values and the same way of writing as the Settings tab of `/report`. A part must be installed or in `--components` of the same run; the same part in both, or `--off` with a part in `--components`: exit code 2, nothing changed. Without `--components` the run installs nothing and only switches. |
 | `--sync-mode off\|shadow\|on` | Mode of the sync, in `config.json`. Without it an installed sync keeps its mode; a first install starts in `shadow` (commits locally, pushes nothing). `shadow` and `on` need the component `sync`; `off` without it only writes `sync.mode` `off` into `config.json` (with the hooks of the sync installed it is an argument error: `--components sync --sync-mode off` switches it off and keeps them, `--uninstall --components sync` removes them). |
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
-| `--check` | Check an existing installation and change nothing: the entries in `settings.json` (for the gates with the mode and where it comes from: `from config` or `from settings.json`), the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
+| `--check` | Check an existing installation and change nothing: the entries in `settings.json` (for the gates with the mode and where it comes from: `from config` or `from settings.json`; a `NOTE` for each part `modules` switches off, and for a gate it sets to `shadow` while its entry says `--mode=enforce`), a `CCUC_CONFIG` that only the `env` of `settings.json` sets (`NOTE`), the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
 
 Restart Claude Code (or open `/hooks`) after installing.
 
@@ -140,7 +141,7 @@ the installer did. What stays, and how to remove it:
 | The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
-| The backups `settings.json.bak-usage-clock-*` (and `config.json.bak-usage-clock-*`, if the installer set the sync keys) | Delete them when you no longer need them. |
+| The backups `settings.json.bak-usage-clock-*` (all of them) and `config.json.bak-usage-clock-*` (the ten newest, written whenever the installer or the Settings tab changed a key), and the lock `config.json.lock-usage-clock` | Delete them when you no longer need them. |
 | The local clone of the sync, if you installed it: `<log_dir>/sync/` (the clone in `repo/`, its state, the cache of the visibility check and the machine id) | Part of the log folder: `rm -r ~/.cache/claude-usage-clock/sync`, or the whole log folder as above. Commits of shadow mode that were never pushed go with it. |
 | The data of this machine in the sync repository on GitHub (`machines/<machine id>/`): the uninstall never touches the remote | Delete that folder in the repository yourself (a commit that removes it), or the whole repository on GitHub. |
 

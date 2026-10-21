@@ -12,14 +12,16 @@ import { PERIODS, PERIOD_ONLY, VIEWS, localTime, parsePeriod, parseReport, repor
 import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
-import { UPDATE_LINE, activeChoice, choiceLabel, parseAnswer, parseShown, settingsArgv } from './settings'
+import { INVALID_REPO, UPDATE_LINE, activeChoice, choiceLabel, parseAnswer, parseShown, printable, settingsArgv, validRepo } from './settings'
 import type { Part, Shown } from './settings'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
-// The settings script: Check asks GitHub twice (each at most 15 s), Save also clones (at most 300 s)
+// The settings script: Check asks GitHub twice (VISIBILITY_TIMEOUT_S of hooks/_sync_git.py, 15 s each). Save checks
+// again, then probes once more (15 s) and clones (CLONE_TIMEOUT_S of hooks/_setup.py, 300 s): 345 s at most. 15 s
+// more each for starting Python and writing; tests/test_settings_cli.py checks both against the constants
 const SETTINGS_TIMEOUT_MS = 45_000
-const SAVE_TIMEOUT_MS = 330_000
+const SAVE_TIMEOUT_MS = 360_000
 
 const CLOSED: SettingsState = { isOpen: false, slot: null, info: null, repo: null, check: null, note: null }
 const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, own: null, slots: {}, settings: CLOSED }
@@ -490,6 +492,13 @@ export function registerReport(on: On): void {
           ])
         }
         const checkRepo = async (name: string) => {
+          // A name the script would refuse starts no process at all. The field gets it without control characters:
+          // the engine draws no Input whose value holds one
+          if (!validRepo(name)) {
+            const shown = String(printable(name))
+            await setSettings($, { repo: shown, note: null, check: { result: 'invalid', repo: shown, text: INVALID_REPO.replace('{repo}', shown) } })
+            return
+          }
           await setSettings($, { repo: name, check: null, note: null })
           // `--`: a name that starts with a dash is a name, not an option of the script
           const run = await runSettings($, ['check-repo', '--', name])
@@ -500,6 +509,7 @@ export function registerReport(on: On): void {
           }
         }
         const save = async () => {
+          if (!validRepo(repo)) return      // never offered then (canSave), and never run
           const run = await runSettings($, ['set-repo', '--', repo], SAVE_TIMEOUT_MS)
           const text = run.status === 'ok' && typeof run.answer.text === 'string' ? run.answer.text : noteOf(run)
           await setSettings($, { check: null, repo: null, note: text })

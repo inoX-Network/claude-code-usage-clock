@@ -81,7 +81,11 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 `off`/`shadow`/`enforce` for the gates), the mode of the sync, and the sync repository with **Check** and, only after a
 check found that name private and reachable, **Save**. `i` on a row unfolds its text from the installer. The tab writes
 `config.json` only, through `settings_cli.py` next to the hooks, which the plugin runs with a fixed list of arguments
-(never a shell); without that script (an older installation) it shows one line with the update command. All of it:
+(never a shell); without that script (an older installation) it shows one line with the update command. A repository
+name that is no owner/name as `sync.repo` takes it starts no process at all, and every text of the script's answers
+reaches the tab without control characters. Not checked: which level of the settings `$.settings.read()` gives the
+plugin (the user's `settings.json`, or the settings merged with those of the project); the `statusLine` it takes the
+Python and the folder of the hooks from, for the tab, the report and the gate markers, comes from there. All of it:
 [The Settings tab](../docs/reports.md#the-settings-tab).
 
 **In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
@@ -173,6 +177,10 @@ The colours follow the `statusline` section of the usage-clock `config.json` (`y
 `thresholds.start_block_week` and `thresholds.week_action` for the week gate marker (`<- week gate: agents warn`, `ask`
 or `blocked`). The file is read once per session start. A missing
 file or a key with the wrong type means the default, as for the hooks.
+
+The gate markers (`spawn gate off`, `soft stop shadow`, as in the status line) follow `modules.spawn_gate` and
+`modules.soft_stop` of the same file, read again with every measurement in the app, so that a gate switched off during
+a session shows at once; the plugin finds the gate's entry in `settings.json` next to the `statusLine` it runs.
 
 The plugin option `config_file` names the file (default `~/.claude/hooks/usage-clock/config.json`, where
 `tools/install.py` puts it). Change it under `/config` or with

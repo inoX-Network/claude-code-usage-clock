@@ -18,7 +18,8 @@ If rate_limits is missing (API key, Bedrock, Vertex), that part stays silent ins
 missing measurement is not "zero percent". The same goes for context_window and prompt_cache. If the merge
 fails, the session's own values are shown and nothing is written, not even to the history. The exit code is always 0.
 
-Output: <model> | 5h NN% ↻HH:MM | week NN% | ctx 231k/1000k 23% | cache 54m (the weekly reset time from yellow on)
+Output: <model> | 5h NN% ↻HH:MM | week NN% | ctx 231k/1000k 23% | cache 54m (the weekly reset time from yellow on),
+with `spawn gate off` or `soft stop shadow` after the week while modules of config.json takes a gate's teeth.
 """
 from __future__ import annotations
 
@@ -47,6 +48,8 @@ WEEK_MARKERS = {
     'deny': '<- week gate: agents blocked',
 }
 WEEKDAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')   # fixed English names, independent of the locale
+# The gates whose teeth modules of config.json can take: (key in modules, component of the installer, marker)
+GATE_MARKERS = (('spawn_gate', 'spawn-gate', 'spawn gate'), ('soft_stop', 'soft-stop', 'soft stop'))
 
 
 def _own_value(status_input: dict, name: str) -> float | None:
@@ -156,10 +159,33 @@ def _cache_part(status_input: dict, line_cfg: dict, now: float) -> str:
     return f' {GRAY}| {color}cache {minutes}m{RESET}'
 
 
+def gate_markers(cfg: dict, settings: str | None = None, folder: str | None = None) -> list[str]:
+    """`spawn gate off`, `soft stop shadow`: a gate installed next to this script (its entry in `settings`, the
+    settings.json of the user) that modules of config.json switches off, or sets to shadow while its entry says
+    --mode=enforce. A gate in shadow from its own entry gets none. settings.json is read only when modules sets a gate
+    to off or shadow; one that cannot be read gives none."""
+    wanted = [(key, component, label) for key, component, label in GATE_MARKERS if cfg['modules'][key] in ('off', 'shadow')]
+    if not wanted:
+        return []
+    try:
+        import _setup      # here: only a gate that modules sets needs it
+        with open(settings or os.path.join(os.path.expanduser('~'), '.claude', 'settings.json'), encoding='utf-8') as f:
+            data = json.load(f)
+        found = []
+        for key, component, label in wanted:
+            command = _setup.installed_command(data, component, folder or os.path.dirname(os.path.abspath(__file__)))
+            value = cfg['modules'][key]
+            if command is not None and (value == 'off' or _setup.option_value(command, 'mode') == 'enforce'):
+                found.append(f'{label} {value}')
+        return found
+    except Exception:      # no or a broken settings.json: no marker, the line matters more
+        return []
+
+
 def render(model: str, five: float | None, week: float | None, cfg: dict, status_input: dict | None = None,
-           now: float | None = None, resets: tuple = (None, None)) -> str:
+           now: float | None = None, resets: tuple = (None, None), markers: list[str] | tuple = ()) -> str:
     """`resets` = (resets_at of the five-hour window, of the week). The weekly one is shown only from
-    `yellow_from` on: below that it is days away and only takes room."""
+    `yellow_from` on: below that it is days away and only takes room. `markers` are those of gate_markers."""
     line_cfg, limits = cfg['statusline'], cfg['thresholds']
     now = time.time() if now is None else now
     five_reset, week_reset = resets if line_cfg['show_reset'] else (None, None)
@@ -172,6 +198,8 @@ def render(model: str, five: float | None, week: float | None, cfg: dict, status
     # The limit from which no new agents start: visible, not only agreed on.
     if line_cfg['week_stop_marker'] and week_rounded is not None and week_rounded >= limits['start_block_week']:
         line += f' {RED}{WEEK_MARKERS[limits["week_action"]]}{RESET}'
+    # A gate that config.json switched off or down to shadow: visible where the usage is
+    line += ''.join(f' {RED}{marker}{RESET}' for marker in markers)
     if status_input is not None:
         line += _context_part(_context_numbers(status_input), line_cfg)
         line += _cache_part(status_input, line_cfg, now)
@@ -235,7 +263,7 @@ def main() -> int:
             pass
         _save_context(status_input, now)
         resets = (_reset_of(source, 'five_hour'), _reset_of(source, 'seven_day'))
-        line = render(_model_name(status_input), five, week, cfg, status_input, now, resets)
+        line = render(_model_name(status_input), five, week, cfg, status_input, now, resets, gate_markers(cfg))
         # The line contains a non-ASCII dash; a machine with another locale must not swallow it.
         sys.stdout.reconfigure(encoding='utf-8')
         print(line)

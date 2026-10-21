@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -162,6 +163,26 @@ def test_show_names_the_problems_of_config_json(machine):
     assert any('modules.usage_clock' in problem for problem in shown['problems'])
 
 
+CONTROL = '\x1b]52;c;SGk=\x07\x9b2J\x00\t\r\x7f'      # OSC 52, a C1 CSI, NUL, tab, carriage return, DEL
+
+
+def test_show_answers_no_control_character_of_config_json(machine):
+    machine.install('--components', 'usage-clock')
+    machine.config.write_text(json.dumps({'modules': {f'x{CONTROL}': 1}}), encoding='utf-8')
+    code, shown = machine.cli('show', '--json')
+    problem = next(p for p in shown['problems'] if p.startswith('modules.x'))
+    assert problem == 'modules.x?]52;c;SGk=??2J????: unknown key ignored'
+    assert '\n' in modules(shown)['usage_clock']['info']      # the lines of the info stay lines
+
+
+@pytest.mark.parametrize('command', ['check-repo', 'set-repo'])
+def test_a_repository_name_with_control_characters_is_answered_without_them(machine, command):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    code, done = machine.cli(command, f'a{CONTROL}/b')
+    assert code == 1 and done['result'] == 'invalid'
+    assert not re.search('[\x00-\x09\x0b-\x1f\x7f-\x9f]', done['repo'] + done['text']) and '?]52' in done['repo']
+
+
 # --- set --------------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('key,value,stored', [('modules.usage_clock', 'false', False),
@@ -238,6 +259,19 @@ def test_set_without_config_json_changes_nothing(machine):
     assert code == 2 and 'install.py' in done['error'] and not machine.config.exists()
 
 
+def test_set_that_cannot_replace_config_json_answers_json_and_leaves_no_temporary_file(machine, monkeypatch):
+    machine.install('--components', 'usage-clock')
+    before = machine.config.read_bytes()
+
+    def refused(source, destination):
+        raise PermissionError(13, 'Access is denied', destination)
+    monkeypatch.setattr(settings_cli._setup._plat, 'replace', refused)
+    code, done = machine.cli('set', 'modules.usage_clock', 'false')
+    assert code == 1 and 'Access is denied' in done['error']
+    assert machine.config.read_bytes() == before
+    assert not list(machine.target.glob('*' + settings_cli._setup.TEMP_SUFFIX))
+
+
 def test_an_unusable_settings_json_is_an_error_for_every_command(machine):
     machine.settings.write_text('[1]', encoding='utf-8')
     for args in (['show', '--json'], ['set', 'modules.usage_clock', 'false'], ['check-repo', REPO],
@@ -303,6 +337,36 @@ def test_set_repo_after_a_private_check_sets_the_repo_and_clones_it(machine):
     assert machine.config_data()['sync']['repo'] == REPO and f"sync.repo '{OTHER}' -> '{REPO}'" in done['text']
     assert (machine.tmp / 'log' / 'sync' / 'repo' / 'README.md').read_text(encoding='utf-8') == 'sync\n'
     assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 1
+
+
+def relative_log_dir(machine, where):
+    """A log folder the hooks would resolve against the folder of each session; the tab runs in the folder of its own."""
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    machine.monkeypatch.chdir(machine.tmp)
+    if where == 'env':
+        machine.monkeypatch.setenv('CCUC_LOG_DIR', 'rel-log')
+    else:
+        machine.monkeypatch.delenv('CCUC_LOG_DIR')
+        machine.config.write_text(json.dumps(dict(machine.config_data(), log_dir='rel-log')), encoding='utf-8')
+    return machine.tree()
+
+
+@pytest.mark.parametrize('where', ['env', 'config'])
+def test_set_repo_with_a_relative_log_folder_clones_nothing(machine, where):
+    before = relative_log_dir(machine, where)
+    code, done = machine.cli('set-repo', OTHER)
+    assert code == 2 and "needs an absolute log folder, not 'rel-log'" in done['error']
+    assert machine.tree() == before and not (machine.tmp / 'rel-log').exists()
+
+
+@pytest.mark.parametrize('where', ['env', 'config'])
+def test_set_sync_mode_with_a_relative_log_folder_switches_only_off(machine, where):
+    before = relative_log_dir(machine, where)
+    for mode in ('shadow', 'on'):
+        code, done = machine.cli('set', 'sync.mode', mode)
+        assert code == 2 and 'absolute log folder' in done['error'] and machine.tree() == before
+    code, done = machine.cli('set', 'sync.mode', 'off')
+    assert code == 0 and machine.config_data()['sync']['mode'] == 'off'
 
 
 @pytest.mark.parametrize('probe,access,result', [((0, ''), 'reachable', 'public'),
@@ -457,3 +521,35 @@ def test_set_repo_whose_clone_git_cannot_check_leaves_the_reason_to_the_installe
     code, done = machine.cli('set-repo', OTHER)
     assert code == 1 and done['result'] == 'failed' and 'git did not finish in time' in done['text']
     assert machine.config_data()['sync']['repo'] == REPO
+
+
+def tab_timeout(name):
+    """A time limit of desktop/hooks/pane.tsx, in seconds."""
+    with open(os.path.join(ROOT, 'desktop', 'hooks', 'pane.tsx'), encoding='utf-8') as f:
+        return int(re.search(rf'const {name} = ([\d_]+)\n', f.read()).group(1).replace('_', '')) / 1000
+
+
+def test_the_time_limits_of_the_tab_cover_the_budgets_of_the_script():
+    """Check: the visibility probe and the check with the login. Save: both again, then with a clone there its remote
+    twice (set_repo, prepare_clone) and the probe, or without one the probe and the clone. 15 s more each for starting
+    Python and writing the answer."""
+    visibility, git, clone = _sync_git.VISIBILITY_TIMEOUT_S, settings_cli._setup.CHECK_GIT_TIMEOUT_S, \
+        settings_cli._setup.CLONE_TIMEOUT_S
+    check = 2 * visibility
+    save = check + max(git + visibility + git, visibility + clone)
+    assert (check, save) == (30, 345)
+    assert tab_timeout('SETTINGS_TIMEOUT_MS') >= check + 15 and tab_timeout('SAVE_TIMEOUT_MS') >= save + 15
+
+
+def test_the_tab_checks_a_name_and_drops_control_characters_as_the_script_does():
+    """desktop/hooks/settings.ts starts no process for a name the script would refuse, says so with the script's own
+    text, and replaces the control characters this script replaces."""
+    import _config
+    with open(os.path.join(ROOT, 'desktop', 'hooks', 'settings.ts'), encoding='utf-8') as f:
+        source = f.read()
+    repo = re.search(r"const SYNC_REPO = /\^(.*)\$/\n", source).group(1).replace('\\/', '/')
+    assert repo == _config._SYNC_REPO.pattern
+    assert re.search(r"export const INVALID_REPO = '(.*)'\n", source).group(1) == settings_cli.RESULTS['invalid']
+    control = re.compile(re.search(r"const CONTROL = /(.*)/g\n", source).group(1))
+    assert [c for c in range(0x200) if control.fullmatch(chr(c))] == [
+        c for c in range(0x200) if settings_cli.CONTROL.fullmatch(chr(c))]

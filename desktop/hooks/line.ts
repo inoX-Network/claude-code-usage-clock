@@ -5,8 +5,12 @@
 import type { SessionUsage } from 'claude-code'
 
 import type { LineConfig, WeekAction } from './config'
+import { SCRIPT, statuslineArgv, words } from './record'
 
 export const CACHE_TTL_MS = 60 * 60_000   // the one-hour cache of a Claude subscription
+// The gates whose teeth modules of config.json can take: key in modules (and name of the script), marker; as
+// GATE_MARKERS in hooks/statusline.py
+const GATES = [['spawn_gate', 'spawn gate'], ['soft_stop', 'soft stop']] as const
 // What the spawn gate does from startBlockWeek on, as WEEK_MARKERS in hooks/statusline.py
 const WEEK_MARKERS: Record<WeekAction, string> = {
   warn: '<- week gate: agents warn',
@@ -42,8 +46,47 @@ export function resetText(iso: string | undefined, now: number, withDay: boolean
   return ` ↻${day}${time}`
 }
 
+function object(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+/** A path as install.py's points_to compares it on Windows: forward slashes, any case. */
+const spelling = (path: string): string => path.split('\\').join('/').toLowerCase()
+
+/** `spawn gate off`, `soft stop shadow`, as hooks/statusline.py shows them: a gate installed next to the status line
+ *  of `settings` (its PreToolUse entry runs the script in that folder) that modules of config.json (`configText`)
+ *  switches off, or sets to shadow while the entry says --mode=enforce. A missing or broken file gives none. */
+export function gateMarkers(configText: string | undefined, settings: unknown): string[] {
+  let modules: Record<string, unknown>
+  try {
+    modules = object(object(JSON.parse(configText ?? '{}')).modules)
+  } catch {
+    return []
+  }
+  const script = statuslineArgv(object(object(settings).statusLine).command)?.find(word => word.split(/[\\/]/).pop() === SCRIPT)
+  if (script === undefined) return []
+  const folder = script.slice(0, script.length - SCRIPT.length)
+  const groups = object(object(settings).hooks).PreToolUse
+  const entries = (Array.isArray(groups) ? groups : []).flatMap(group => {
+    const hooks = object(group).hooks
+    return Array.isArray(hooks) ? hooks.map(hook => object(hook).command) : []
+  }).flatMap(command => (typeof command === 'string' ? [words(command, true) ?? []] : []))
+  const result: string[] = []
+  for (const [key, label] of GATES) {
+    const value = modules[key]
+    if (value !== 'off' && value !== 'shadow') continue
+    const path = spelling(`${folder}${key}.py`)
+    const entry = entries.find(found => found.some(word => spelling(word) === path))
+    // The last --mode counts, and only exactly enforce is enforce (_hookio.parse_args)
+    const mode = entry?.filter(word => word.startsWith('--mode=')).pop()
+    if (entry !== undefined && (value === 'off' || mode === '--mode=enforce')) result.push(`${label} ${value}`)
+  }
+  return result
+}
+
+/** `markers` are those of gateMarkers: they follow the week, as in the status line. */
 export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number | null, now: number,
-                      timeZone?: string): Part[] {
+                      timeZone?: string, markers: readonly string[] = []): Part[] {
   const result: Part[] = []
   const limit = (kind: string) => usage.rateLimits.find(r => r.kind === kind)
 
@@ -63,6 +106,7 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
       result.push({ text: WEEK_MARKERS[cfg.weekAction], color: 'error', attached: true })
     }
   }
+  for (const marker of markers) result.push({ text: marker, color: 'error', attached: true })
 
   const { tokens, window, percent } = usage.context
   if (window >= 1000) {

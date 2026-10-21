@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { DEFAULTS, LOG_DIR, expandHome, parseConfig, parseLogDir } from './config'
 import { recordContext } from './context'
-import { parts } from './line'
+import { gateMarkers, parts } from './line'
 import { registerReport, registerReportCommand } from './pane'
 import { statusInput, statuslineArgv } from './record'
 
@@ -18,6 +18,8 @@ const isContextRecorded = atom({ plugin: 'usage-clock-display', key: 'isContextR
 // Whether config.json and the log folder are read: /clear starts a session without session.start, its atoms at their
 // initials, so the first answer reads them then
 const isSettled = atom({ plugin: 'usage-clock-display', key: 'isSettled' } as const, false)
+// The gates config.json switched off or down to shadow (gateMarkers), renewed with every measurement in the app
+const markers = atom({ plugin: 'usage-clock-display', key: 'markers' } as const, [] as string[])
 
 // The engine follows $ only into functions declared at the top of the file, so the config path comes as an argument
 async function settle($: EngineInterface, configFile: string) {
@@ -29,6 +31,13 @@ async function settle($: EngineInterface, configFile: string) {
   const logEnv = await $.env.get('CCUC_LOG_DIR')
   await update($, logDir, () => expandHome(parseLogDir(text, logEnv), home))
   await update($, isSettled, () => true)
+}
+
+// config.json read again: the Settings tab, the installer or a command may switch a gate while the session runs
+async function renewMarkers($: EngineInterface, configFile: string, settings: unknown) {
+  const path = expandHome(configFile, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')))
+  const text = path === '' ? undefined : await $.fs.read(path).catch(() => undefined)
+  await update($, markers, () => gateMarkers(text, settings))
 }
 
 export const register: Register = (on, options) => {
@@ -54,6 +63,7 @@ export const register: Register = (on, options) => {
     // The terminal runs the status line itself, with the cache clock the app does not have
     if (!(await $.session.surfaces()).includes('terminal')) {
       const settings = await $.settings.read()
+      await renewMarkers($, configFile, settings)
       const line = settings.statusLine
       const argv = statuslineArgv(typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined)
       if (argv !== null) {
@@ -87,7 +97,8 @@ export const register: Register = (on, options) => {
     const measured = await read($, usage)
     if (measured === null) return next(e)
     await read($, tick)
-    const list = parts(measured, await read($, config), await read($, lastAnswer), await $.clock.now())
+    const list = parts(measured, await read($, config), await read($, lastAnswer), await $.clock.now(), undefined,
+      await read($, markers))
     if (list.length === 0) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)

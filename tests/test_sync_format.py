@@ -954,12 +954,17 @@ def test_valid_sync_values_are_taken_over(tmp_path, monkeypatch):
     ('project_aliases', {'webshop': 1}), ('project_aliases', 'shop'), ('label_salt', 5), ('keep_request_months', 0),
     ('keep_request_months', 2.5), ('keep_request_months', float('inf')), ('keep_request_months', '3'),
     ('keep_request_months', True), ('machine_name', 'a\nb'), ('machine_name', 'x' * 65), ('machine_name', 'a/b'),
-    ('machine_name', 3),
+    ('machine_name', 3), ('machine_name', ' '), ('machine_name', ' ' * 64),
 ])
 def test_a_broken_sync_value_falls_back_to_its_default_with_one_log_line(tmp_path, monkeypatch, key, value):
     cfg = load_config(tmp_path, monkeypatch, {key: value})
     assert cfg['sync'] == _config.DEFAULTS['sync']
     assert f'sync.{key}' in logged(tmp_path) and logged(tmp_path).count('\n') == 1
+
+
+@pytest.mark.parametrize('name', ['', ' a', 'Anna laptop', 'a '])
+def test_a_machine_name_with_spaces_beside_something_else_is_kept(tmp_path, monkeypatch, name):
+    assert load_config(tmp_path, monkeypatch, {'machine_name': name})['sync']['machine_name'] == name
 
 
 # --- The documentation --------------------------------------------------------------------------------------------

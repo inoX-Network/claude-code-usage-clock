@@ -70,6 +70,8 @@ declare module 'claude-code' {
       logDir: string
       isContextRecorded: boolean
       isSettled: boolean
+      /** The gates config.json switched off or down to shadow, as the status line marks them (`spawn gate off`). */
+      markers: string[]
     }
   }
 }

@@ -95,8 +95,9 @@ _MISSING = object()  # no file at all, as opposed to a file that contains `null`
 # Keys whose value is an object of free names to texts, not a section, as `section.key`.
 _MAPS = ('sync.project_aliases',)
 
-# The name of the machine in the sync repository: the characters a project label may have, at most 64.
-_MACHINE_NAME = re.compile(r'[\w .+@=-]{0,64}')
+# The name of the machine in the sync repository: the characters a project label may have, at most 64, and not only
+# spaces (empty is the default). Letters are those of Unicode: a name that looks like another one is possible.
+_MACHINE_NAME = re.compile(r'(?! +\Z)[\w .+@=-]{0,64}')
 
 # The sync repository on GitHub as `owner/name`, in the characters GitHub allows: one slash, no `..` (nothing that
 # could make another URL of it).
@@ -262,7 +263,8 @@ def load(log_problems: bool = True, path: str | None = None, problems: list[str]
         sync[key] = int(number)
     # The name goes into machine.json and the commit message: no line break, no path, no quote.
     if not _MACHINE_NAME.fullmatch(sync['machine_name']):
-        problems.append('sync.machine_name: at most 64 letters, digits, spaces and . + @ = - _, using default')
+        problems.append('sync.machine_name: at most 64 letters, digits, spaces and . + @ = - _, not only spaces, using '
+                        'default')
         sync['machine_name'] = DEFAULTS['sync']['machine_name']
     if sync['repo'] and not valid_sync_repo(sync['repo']):
         problems.append('sync.repo: must be owner/name as on GitHub, using default')

@@ -35,8 +35,9 @@ export function statusInput(usage: Pick<SessionUsage, 'context' | 'rateLimits'>,
 }
 
 /** The words of a command, split like shlex.split (which install.py reads it with); null for shell syntax outside
- *  quotes or an open quote: such a command is not run without a shell. */
-function words(command: string): string[] | null {
+ *  quotes or an open quote: such a command is not run without a shell. `plain` takes shell syntax as text, as
+ *  shlex.split does (`|| true` of a hook entry is two words then), for a command that is only read. */
+export function words(command: string, plain = false): string[] | null {
   const result: string[] = []
   let word: string | null = null
   for (let i = 0; i < command.length; i++) {
@@ -57,7 +58,7 @@ function words(command: string): string[] | null {
       }
       if (i >= command.length) return null
       word = (word ?? '') + text
-    } else if ('|&;<>()$`\n'.includes(char)) {
+    } else if (!plain && '|&;<>()$`\n'.includes(char)) {
       return null
     } else {
       if (char === '\\') {

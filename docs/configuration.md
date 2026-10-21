@@ -46,7 +46,7 @@ that key and writes one line to the log.
 | `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
 | `sync.repo` | `""` | The sync repository on GitHub as `owner/name` (a private one; the installer sets it with `--sync-repo`). Empty: no push. |
 | `sync.transport` | `https` | How the clone reaches it: `https` (`https://github.com/owner/name.git`) or `ssh` (`git@github.com:owner/name.git`). The remote of the clone must be exactly this URL. |
-| `sync.machine_name` | `""` | Name of this machine in the sync repository (letters, digits, spaces, `. + @ = - _`, at most 64). Empty: `machine-` and the first 6 characters of its id; the host name is never used. |
+| `sync.machine_name` | `""` | Name of this machine in the sync repository (letters, digits, spaces, `. + @ = - _`, at most 64, not only spaces; letters of any script count, so two names can look alike: give your machines names that differ in plain letters). Empty: `machine-` and the first 6 characters of its id; the host name is never used. |
 | `sync.interval_min` / `backoff_max_h` / `pull_timeout_s` | `30` / `6` / `5` | Minutes between two pushes (at least 10); the longest wait after failed pushes, in hours; seconds the pull before a report may take. |
 | `sync.project_labels` | `plain` | How projects are named in the sync repository, in request and day lines: `plain` (the folder name, as in the report), `alias` (from `sync.project_aliases`) or `hash` (needs `sync.label_salt`). |
 | `sync.project_aliases` | `{}` | Folder name to the name used for `alias`. A folder without an entry becomes `unbenannt-` and 8 hex characters. |
@@ -71,17 +71,25 @@ without a restart and without touching `settings.json`:
   leaves the mode to the entry, as before. `install.py --mode X` writes `X` here as well for each gate it installs,
   so that the two never disagree, and `install.py --check` says where the mode comes from (`from config` or `from
   settings.json`).
-- A hook switched off writes one log line `disabled` per session, no more.
+- A hook switched off writes one log line `disabled` per session, no more; `log_summary.py` lists them per hook with
+  the time of the last one, and `install.py --check` notes each part switched off.
 - The status line has no switch: the other parts read its measurement.
 
 The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through
 `settings_cli.py`, with the same check and backup as the installer. The installer sets them too: `install.py --off
 spawn-gate` and `--on spawn-gate` write what the tab writes, and its assistant switches an installed part off this way
 when you answer no ([Install](install.md#install)). Like every key, `modules` is only as safe as
-your guard keeps the model from writing `config.json` ([Working with a guard hook](security.md#working-with-a-guard-hook)).
+your guard keeps the model from writing `config.json`, and from running the two programs that write it themselves:
+`settings_cli.py set` and `install.py --off`, `--on` or `--mode` (and `--uninstall`, `--sync-*`). A guard that checks
+only paths and write commands does not see those; block them too, or make `config.json` read-only, which stops the tab
+as well ([Working with a guard hook](security.md#working-with-a-guard-hook)). While `modules` switches an installed gate
+off, or sets it to `shadow` while its entry says `--mode=enforce`, the status line shows `spawn gate off`,
+`soft stop shadow` and so on ([What the status line shows](statusline.md#what-the-status-line-shows)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
-folder) and `CCUC_USAGE_FILE` (the shared usage file).
+folder) and `CCUC_USAGE_FILE` (the shared usage file). Set only in the `env` of `settings.json`, `CCUC_CONFIG` reaches
+the hooks alone: the installer and the Settings tab still read and write the `config.json` next to the scripts, and
+`install.py --check` notes the difference.
 
 ### Model names, effort values and exceptions
 

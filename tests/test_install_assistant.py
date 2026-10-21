@@ -291,6 +291,41 @@ def test_without_a_terminal_it_runs_as_before_and_reads_nothing(machine, monkeyp
     assert 'statusLine' in machine.data() and 'SessionStart' not in hooks and len(hooks['PreToolUse']) == 2
 
 
+NO_QUESTIONS = ('install.py: no terminal to ask in, so the default selection is installed without a question; '
+                '--dry-run shows first what would change, --help lists the options.')
+
+
+@pytest.mark.parametrize('stdin_tty,stdout_tty', [(False, False), (False, True), (True, False)])
+def test_without_a_terminal_and_options_one_line_on_stderr_says_it_installs_without_a_question(machine, monkeypatch,
+                                                                                              capsys, stdin_tty,
+                                                                                              stdout_tty):
+    monkeypatch.setattr(sys, 'stdin', Unreadable(tty=stdin_tty))
+    screen = Screen() if stdout_tty else io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', screen)
+    code = machine.module.main([])
+    monkeypatch.setattr(sys, 'stdout', sys.__stdout__)
+    assert code == 0 and NO_QUESTIONS not in screen.getvalue()
+    assert capsys.readouterr().err == NO_QUESTIONS + '\n'
+
+
+def test_with_options_and_without_a_terminal_nothing_is_said_on_stderr(machine, capsys):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    assert capsys.readouterr().err == ''
+
+
+def test_a_failing_run_without_a_terminal_keeps_its_exit_code(machine, monkeypatch, capsys):
+    machine.settings.write_text('[1]', encoding='utf-8')
+    monkeypatch.setattr(sys, 'stdin', Unreadable(tty=False))
+    assert machine.cli()[0] == 2 and capsys.readouterr().err == NO_QUESTIONS + '\n'
+
+
+def test_the_same_as_line_is_quoted_for_the_shell_of_each_system(machine):
+    argv = ['--components', 'sync', '--sync-repo', REPO, '--sync-name=Anna laptop']
+    assert machine.module.same_as(argv, windows=True) == '--components sync --sync-repo owner/name "--sync-name=Anna laptop"'
+    assert machine.module.same_as(argv, windows=False) == "--components sync --sync-repo owner/name '--sync-name=Anna laptop'"
+    assert shlex.split(machine.module.same_as(argv, windows=True)) == argv
+
+
 def test_without_stdin_at_all_it_runs_as_before(machine, monkeypatch):
     monkeypatch.setattr(sys, 'stdin', None)
     screen = Screen()
@@ -382,7 +417,7 @@ def test_row_8_and_8a_yes_adds_the_sync_with_its_repository(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, '', 'n')
     assert asked(out)[-3:] == [SYNC, SYNC_REPO, SYNC_NAME]
     assert runs(machine.module, out) == [['--components', ALL + ',sync', '--mode', 'shadow', '--sync-repo', REPO,
-                                          '--sync-name', PLATFORM]]
+                                          '--sync-name=' + PLATFORM]]
 
 
 def test_row_8a_and_8b_are_not_asked_on_no(machine):
@@ -393,7 +428,7 @@ def test_row_8a_and_8b_are_not_asked_on_no(machine):
 def test_row_8a_asks_again_until_the_name_is_owner_name(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', 'https://github.com/owner/name', '', REPO, '', 'n')
     assert out.count(SYNC_REPO) == 3 and out.count('That is no owner/name') == 2
-    assert runs(machine.module, out)[0][-4:-2] == ['--sync-repo', REPO]
+    assert runs(machine.module, out)[0][-3:-1] == ['--sync-repo', REPO]
 
 
 def test_row_8a_three_names_that_are_no_owner_name_stop_with_exit_2(machine):
@@ -484,7 +519,7 @@ def test_the_defaults_of_a_second_run_are_what_is_installed(machine):
     assert f'{SPAWN_GATE} [Y/n]' in out and f'{SOFT_STOP} [y/N]' in out and f'{ENFORCE} [Y/n]' in out
     assert f'{AUTO_CONTINUE} [Y/n]' in out
     assert runs(machine.module, out) == [['--components', 'statusline,spawn-gate', '--mode', 'enforce',
-                                          '--week-ok-until', '2026-12-31', '--auto-continue', '--sync-mode', 'off']]
+                                          '--week-ok-until=2026-12-31', '--auto-continue', '--sync-mode', 'off']]
 
 
 def test_gates_in_two_modes_keep_them_on_enter(machine):
@@ -527,7 +562,7 @@ def test_a_sync_that_is_not_installed_gets_its_repository_checked_even_if_config
     machine.config.write_text(json.dumps(cfg), encoding='utf-8')
     code, out = machine.ask('', '', '', '', '', 'y', '', '', 'n')
     assert f'{SYNC_REPO} [anna/usage-sync] (current):' in out
-    assert runs(machine.module, out)[0][-4:] == ['--sync-repo', 'anna/usage-sync', '--sync-name', PLATFORM]
+    assert runs(machine.module, out)[0][-3:] == ['--sync-repo', 'anna/usage-sync', '--sync-name=' + PLATFORM]
 
 
 def test_no_on_an_installed_component_switches_it_off_and_names_no_uninstall(machine):
@@ -802,14 +837,14 @@ def private(monkeypatch, remote):
 
 def test_row_8b_a_typed_name_becomes_sync_name(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'Anna laptop', 'n')
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'Anna laptop']
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + 'Anna laptop']
     assert 'Sync: yes, owner/name, this computer as "Anna laptop"' in out
 
 
 def test_row_8b_asks_again_until_the_name_is_valid(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'a/b', 'x' * 65, 'laptop', 'n')
     assert out.count(SYNC_NAME) == 3 and out.count('At most 64 letters') == 2
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'laptop']
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + 'laptop']
 
 
 def test_row_8b_three_invalid_names_stop_with_exit_2(machine):
@@ -827,7 +862,7 @@ def test_the_host_name_is_never_the_default(machine, monkeypatch):
     monkeypatch.setenv('COMPUTERNAME', host)
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, '', 'n')
     assert host not in out and f'{SYNC_NAME} [{PLATFORM}]' in out
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', PLATFORM]
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + PLATFORM]
 
 
 def test_the_name_of_a_second_run_is_the_one_in_config_json_and_enter_keeps_it(machine):
@@ -838,13 +873,81 @@ def test_the_name_of_a_second_run_is_the_one_in_config_json_and_enter_keeps_it(m
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
     assert f'{SYNC_NAME} [laptop]' in out and runs(machine.module, out) == [['--components', 'sync']]
     code, out = machine.ask('', '', '', '', '', '', '', 'desk', 'n')
-    assert runs(machine.module, out) == [['--components', 'sync', '--sync-name', 'desk']]
+    assert runs(machine.module, out) == [['--components', 'sync', '--sync-name=desk']]
+
+
+def web_export_argv(machine):
+    """The run of the installer that tools/web_export.py starts in Claude Code on the web, with its name."""
+    spec = importlib.util.spec_from_file_location('web_export_name_under_test', os.path.join(ROOT, 'tools', 'web_export.py'))
+    web = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(web)
+    return ['--settings', str(machine.settings), '--target', str(machine.target), '--components', 'sync',
+            '--sync-repo', REPO, '--sync-mode', 'shadow', '--sync-name', web.MACHINE_NAME]
+
+
+@pytest.mark.parametrize('remote', [None, 'false', '1'])
+def test_the_name_of_claude_code_on_the_web_is_refused_on_a_computer(machine, monkeypatch, remote):
+    if remote is None:
+        monkeypatch.delenv('CLAUDE_CODE_REMOTE', raising=False)
+    else:
+        monkeypatch.setenv('CLAUDE_CODE_REMOTE', remote)
+    before, screen = machine.files(), io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', screen)
+    with pytest.raises(SystemExit) as stop:
+        machine.module.main(web_export_argv(machine))
+    assert stop.value.code == 2 and 'claude-web is the name of Claude Code on the web' in screen.getvalue()
+    assert machine.files() == before
+
+
+def test_the_installer_run_of_web_export_names_its_chats_claude_web(machine, monkeypatch, private):
+    monkeypatch.setenv('CLAUDE_CODE_REMOTE', 'true')
+    code, out = machine.cli(*web_export_argv(machine))
+    assert code == 0, out
+    assert machine.config_data()['sync']['machine_name'] == sync_format.WEB_NAME
+
+
+def test_the_assistant_asks_again_at_the_name_of_claude_code_on_the_web(machine, monkeypatch):
+    monkeypatch.delenv('CLAUDE_CODE_REMOTE', raising=False)
+    code, out = machine.ask('n', 'n', 'n', 'n', 'n', 'y', REPO, sync_format.WEB_NAME, 'laptop', 'n')
+    assert out.count(SYNC_NAME) == 2 and 'claude-web is the name of Claude Code on the web' in out
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=laptop']
+
+
+@pytest.mark.parametrize('name', ['-pc', '--sync-mode=on', '-'])
+def test_a_name_that_starts_with_a_dash_is_installed_as_typed(machine, private, name):
+    code, out = machine.ask('n', 'n', 'n', 'n', 'n', 'y', REPO, name, '')
+    assert code == 0, out
+    assert runs(machine.module, out) == [['--components', 'sync', '--sync-repo', REPO, f'--sync-name={name}']]
+    assert machine.config_data()['sync']['machine_name'] == name and machine.config_data()['sync']['mode'] == 'shadow'
+
+
+@pytest.mark.parametrize('kept', ['soon', '--sync-mode=on', '2026-02-30', ''])
+def test_a_weekly_approval_that_is_no_date_is_left_out_with_a_line(machine, kept):
+    assert machine.cli('--components', 'spawn-gate')[0] == 0
+    data = machine.data()
+    entry = data['hooks']['PreToolUse'][0]['hooks'][0]
+    entry['command'] = entry['command'].replace('--mode=shadow', f'--mode=shadow --week-ok-until={kept}')
+    machine.settings.write_text(json.dumps(data), encoding='utf-8')
+    code, out = machine.ask('n', 'n', '', 'n', '', '', '', '')
+    assert code == 0, out
+    assert runs(machine.module, out) == [['--components', 'spawn-gate', '--mode', 'shadow', '--sync-mode', 'off']]
+    assert ('  Weekly approval: --week-ok-until in settings.json is no date YYYY-MM-DD; this run leaves it out'
+            in out) == bool(kept)
+    assert 'week-ok-until' not in machine.data()['hooks']['PreToolUse'][0]['hooks'][0]['command']
+
+
+def test_a_weekly_approval_that_is_a_date_is_kept_as_one_word(machine):
+    assert machine.cli('--components', 'spawn-gate', '--week-ok-until', '2026-12-31')[0] == 0
+    code, out = machine.ask('n', 'n', '', 'n', '', '', '', '')
+    assert code == 0 and 'Weekly approval' not in out, out
+    assert runs(machine.module, out) == [['--components', 'spawn-gate', '--mode', 'shadow',
+                                          '--week-ok-until=2026-12-31', '--sync-mode', 'off']]
 
 
 def test_the_sync_with_a_name_is_byte_for_byte_its_command_line(machine, private):
     out, assistant = run_and_restart(machine, ['n', 'n', 'n', 'n', 'n', 'y', REPO, 'laptop', ''])
     commands = runs(machine.module, out)
-    assert commands == [['--components', 'sync', '--sync-repo', REPO, '--sync-name', 'laptop']]
+    assert commands == [['--components', 'sync', '--sync-repo', REPO, '--sync-name=laptop']]
     for argv in commands:
         assert machine.cli(*argv)[0] == 0
     assert (machine.settings.read_bytes(), machine.config.read_bytes()) == assistant
@@ -871,7 +974,7 @@ def test_sync_name_in_a_dry_run_writes_nothing(machine):
     assert code == 0 and "sync.machine_name '' -> 'laptop' would be written" in out and machine.files() == before
 
 
-@pytest.mark.parametrize('bad', ['a/b', 'x' * 65, 'tab\there', 'line\n', 'c:d'])
+@pytest.mark.parametrize('bad', ['a/b', 'x' * 65, 'tab\there', 'line\n', 'c:d', ' ', '   '])
 def test_an_invalid_sync_name_is_exit_2_without_a_change(machine, monkeypatch, bad):
     machine.install_sync_entries()
     before = machine.files()
@@ -1088,7 +1191,7 @@ def test_i_is_no_info_at_the_repository_but_an_answer_that_is_no_owner_name(mach
 
 def test_i_at_the_name_is_a_name(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'i', 'n')
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'i']
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + 'i']
     assert info_lines(machine.module, 'name')[0] not in out
 
 
@@ -1128,7 +1231,7 @@ def test_question_mark_help_and_help_option_print_the_info_at_the_repository(mac
     code, out = machine.ask('', '', '', '', '', '', '', 'y', word, REPO, '', 'n')
     assert code == 0 and machine.left == [], out
     assert '\n'.join(info_lines(machine.module, 'repo')) in out and 'That is no owner/name' not in out
-    assert ['--sync-repo', REPO] == runs(machine.module, out)[0][-4:-2]
+    assert ['--sync-repo', REPO] == runs(machine.module, out)[0][-3:-1]
 
 
 def test_h_is_no_info_at_the_repository_but_an_answer_that_is_no_owner_name(machine):
@@ -1143,20 +1246,20 @@ def test_question_mark_help_and_help_option_print_the_info_at_the_name(machine, 
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, word, 'laptop', 'n')
     assert code == 0 and machine.left == [], out
     assert '\n'.join(info_lines(machine.module, 'name')) in out and '\nAt most 64' not in out
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'laptop']
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + 'laptop']
 
 
 @pytest.mark.parametrize('word', ['h', 'H'])
 def test_h_at_the_name_is_a_name(machine, word):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, word, 'n')
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', word]
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + word]
     assert info_lines(machine.module, 'name')[0] not in out
 
 
 def test_a_name_that_is_not_allowed_names_the_way_to_the_info(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'a/b', 'laptop', 'n')
     assert code == 0 and out.count(NO_NAME) == 1
-    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'laptop']
+    assert runs(machine.module, out)[0][-1:] == ['--sync-name=' + 'laptop']
 
 
 def test_enter_keeps_a_current_name_that_is_an_info_word(machine):
@@ -1338,12 +1441,12 @@ def test_v8_a_gate_switched_on_again_takes_the_mode_of_question_6_as_a_new_gate(
 
 def test_v8_only_switching_off_installs_nothing_and_copies_no_file(machine):
     assert machine.cli('--components', 'usage-clock')[0] == 0
-    hooks = {k: v for k, v in machine.files().items() if not k.endswith('config.json')}
+    hooks = {k: v for k, v in machine.files().items() if 'config.json' not in k}      # with its backups and lock
     code, out = machine.ask('', 'n', '', '', '', '', '')
     assert code == 0, out
     assert runs(machine.module, out) == [['--off', 'usage-clock', '--sync-mode', 'off']]
     assert modules(machine)['usage_clock'] == 'false' and 'Smoke test' not in out and 'Files:' not in out
-    assert {k: v for k, v in machine.files().items() if not k.endswith('config.json') and '.bak-' not in k} == hooks
+    assert {k: v for k, v in machine.files().items() if 'config.json' not in k} == hooks
 
 
 def test_v8_the_context_reporter_is_not_asked_without_the_status_line_and_stays_as_it_is(machine):

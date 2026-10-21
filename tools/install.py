@@ -53,7 +53,8 @@ purpose (the assistant's answer no); with the hooks of the sync installed it is 
 Run in a terminal without any option, the installer asks first (the assistant): one y/n question per part, the defaults
 being what is installed, then a summary with the equivalent command line, which it runs through main() as if it had
 been typed. No to an installed part switches it off (--off, the sync --sync-mode off) and removes nothing. Any option,
-or a stdin or stdout that is no terminal, and it asks nothing.
+or a stdin or stdout that is no terminal, and it asks nothing; without any option it then says on stderr that it installs
+the default selection without a question. The summary's command line is quoted for cmd and PowerShell on Windows.
 
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
@@ -93,6 +94,7 @@ WINDOWS_MODULE = os.path.join(ROOT, 'windows', 'cli', '_win.py')
 sys.path.append(SOURCE_HOOKS)
 import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
 import _config  # noqa: E402  --check reads config.json and the usage file as the hooks do
+import _hookio  # noqa: E402  the date of --week-ok-until as the spawn gate reads it
 import _usage  # noqa: E402
 import _sync_core  # noqa: E402  the sync: lock and state; the clone, visibility probe and size check of the push
 import _sync_git  # noqa: E402
@@ -203,6 +205,16 @@ def names_of(value: str, option: str, known: tuple[str, ...]) -> tuple[str, ...]
     return tuple(dict.fromkeys(names))
 
 
+WEB_NAME_TAKEN = (f'{sync_format.WEB_NAME} is the name of Claude Code on the web (tools/web_export.py), which the report '
+                  'does not warn about; give this computer another one.')
+
+
+def web_name_elsewhere(name: str) -> bool:
+    """The name of the chats of Claude Code on the web, outside of it: a computer of that name would get none of the
+    warnings of the report."""
+    return name == sync_format.WEB_NAME and os.environ.get('CLAUDE_CODE_REMOTE') != 'true'
+
+
 def validate_args(args: argparse.Namespace) -> None:
     args.on = () if args.on is None else names_of(args.on, '--on', SWITCHES)
     args.off = () if args.off is None else names_of(args.off, '--off', SWITCHES)
@@ -222,7 +234,9 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
     if args.sync_name is not None and not _config._MACHINE_NAME.fullmatch(args.sync_name):
-        raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _.')
+        raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _, not only spaces.')
+    if args.sync_name is not None and web_name_elsewhere(args.sync_name):
+        raise UsageError(f'--sync-name: {WEB_NAME_TAKEN}')
     if ((args.sync_repo is not None or args.sync_name is not None or args.sync_mode not in (None, 'off'))
             and 'sync' not in args.components):
         raise UsageError('--sync-repo, --sync-name and --sync-mode shadow|on need the component sync (for example '
@@ -651,11 +665,7 @@ def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
     old_repo, old_mode = section.get('repo', ''), section.get('mode', 'off')
     mode, source, write_mode = resolve_sync_mode(data, args, target, old_mode)
     cfg = effective_config(path)
-    given = os.path.expanduser(os.environ.get('CCUC_LOG_DIR') or cfg['log_dir'])
-    if not os.path.isabs(given):
-        raise UsageError(f'The component sync needs an absolute log folder, not {given!r} (log_dir or CCUC_LOG_DIR): '
-                         'the hooks would resolve it against the folder of each session, so no push would find the '
-                         'clone.')
+    log_dir = _setup.sync_log_dir(cfg)
     repo = args.sync_repo or cfg['sync']['repo']
     if not repo:
         raise UsageError(f'The component sync needs --sync-repo owner/name: sync.repo is not set in {path}.')
@@ -671,7 +681,7 @@ def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
         updates['machine_name'] = args.sync_name
         changes.append(f'sync.machine_name {old_name!r} -> {args.sync_name!r}')
     return SyncPlan(path, os.path.exists(path), updates, changes, mode, source, repo, cfg['sync']['transport'],
-                    cfg['sync']['max_clone_mb'], log_dir_of(cfg))
+                    cfg['sync']['max_clone_mb'], log_dir)
 
 
 def plan_sync_off(target: str) -> SyncPlan | None:
@@ -759,10 +769,33 @@ def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
     return None
 
 
+# What a part switched off in modules lets through, by component
+LETS_THROUGH = {'spawn-gate': 'every start', 'soft-stop': 'every call'}
+
+
+def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
+    """A NOTE for an installed part that modules of config.json switches off, or whose gate it sets to shadow while
+    the entry says enforce (as the status line marks it); a gate in shadow from its own entry gets none."""
+    if component not in SWITCHES:      # the sync has its mode in sync.mode
+        return []
+    key, script = component.replace('-', '_'), SCRIPTS[component]
+    value = cfg['modules'][key]
+    again = f'Switch it on with install.py --on {component} or in the Settings tab of /report.'
+    if value is False:
+        return [('NOTE', f'{script}: switched off in config.json (modules.{key} false), it adds nothing. {again}')]
+    if value == 'off':
+        return [('NOTE', f'{script}: switched off in config.json (modules.{key} "off"), it lets '
+                         f'{LETS_THROUGH[component]} through. {again}')]
+    if value == 'shadow' and option_value(command, 'mode') == 'enforce':
+        return [('NOTE', f'{script}: runs in shadow mode from config.json (modules.{key} "shadow") although its entry '
+                         'has --mode=enforce: it blocks nothing.')]
+    return []
+
+
 def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) -> list[tuple[str, str]]:
     results = []
     for component in (c for c in args.components if c in HOOKS):
-        script = SCRIPTS[component]
+        script, installed = SCRIPTS[component], None
         for event, matcher in HOOKS[component]:
             found = _find_entry(data, event, os.path.join(target, script))
             if found is None:
@@ -779,6 +812,9 @@ def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) 
                 entry_mode = 'enforce' if option_value(entry.get('command'), 'mode') == 'enforce' else 'shadow'
                 details.append(f'mode {configured} from config' if configured else f'mode {entry_mode} from settings.json')
             results.append(('OK', f'{event}: {script}' + (f' ({", ".join(details)})' if details else '')))
+            installed = entry
+        if installed is not None:
+            results += switched_off(component, cfg, installed.get('command'))
     if 'statusline' in args.components:
         current = data.get('statusLine')
         if isinstance(current, dict) and points_to(current.get('command'), os.path.join(target, SCRIPTS['statusline'])):
@@ -822,6 +858,17 @@ def check_config(path: str) -> tuple[list[tuple[str, str]], dict]:
     if problems:
         return [('FIX', f'config.json: {"; ".join(problems)}')], cfg
     return [('OK', f'config.json: {path}')], cfg
+
+
+def check_env_config(env, path: str) -> list[tuple[str, str]]:
+    """CCUC_CONFIG in the env of settings.json reaches the hooks only: this installer and the Settings tab, which do not
+    run under Claude Code's env, read and write `path`."""
+    hooks_config = env.get('CCUC_CONFIG') if isinstance(env, dict) else None
+    if not isinstance(hooks_config, str) or not hooks_config or os.path.abspath(hooks_config) == os.path.abspath(path):
+        return []
+    return [('NOTE', f'config.json: the env of settings.json sets CCUC_CONFIG to {hooks_config[:200]!r}, so the hooks read '
+                     f'that file, but this installer and the Settings tab read and write {path}. Set CCUC_CONFIG for '
+                     'them as well, or remove it from the env of settings.json.')]
 
 
 def check_usage(cfg: dict) -> list[tuple[str, str]]:
@@ -968,6 +1015,7 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     results += check_entries(data, args, target, cfg)
     results += check_files(target)
     results += config_results
+    results += check_env_config(data.get('env'), config_file(target))
     shell = _plat.hook_shell(data.get('env'))
     if shell is None:
         results.append(('FIX', 'Git Bash: not found. Claude Code runs the hooks in Git Bash on Windows; install Git for '
@@ -1138,6 +1186,10 @@ def ask_name(default: str, origin: str) -> str:
             print('\n'.join(INFO['name']))
             continue
         answer = typed or default
+        if typed and web_name_elsewhere(typed):
+            failed += 1
+            print(WEB_NAME_TAKEN)
+            continue
         if _config._MACHINE_NAME.fullmatch(answer):
             return answer
         failed += 1
@@ -1234,6 +1286,10 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
     if 'statusline' in state.components and 'statusline' not in chosen:
         summary.append('  Stays installed: statusline. This assistant removes nothing; to remove it: '
                        f'{PROGRAM} --uninstall --components statusline')
+    # The weekly approval of the installed spawn gate, read from settings.json: kept only if it is a date
+    approval = _hookio.parse_date(state.week_ok_until) is not None
+    if 'spawn-gate' in chosen and state.week_ok_until and not approval:
+        summary.append('  Weekly approval: --week-ok-until in settings.json is no date YYYY-MM-DD; this run leaves it out')
     components = chosen + (['sync'] if sync_off else [])     # --sync-mode off with the component keeps its hooks
     if not (components or on or off):
         return None, summary
@@ -1242,8 +1298,8 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
         argv.append('--replace-statusline')
     if mode:
         argv += ['--mode', mode]
-    if 'spawn-gate' in chosen and state.week_ok_until:
-        argv += ['--week-ok-until', state.week_ok_until]
+    if 'spawn-gate' in chosen and approval:
+        argv.append(f'--week-ok-until={state.week_ok_until}')      # one word: a value never reads as an option
     if auto:
         argv.append('--auto-continue')
     if on:
@@ -1253,12 +1309,18 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
     if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
         argv += ['--sync-repo', repo]
     if repo and name != state.machine_name:
-        argv += ['--sync-name', name]
+        argv.append(f'--sync-name={name}')      # one word: a name may start with a dash
     if sync_off or not repo and not installed_sync:
         argv += ['--sync-mode', 'off']
     elif repo and installed_sync and state.sync_off:
         argv += ['--sync-mode', 'shadow']      # the safe start, as on a first install
     return argv, summary
+
+
+def same_as(argv: list[str], windows: bool = os.name == 'nt') -> str:
+    """The options of the equivalent command line, quoted for the shell PROGRAM is spelt for: cmd and PowerShell on
+    Windows (double quotes), a POSIX shell elsewhere."""
+    return subprocess.list2cmdline(argv) if windows else shlex.join(argv)
 
 
 def assistant() -> int:
@@ -1283,7 +1345,7 @@ def assistant() -> int:
         if argv is None:
             print('Nothing selected, nothing to install.')
             return 0
-        print(f'Same as: {PROGRAM} {shlex.join(argv)}')
+        print(f'Same as: {PROGRAM} {same_as(argv)}')
         if not ask(None, 'Install now?', True):
             print('Nothing changed.')
             return 0
@@ -1432,6 +1494,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv and interactive():
         return assistant()
+    if not argv:      # a script, or a terminal without a console (mintty without winpty): on stderr, the exit code stays
+        print('install.py: no terminal to ask in, so the default selection is installed without a question; --dry-run '
+              'shows first what would change, --help lists the options.', file=sys.stderr)
     args = parse_args(argv)
     try:
         return run(args)

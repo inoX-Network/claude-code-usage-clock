@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { DEFAULTS } from './config'
-import { CACHE_TTL_MS, parts, resetText, rounded } from './line'
+import { CACHE_TTL_MS, gateMarkers, parts, resetText, rounded } from './line'
 
 const NOW = Date.parse('2026-10-17T06:00:00Z')
 const ZONE = 'Europe/Berlin'
@@ -109,4 +109,54 @@ test('the weekly reset names its weekday only when it is not later today', () =>
 test('other windows than five hours and a week are left out', () => {
   expect(parts({ startedAt: 0, context: { window: 0 }, rateLimits: [{ kind: 'spend_limit', percentUsed: 99 }] },
                DEFAULTS, null, NOW, ZONE)).toEqual([])
+})
+
+// --- A gate that modules of config.json takes the teeth from, as hooks/statusline.py marks it ---------------------
+
+const FOLDER = 'C:/Users/you/.claude/hooks/usage-clock'
+const gateSettings = (...entries: [string, string][]) => ({
+  statusLine: { type: 'command', command: `"C:/Python314/python.exe" -X utf8 "${FOLDER}/statusline.py"` },
+  hooks: {
+    PreToolUse: [{
+      matcher: '*',
+      hooks: entries.map(([script, mode]) => ({ type: 'command', command: `"C:/Python314/python.exe" -X utf8 "${FOLDER}/${script}" --mode=${mode} || true` })),
+    }],
+  },
+})
+const gates = (modules: Record<string, string>) => JSON.stringify({ modules })
+
+test('a marker names an installed gate that modules switches off or down to shadow', () => {
+  const cases: [string, string, string[]][] = [
+    ['off', 'enforce', ['spawn gate off']], ['off', 'shadow', ['spawn gate off']], ['shadow', 'enforce', ['spawn gate shadow']],
+    ['shadow', 'shadow', []], ['', 'enforce', []], ['enforce', 'shadow', []], ['enforce', 'enforce', []],
+  ]
+  for (const [value, mode, expected] of cases) {
+    expect(gateMarkers(gates({ spawn_gate: value }), gateSettings(['spawn_gate.py', mode]))).toEqual(expected)
+  }
+})
+
+test('both gates get a marker each, in a fixed order', () => {
+  const settings = gateSettings(['soft_stop.py', 'enforce'], ['spawn_gate.py', 'enforce'])
+  expect(gateMarkers(gates({ spawn_gate: 'shadow', soft_stop: 'off' }), settings)).toEqual(['spawn gate shadow', 'soft stop off'])
+})
+
+test('a gate installed elsewhere, or a missing or broken file, gives no marker', () => {
+  const elsewhere = { ...gateSettings(), hooks: { PreToolUse: [{ hooks: [{ command: 'python3 /other/spawn_gate.py --mode=enforce || true' }] }] } }
+  expect(gateMarkers(gates({ spawn_gate: 'off' }), elsewhere)).toEqual([])
+  expect(gateMarkers(undefined, gateSettings(['spawn_gate.py', 'enforce']))).toEqual([])
+  expect(gateMarkers('{broken', gateSettings(['spawn_gate.py', 'enforce']))).toEqual([])
+  expect(gateMarkers(gates({ spawn_gate: 'off' }), { hooks: { PreToolUse: 'x' } })).toEqual([])
+  expect(gateMarkers(gates({ spawn_gate: 'off' }), null)).toEqual([])
+})
+
+test('the path of the entry counts in any spelling of Windows, and the last --mode', () => {
+  const settings = { ...gateSettings(), hooks: { PreToolUse: [{ hooks: [{ command: `python 'c:\\users\\you\\.claude\\hooks\\usage-clock\\spawn_gate.py' --mode=enforce --mode=shadow` }] }] } }
+  expect(gateMarkers(gates({ spawn_gate: 'off' }), settings)).toEqual(['spawn gate off'])
+  expect(gateMarkers(gates({ spawn_gate: 'shadow' }), settings)).toEqual([])
+})
+
+test('the markers follow the week in red, attached to it', () => {
+  const texts = parts(usage, DEFAULTS, null, NOW, ZONE, ['spawn gate off']).map(part => [part.text, part.color, part.attached])
+  expect(texts.slice(1, 4)).toEqual([['week 76% ↻Mon 15:00', 'error', undefined], ['<- week gate: agents warn', 'error', true],
+    ['spawn gate off', 'error', true]])
 })
