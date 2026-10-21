@@ -110,8 +110,8 @@ INFO = {
         f'  More: {DOCS}configuration.md#configuration'),
 }
 
-# What the Settings tab does differently from the assistant, one sentence per part (the tab switches config.json; the
-# assistant writes the hook entries)
+# What the Settings tab does differently from the assistant, one sentence per part (the tab only switches config.json;
+# the assistant also writes the hook entries)
 TAB = {
     'statusline': 'The status line cannot be switched off here: the other parts read its measurement.',
     'usage-clock': 'Here the switch is modules.usage_clock in config.json: off, the hook stays and adds nothing.',
