@@ -79,7 +79,12 @@ The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `
 `settings_cli.py`, with the same check and backup as the installer. The installer sets them too: `install.py --off
 spawn-gate` and `--on spawn-gate` write what the tab writes, and its assistant switches an installed part off this way
 when you answer no ([Install](install.md#install)). Like every key, `modules` is only as safe as
-your guard keeps the model from writing `config.json` ([Working with a guard hook](security.md#working-with-a-guard-hook)).
+your guard keeps the model from writing `config.json`, and from running the two programs that write it themselves:
+`settings_cli.py set` and `install.py --off`, `--on` or `--mode` (and `--uninstall`, `--sync-*`). A guard that checks
+only paths and write commands does not see those; block them too, or make `config.json` read-only, which stops the tab
+as well ([Working with a guard hook](security.md#working-with-a-guard-hook)). While `modules` switches an installed gate
+off, or sets it to `shadow` while its entry says `--mode=enforce`, the status line shows `spawn gate off`,
+`soft stop shadow` and so on ([What the status line shows](statusline.md#what-the-status-line-shows)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
 folder) and `CCUC_USAGE_FILE` (the shared usage file). Set only in the `env` of `settings.json`, `CCUC_CONFIG` reaches

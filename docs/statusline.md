@@ -109,6 +109,11 @@ spawn gate now starts no new agent blocks until the window resets at 22:40.
   (`start_block_week`) a marker names what the spawn gate now does, by `thresholds.week_action`:
   `<- week gate: agents warn`, `<- week gate: agents ask` or `<- week gate: agents blocked`. The weekly limit itself
   is still ahead then.
+- `spawn gate off` or `soft stop off` (red, after the week) says that `modules` in `config.json` switched an installed
+  gate off; `spawn gate shadow` or `soft stop shadow` that it sets the gate to shadow while its hook entry says
+  `--mode=enforce`, so the gate blocks nothing. A gate in shadow from its own entry gets no marker
+  ([modules](configuration.md#configuration)). Only while `modules` sets a gate to `off` or `shadow` does the status
+  line read `~/.claude/settings.json`, to see that the gate is installed next to it and the mode of its entry.
 - `↻14:00` is when the window resets, in your local time. The weekly one carries the weekday (`↻Mon 09:00`), except
   when it resets later today, and appears only from yellow on; below that it is days away. A missing or past reset
   time is left out (`statusline.show_reset`).
