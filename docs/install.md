@@ -13,7 +13,7 @@ python3 tools/install.py               # asks y/n for each part, then installs o
 In a terminal and without any option the installer asks first, one question per part, each with a line that explains
 it. Enter takes the answer in brackets: on a first install the five parts with the gates in shadow mode, no
 auto-continue and no sync; on a second run what is installed now (the components in `settings.json`, the mode of the
-gates, `sync.mode` and `sync.repo` in `config.json`), so that Enter alone changes nothing. Then it shows the parts in
+gates, `sync.mode`, `sync.repo` and `sync.machine_name` in `config.json`), so that Enter alone changes nothing. Then it shows the parts in
 plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).
@@ -26,13 +26,13 @@ else asks again, three times, then it stops without a change (exit code 2, as on
 | Spawn gate, soft stop | `spawn-gate`, `soft-stop` |
 | Let the gates block for real (asked only with a gate) | `--mode enforce`, no: `--mode shadow`; two gates in different modes keep theirs on Enter |
 | Continue automatically after a usage limit resets | `--auto-continue` |
-| Sync, then the name of your private repository | `sync` with `--sync-repo owner/name` (checked as the option checks it). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed, a second run `--uninstall --components sync` |
+| Sync, then the name of your private repository and the name of this computer in the report | `sync` with `--sync-repo owner/name` (checked as the option checks it) and `--sync-name NAME` (default: the platform, `linux`, `darwin` or `windows`; on a second run the name in `config.json`; never the host name). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed, a second run `--uninstall --components sync` |
 
 The assistant removes nothing else: a part that is installed and answered with no stays, and the summary names the
 `--uninstall --components` command for it. An installed `--week-ok-until` is passed on, so that Enter keeps it. It
 does not ask for the thresholds, `--week-ok-until`, `--settings`, `--target` or the transport `ssh`: they stay options
-and [configuration](configuration.md#configuration). Any option, or a stdin or stdout that is no terminal (a script or
-the CI), and it asks nothing: the options alone decide. `python3 tools/install.py --dry-run`
+and [configuration](configuration.md#configuration). Any option, or a stdin or stdout that is no terminal (a script, the
+CI or a `!` command in Claude Code), and it asks nothing: the options alone decide. `python3 tools/install.py --dry-run`
 shows what would change, and `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop` installs the
 five parts of the default selection without a question.
 
@@ -54,9 +54,10 @@ when you leave them out:
 - `--week-ok-until`: it is **not** kept. A run without it removes an earlier approval, and the output says
   so. Pass it again to keep it.
 - `--sync-mode`: the mode of an installed sync is kept (`shadow` on a first install of the sync). The output line
-  `Sync mode:` says which mode applies and where it comes from. Unlike the gates, the sync keeps its mode and its
-  repository in `config.json` (`sync.mode`, `sync.repo`): these two keys are the only ones the installer writes
-  there, with a backup, and only when they change.
+  `Sync mode:` says which mode applies and where it comes from. Unlike the gates, the sync keeps its mode, its
+  repository and the name of the machine in `config.json` (`sync.mode`, `sync.repo`, `sync.machine_name`, see
+  `--sync-name`): these three keys are the only ones the installer writes there, with a backup, and only when they
+  change.
 
 The sync is not part of the default selection: it is installed only with `--components ...,sync`. Without
 `--components`, `--uninstall` removes its entries too and sets `sync.mode` to `off` (the status line pushes from the
@@ -74,6 +75,7 @@ Options:
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
 | `--sync-repo OWNER/NAME` | The private GitHub repository of the sync: sets `sync.repo`, checks once that it cannot be read without logging in (public or unclear: exit code 1, no hook added and `settings.json` and `config.json` unchanged) and clones it to `<log_dir>/sync/repo/`. Run again, it lifts the block after a push found the repository public. Needs the component `sync`. See [the sync](sync.md#install). |
+| `--sync-name NAME` | The name of this machine in the report of every machine: sets `sync.machine_name` in `config.json` (at most 64 letters, digits, spaces and `. + @ = - _`; anything else: exit code 2, nothing changed). Without it the name stays as it is; empty gives `machine-` and the start of the machine id, the host name is never used. Needs the component `sync`. |
 | `--sync-mode off\|shadow\|on` | Mode of the sync, in `config.json`. Without it an installed sync keeps its mode; a first install starts in `shadow` (commits locally, pushes nothing). `shadow` and `on` need the component `sync`; `off` without it only writes `sync.mode` `off` into `config.json` (with the hooks of the sync installed it is an argument error: `--uninstall --components sync` removes them). |
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |

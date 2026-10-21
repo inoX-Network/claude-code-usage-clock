@@ -281,7 +281,8 @@ python3 tools/install.py --components sync --sync-repo anna/usage-sync
 ```
 
 (On Windows: `python tools\install.py --components sync --sync-repo anna/usage-sync`.) Or run the installer without
-options and answer `y` at the sync question, then give the name there: it does the same. The installer first checks that
+options and answer `y` at the sync question, then give the name of the repository and a name for this computer
+(Enter takes `linux`, `darwin` or `windows`; your computer's own name is never used): it does the same. The installer first checks that
 nobody can read the repository without logging in. If it is public, it stops and changes nothing in your settings. Then it starts the
 sync in shadow mode: it prepares everything on this computer but sends nothing yet. Do the same on your other
 computers, and switch it on everywhere once you are happy:

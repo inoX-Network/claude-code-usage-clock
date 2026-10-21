@@ -50,7 +50,7 @@ parts.
   `_plat.is_folder`, which also refuses Windows junctions.
 - The log, the history and the report never hold prompt text, commands or file contents.
 - The installer changes only its own entries in `settings.json`. It creates a missing `config.json` from
-  `config.example.json`; in an existing one it changes only `sync.mode` and `sync.repo`.
+  `config.example.json`; in an existing one it changes only `sync.mode`, `sync.repo` and `sync.machine_name`.
 - The sync ([docs/sync.md](docs/sync.md)): a repository that is public, or whose visibility is unclear, gets nothing.
   Nothing exported is thrown away (no reset, clean or stash of the own folder), nothing is merged (rebase only), and
   no attribute of the repository applies. Every git call goes through `Clone.git`, `_sync_core.run_command` or

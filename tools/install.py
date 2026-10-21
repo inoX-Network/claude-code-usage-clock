@@ -30,13 +30,15 @@ A first installation starts in --mode shadow: nothing is blocked, every decision
 installed (the output says where the mode comes from); only --mode changes it. --week-ok-until belongs to the
 spawn gate command as well; a run without it removes an earlier value and says so.
 
-The sync (0034-SYNC-INSTALL) is installed only when --components names it. Its mode and repository live in config.json
-(sync.mode, sync.repo), so these two keys are the only ones the installer ever writes there, with a backup, and only
-when they change. --sync-repo owner/name sets sync.repo and, under the sync lock and before anything is written,
-checks once that the repository cannot be read without logging in (public or unclear: exit 1, nothing installed) and
-clones it into <log_dir>/sync/repo (no checkout before the size check of the push, a clone of another repository there
-is never touched). Run again, it lifts the lasting block after `visibility`. --sync-mode off|shadow|on sets sync.mode;
-without it the mode of an installed sync is kept and a first installation starts in shadow (the output line
+The sync (0034-SYNC-INSTALL) is installed only when --components names it. Its mode, repository and machine name live
+in config.json (sync.mode, sync.repo, sync.machine_name), so these three keys are the only ones the installer ever
+writes there, with a backup, and only when they change. --sync-name NAME sets sync.machine_name, the name of this
+machine in the report (checked as config.json checks it; the host name is never used). --sync-repo owner/name sets
+sync.repo and, under the sync lock and before anything is written, checks once that the repository cannot be read
+without logging in (public or unclear: exit 1, nothing installed) and clones it into <log_dir>/sync/repo (no checkout
+before the size check of the push, a clone of another repository there is never touched). Run again, it lifts the
+lasting block after `visibility`. --sync-mode off|shadow|on sets sync.mode; without it the mode of an installed sync is
+kept and a first installation starts in shadow (the output line
 `Sync mode:` says which and where it comes from). Without --components, --uninstall removes the sync entries too and
 sets sync.mode to off (the status line pushes from the mode alone; the clone and the data in the remote stay), and
 --check checks the sync if its entries are installed; a sync.mode that is not off without them is a FIX.
@@ -90,6 +92,7 @@ import _config  # noqa: E402  --check reads config.json and the usage file as th
 import _usage  # noqa: E402
 import _sync_core  # noqa: E402  the sync: lock and state; the clone, visibility probe and size check of the push
 import _sync_git  # noqa: E402
+import sync_format  # noqa: E402  the platform name, the default name of this machine the assistant offers
 EXAMPLE_CONFIG = os.path.join(ROOT, 'config.example.json')
 
 TIMEOUT_S = 5
@@ -168,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--sync-repo', metavar='OWNER/NAME',
                         help='sync: the private GitHub repository to sync into; checks that it is not public and '
                              'clones it')
+    parser.add_argument('--sync-name', metavar='NAME',
+                        help='sync: the name of this machine in the report (sync.machine_name; at most 64 letters, '
+                             'digits, spaces and . + @ = - _; the host name is never used)')
     parser.add_argument('--sync-mode', choices=SYNC_MODES,
                         help='sync: off, shadow (commits here, pushes nothing) or on (default: keep the mode of an '
                              'installed sync, shadow if there is none); off without the component sync only writes '
@@ -200,11 +206,15 @@ def validate_args(args: argparse.Namespace) -> None:
     args.components = tuple(dict.fromkeys(names))
     if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
-    if (args.sync_repo is not None or args.sync_mode not in (None, 'off')) and 'sync' not in args.components:
-        raise UsageError('--sync-repo and --sync-mode shadow|on need the component sync (for example --components '
-                         'sync).')
-    if args.uninstall and (args.sync_repo is not None or args.sync_mode):
-        raise UsageError('--uninstall takes no --sync-repo or --sync-mode: it switches the sync off.')
+    if args.sync_name is not None and not _config._MACHINE_NAME.fullmatch(args.sync_name):
+        raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _.')
+    if ((args.sync_repo is not None or args.sync_name is not None or args.sync_mode not in (None, 'off'))
+            and 'sync' not in args.components):
+        raise UsageError('--sync-repo, --sync-name and --sync-mode shadow|on need the component sync (for example '
+                         '--components sync).')
+    if args.uninstall and (args.sync_repo is not None or args.sync_name is not None or args.sync_mode):
+        raise UsageError('--uninstall takes no --sync-repo or --sync-mode, and no --sync-name: it switches the sync '
+                         'off.')
     if re.search(r'[\x00-\x1f\x7f]', args.target):
         raise UsageError('--target must not contain control characters or line breaks.')
     if args.week_ok_until is not None:
@@ -219,7 +229,8 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.replace_statusline and 'statusline' not in args.components:
         raise UsageError('--replace-statusline needs the component statusline.')
     if args.check and (args.dry_run or args.uninstall or args.mode or args.week_ok_until or args.replace_statusline
-                       or args.auto_continue or args.sync_repo is not None or args.sync_mode):
+                       or args.auto_continue or args.sync_repo is not None or args.sync_name is not None
+                       or args.sync_mode):
         raise UsageError('--check changes nothing and takes only --settings, --target and --components.')
 
 
@@ -795,6 +806,10 @@ def plan_sync(data: dict, args: argparse.Namespace, target: str) -> SyncPlan:
     if write_mode and old_mode != mode:
         updates['mode'] = mode
         changes.append(f'sync.mode {old_mode!r} -> {mode!r}')
+    old_name = section.get('machine_name', '')
+    if args.sync_name is not None and old_name != args.sync_name:
+        updates['machine_name'] = args.sync_name
+        changes.append(f'sync.machine_name {old_name!r} -> {args.sync_name!r}')
     return SyncPlan(path, os.path.exists(path), updates, changes, mode, source, repo, cfg['sync']['transport'],
                     cfg['sync']['max_clone_mb'], log_dir_of(cfg))
 
@@ -1172,6 +1187,7 @@ class Installed(NamedTuple):
     week_ok_until: str | None       # of the installed spawn gate; a run without it would remove it
     auto_continue: bool
     sync_repo: str                  # sync.repo as the hooks read it
+    machine_name: str               # sync.machine_name as the hooks read it
     sync_off: bool                  # config.json says sync.mode "off" and the sync is not installed
 
 
@@ -1197,7 +1213,7 @@ def installed_state(data: dict, target: str) -> Installed:
                      {gate: mode for gate, (mode, _) in resolve_modes(data, gates, target).items()},
                      option_value(installed_command(data, 'spawn-gate', target), 'week-ok-until'),
                      data.get('autoContinueAtUsageLimit') is True, effective_config(path)['sync']['repo'],
-                     'sync' not in components and written == 'off')
+                     effective_config(path)['sync']['machine_name'], 'sync' not in components and written == 'off')
 
 
 def _read(prompt: str) -> str:
@@ -1239,6 +1255,18 @@ def ask_repo(default: str) -> str:
             return answer
         print('That is no owner/name as on GitHub, for example anna/usage-sync.')
     raise Abort(2, f'{ATTEMPTS} answers that were no owner/name')
+
+
+def ask_name(default: str) -> str:
+    """sync.machine_name, checked as --sync-name checks it. Enter takes `default`, which is never the host name."""
+    print('Shown in the report of every computer; the host name of this one is never sent.')
+    prompt = f'Name of this computer in the report? [{default or "empty, shown as machine-<id>"}] '
+    for _ in range(ATTEMPTS):
+        answer = _read(prompt) or default
+        if _config._MACHINE_NAME.fullmatch(answer):
+            return answer
+        print('At most 64 letters, digits, spaces and . + @ = - _.')
+    raise Abort(2, f'{ATTEMPTS} names that were not allowed')
 
 
 def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
@@ -1305,8 +1333,11 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
            + (' Now: off (your choice).' if state.sync_off else ''),
            'Sync across computers through a private GitHub repository?', installed_sync):
         repo = ask_repo(state.sync_repo)
+        # the name in config.json; on a first install the platform (an installed sync keeps an empty one on Enter)
+        name = ask_name(state.machine_name if installed_sync else state.machine_name or sync_format.platform_name())
         chosen.append('sync')
-        summary.append(f'  Sync: yes, {repo}' + ('' if installed_sync else ' (starts in shadow mode)'))
+        summary.append(f'  Sync: yes, {repo}' + (f', this computer as "{name}"' if name else '')
+                       + ('' if installed_sync else ' (starts in shadow mode)'))
     else:
         summary.append('  Sync: no, its hooks are removed and sync.mode is off' if installed_sync
                        else '  Sync: no, sync.mode off')
@@ -1327,6 +1358,8 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
             argv.append('--auto-continue')
         if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
             argv += ['--sync-repo', repo]
+        if repo and name != state.machine_name:
+            argv += ['--sync-name', name]
         if not repo and not installed_sync:
             argv += ['--sync-mode', 'off']
         runs.append(argv)

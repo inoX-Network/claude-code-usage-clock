@@ -195,8 +195,8 @@ entry gets `refreshInterval: 60`; an update of our own entry adds it only if it 
 
 The component `sync` (0034-SYNC-INSTALL) is opt-in: not in the default selection of `--components` (but in that of
 `--uninstall`, and `--check` adds it when its entries are installed). It writes `SessionStart` and `SessionEnd`, each
-with its own command (`sync.py session-start` / `session-end`, `|| true`). Its mode and repository are config keys, so
-the installer writes `sync.mode` and `sync.repo` into `config.json` (`CCUC_CONFIG`, else the one in `--target`), with a
+with its own command (`sync.py session-start` / `session-end`, `|| true`). Its mode, repository and machine name are
+config keys, so the installer writes `sync.mode`, `sync.repo` and `sync.machine_name` (`--sync-name`) into `config.json` (`CCUC_CONFIG`, else the one in `--target`), with a
 backup and only when they change; every other key of that file is never written. `--sync-mode` sets the mode; without
 it an installed sync keeps the mode of the config and a first one gets `shadow`. `--sync-repo`, after the smoke test and
 before anything is written, under the sync lock: `check_visibility` once (public or unclear: exit 1), the cache of a
