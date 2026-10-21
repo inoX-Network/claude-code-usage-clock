@@ -41,6 +41,14 @@ without it the mode of an installed sync is kept and a first installation starts
 sets sync.mode to off (the status line pushes from the mode alone; the clone and the data in the remote stay), and
 --check checks the sync if its entries are installed; a sync.mode that is not off without them is a FIX.
 
+--sync-mode off without the component sync writes only sync.mode "off" into config.json, so that the sync is off on
+purpose (the assistant's answer no); with the hooks of the sync installed it is an argument error, as only --uninstall
+--components sync removes them.
+
+Run in a terminal without any option, the installer asks first (the assistant): one y/n question per part, the defaults
+being what is installed, then a summary with the equivalent command line, which it runs through main() as if it had
+been typed. Any option, or a stdin or stdout that is no terminal, and it asks nothing.
+
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
 <target>/statusline.py. It deletes no files. --dry-run shows the changes and writes nothing.
@@ -162,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
                              'clones it')
     parser.add_argument('--sync-mode', choices=SYNC_MODES,
                         help='sync: off, shadow (commits here, pushes nothing) or on (default: keep the mode of an '
-                             'installed sync, shadow if there is none)')
+                             'installed sync, shadow if there is none); off without the component sync only writes '
+                             'sync.mode off')
     parser.add_argument('--dry-run', action='store_true', help='show what would change, write nothing')
     parser.add_argument('--uninstall', action='store_true', help='remove the entries again (files stay)')
     parser.add_argument('--check', action='store_true',
@@ -191,8 +200,9 @@ def validate_args(args: argparse.Namespace) -> None:
     args.components = tuple(dict.fromkeys(names))
     if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
-    if (args.sync_repo is not None or args.sync_mode) and 'sync' not in args.components:
-        raise UsageError('--sync-repo and --sync-mode need the component sync (for example --components sync).')
+    if (args.sync_repo is not None or args.sync_mode not in (None, 'off')) and 'sync' not in args.components:
+        raise UsageError('--sync-repo and --sync-mode shadow|on need the component sync (for example --components '
+                         'sync).')
     if args.uninstall and (args.sync_repo is not None or args.sync_mode):
         raise UsageError('--uninstall takes no --sync-repo or --sync-mode: it switches the sync off.')
     if re.search(r'[\x00-\x1f\x7f]', args.target):
@@ -877,6 +887,24 @@ def plan_sync_off(target: str) -> SyncPlan | None:
                     cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir_of(cfg))
 
 
+def plan_sync_mode_off(data: dict, target: str) -> SyncPlan:
+    """--sync-mode off without the component sync: sync.mode is written as "off" where it is missing or another
+    value, so that the sync is off on purpose. A linked config.json that is off already stays as it is (never written
+    through); the hooks of an installed sync are removed by --uninstall --components sync, not here."""
+    if installed_command(data, 'sync', target) is not None:
+        raise UsageError('the sync is installed: --uninstall --components sync removes its hooks and sets sync.mode to '
+                         'off; nothing changed.')
+    path = config_file(target)
+    cfg = effective_config(path)
+    if os.path.islink(path) and cfg['sync']['mode'] == 'off':
+        old = 'off'
+    else:
+        old = read_config(path).get('sync', {}).get('mode')
+    changes = [] if old == 'off' else [f'sync.mode {"(not set)" if old is None else repr(old)} -> {"off"!r}']
+    return SyncPlan(path, os.path.exists(path), {'mode': 'off'} if changes else {}, changes, 'off', '--sync-mode',
+                    cfg['sync']['repo'], cfg['sync']['transport'], cfg['sync']['max_clone_mb'], log_dir_of(cfg))
+
+
 # --- Check ------------------------------------------------------------------------------------------------------
 
 def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
@@ -1119,6 +1147,240 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     return 1 if problems else 0
 
 
+# --- Assistant --------------------------------------------------------------------------------------------------
+
+PROGRAM = 'python tools\\install.py' if os.name == 'nt' else 'python3 tools/install.py'      # as the README spells it
+CONFIGURATION_DOC = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/configuration.md'
+ATTEMPTS = 3            # answers to one question before the assistant gives up
+SUFFIXES = {True: '[Y/n]', False: '[y/N]', None: '[y/n, Enter keeps]'}       # by the answer that Enter gives
+
+
+class Abort(Exception):
+    """The assistant stops before anything is written: Ctrl+C (exit 130), the end of the input or three answers it
+    cannot use (exit 2)."""
+
+    def __init__(self, code: int, reason: str) -> None:
+        super().__init__(reason)
+        self.code = code
+
+
+class Installed(NamedTuple):
+    """What is installed: the defaults of a second run."""
+    components: frozenset[str]      # the components with entries of ours (the status line: ours runs)
+    foreign_statusline: bool
+    modes: dict[str, str]           # installed gate -> the mode its hook runs in
+    week_ok_until: str | None       # of the installed spawn gate; a run without it would remove it
+    auto_continue: bool
+    sync_repo: str                  # sync.repo as the hooks read it
+    sync_off: bool                  # config.json says sync.mode "off" and the sync is not installed
+
+
+def interactive() -> bool:
+    """stdin and stdout are a terminal: only then the assistant asks."""
+    return _plat.is_terminal(sys.stdin) and _plat.is_terminal(sys.stdout)
+
+
+def installed_state(data: dict, target: str) -> Installed:
+    statusline = data.get('statusLine')
+    ours = isinstance(statusline, dict) and points_to(statusline.get('command'),
+                                                       os.path.join(target, SCRIPTS['statusline']))
+    components = {c for c in HOOKS if installed_command(data, c, target) is not None}
+    if ours:
+        components.add('statusline')
+    gates = argparse.Namespace(components=tuple(g for g in GATES if g in components), mode=None)
+    path = config_file(target)
+    try:
+        written = read_config(path).get('sync', {}).get('mode') if os.path.exists(path) else None
+    except UsageError:      # a link or no JSON object: the run with --sync-mode off names it
+        written = None
+    return Installed(frozenset(components), statusline is not None and not ours,
+                     {gate: mode for gate, (mode, _) in resolve_modes(data, gates, target).items()},
+                     option_value(installed_command(data, 'spawn-gate', target), 'week-ok-until'),
+                     data.get('autoContinueAtUsageLimit') is True, effective_config(path)['sync']['repo'],
+                     'sync' not in components and written == 'off')
+
+
+def _read(prompt: str) -> str:
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        print()
+        raise Abort(2, 'end of input') from None
+    except KeyboardInterrupt:
+        print()
+        raise Abort(130, 'Ctrl+C') from None
+
+
+def ask(explanation: str | None, question: str, default: bool | None) -> bool | None:
+    """y, yes, n or no in any case; Enter takes `default` (None: keep, for two gates in different modes)."""
+    print()
+    if explanation:
+        print(explanation)
+    prompt = f'{question} {SUFFIXES[default]} '
+    for _ in range(ATTEMPTS):
+        answer = _read(prompt).lower()
+        if not answer:
+            return default
+        if answer in ('y', 'yes'):
+            return True
+        if answer in ('n', 'no'):
+            return False
+        print('Please answer y or n.')
+    raise Abort(2, f'{ATTEMPTS} answers that were not y or n')
+
+
+def ask_repo(default: str) -> str:
+    """owner/name, checked as --sync-repo checks it."""
+    print('Create one first with `gh repo create NAME --private` or at https://github.com/new')
+    prompt = 'Name of your PRIVATE repository (owner/name)' + (f' [{default}]' if default else '') + ': '
+    for _ in range(ATTEMPTS):
+        answer = _read(prompt) or default
+        if _config.valid_sync_repo(answer):
+            return answer
+        print('That is no owner/name as on GitHub, for example anna/usage-sync.')
+    raise Abort(2, f'{ATTEMPTS} answers that were no owner/name')
+
+
+def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
+    """The questions in their order. Returns the runs (argv lists for main) and the summary lines."""
+    first = not state.components
+
+    def default(component: str) -> bool:
+        return first or component in state.components
+
+    chosen, summary, replace = [], [], False
+    if ask('Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the usage the '
+           'other parts read.', 'Status line: model, 5h/week usage and context below the prompt?',
+           default('statusline')):
+        chosen.append('statusline')
+        if state.foreign_statusline:
+            replace = bool(ask('Your settings.json runs another status line. Without ours nothing measures the usage, '
+                               'and the hooks see it as unknown.', 'Replace it?', False))
+        summary.append('  Status line: yes' + (', replaces the status line that is there' if replace else
+                                               ', but the status line that is there stays' if state.foreign_statusline
+                                               else ''))
+    else:
+        summary.append('  Status line: no')
+    if ask('Gives the model the usage and the local time with every prompt you send.',
+           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock')):
+        chosen.append('usage-clock')
+    summary.append(f'  Usage clock: {"yes" if "usage-clock" in chosen else "no"}')
+    if 'statusline' in chosen:
+        if ask('Says how full the context window is, as the status line measured it.',
+               'Context reporter: tells the model how full its context is (needs the status line)?',
+               default('context-reporter')):
+            chosen.append('context-reporter')
+        summary.append(f'  Context reporter: {"yes" if "context-reporter" in chosen else "no"}')
+    else:
+        summary.append('  Context reporter: no (needs the status line)')
+    if ask('Checks every start of an agent, workflow or skill against the usage and the model rules.',
+           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate')):
+        chosen.append('spawn-gate')
+    summary.append(f'  Spawn gate: {"yes" if "spawn-gate" in chosen else "no"}')
+    if ask('Makes subagents save a checkpoint and finish when the five-hour usage gets high.',
+           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop')):
+        chosen.append('soft-stop')
+    summary.append(f'  Soft stop: {"yes" if "soft-stop" in chosen else "no"}')
+    mode = None
+    gates = [g for g in GATES if g in chosen]
+    if gates:
+        kept = {state.modes[g] for g in gates if g in state.modes}
+        now = (' Now: ' + ', '.join(f'{g} {state.modes[g]}' for g in gates) + '; Enter keeps each.'
+               if len(kept) == 2 else '')
+        enforce = ask('Shadow only writes to the log what the gates would do; enforce blocks and warns for real.' + now,
+                      'Let the gates block for real (enforce)? No = only log (shadow).',
+                      None if len(kept) == 2 else kept == {'enforce'})
+        mode = None if enforce is None else ('enforce' if enforce else 'shadow')
+        summary.append('  Gates: ' + {None: 'each keeps its mode', 'enforce': 'enforce, they block for real',
+                                      'shadow': 'shadow, they only log'}[mode])
+    auto = bool(ask('Claude Code then waits for the reset of a usage limit and goes on by itself.',
+                    'Continue automatically after a usage limit resets?', state.auto_continue))
+    summary.append('  Auto-continue: ' + ('yes' if auto else
+                                          'autoContinueAtUsageLimit stays true (the installer does not switch it off; '
+                                          'remove it from settings.json by hand)' if state.auto_continue else 'no'))
+    repo = None
+    installed_sync = 'sync' in state.components
+    if ask('Puts the usage of each computer into a private GitHub repository of yours, so that the report shows all of '
+           'them; a first install starts in shadow mode and pushes nothing.'
+           + (' Now: off (your choice).' if state.sync_off else ''),
+           'Sync across computers through a private GitHub repository?', installed_sync):
+        repo = ask_repo(state.sync_repo)
+        chosen.append('sync')
+        summary.append(f'  Sync: yes, {repo}' + ('' if installed_sync else ' (starts in shadow mode)'))
+    else:
+        summary.append('  Sync: no, its hooks are removed and sync.mode is off' if installed_sync
+                       else '  Sync: no, sync.mode off')
+    staying = [c for c in COMPONENTS if c in state.components and c not in chosen and c != 'sync']
+    if staying:
+        summary.append(f'  Stays installed: {", ".join(staying)}. This assistant removes nothing; to remove it: '
+                       f'{PROGRAM} --uninstall --components {",".join(staying)}')
+    runs = []
+    if chosen:
+        argv = ['--components', ','.join(chosen)]
+        if replace:
+            argv.append('--replace-statusline')
+        if mode:
+            argv += ['--mode', mode]
+        if 'spawn-gate' in chosen and state.week_ok_until:
+            argv += ['--week-ok-until', state.week_ok_until]
+        if auto:
+            argv.append('--auto-continue')
+        if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
+            argv += ['--sync-repo', repo]
+        if not repo and not installed_sync:
+            argv += ['--sync-mode', 'off']
+        runs.append(argv)
+    if not repo and installed_sync:
+        runs.append(['--uninstall', '--components', 'sync'])
+    return runs, summary
+
+
+def assistant() -> int:
+    """Asks for each part, shows the equivalent command lines and runs them through main(), as if they were typed."""
+    settings_path = os.path.abspath(os.path.expanduser(DEFAULT_SETTINGS))
+    target = os.path.abspath(os.path.expanduser(DEFAULT_TARGET))
+    try:
+        data, _ = load_settings(settings_path)
+    except UsageError as error:
+        print(f'Error: {error}')
+        return 2
+    state = installed_state(data, target)
+    print('usage-clock installer: a few questions, Enter takes the answer in [brackets]'
+          + (', which is what is installed now.' if state.components else '.')
+          + ' Nothing is written before you confirm. Options for scripts: --help.')
+    print(f'Settings: {settings_path}')
+    print(f'Target:   {target}')
+    try:
+        runs, summary = interview(state)
+        print()
+        print('Summary:')
+        print('\n'.join(summary))
+        if not runs:
+            print('Nothing selected, nothing to install.')
+            return 0
+        print(f'Same as: {PROGRAM} {shlex.join(runs[0])}')
+        for argv in runs[1:]:
+            print(f'then:    {PROGRAM} {shlex.join(argv)}')
+        if not ask(None, 'Install now?', True):
+            print('Nothing changed.')
+            return 0
+    except Abort as stop:
+        print(f'Stopped ({stop}): nothing changed.')
+        return stop.code
+    for argv in runs:
+        print()
+        code = main(argv)
+        if code:
+            return code
+    print()
+    print(f'Fine-tuning (thresholds, colours, the sync) is in {config_file(target)}, explained in '
+          f'docs/configuration.md: {CONFIGURATION_DOC}')
+    if effective_config(config_file(target))['sync']['mode'] == 'shadow':
+        print(f'The sync runs in shadow mode and pushes nothing. To switch it on: {PROGRAM} --components sync '
+              '--sync-mode on')
+    return 0
+
+
 # --- Main -------------------------------------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> int:
@@ -1153,6 +1415,9 @@ def run(args: argparse.Namespace) -> int:
         if 'sync' in args.components:
             sync = plan_sync(data, args, target)
             print(f'Sync mode: {sync.mode} ({sync.source})')
+        elif args.sync_mode:      # off, without the component (validate_args)
+            sync = plan_sync_mode_off(data, target)
+            print(f'Sync mode: {sync.mode} ({sync.source})')
         messages = plan_install(data, args, target, modes)
     print('\n'.join(messages))
     if not args.uninstall:
@@ -1164,7 +1429,7 @@ def run(args: argparse.Namespace) -> int:
             return 1
         print(f'Smoke test: passed ({", ".join(args.components)}).')
     changed = data != before
-    if sync and not args.uninstall and not args.sync_repo:
+    if sync and 'sync' in args.components and not args.uninstall and not args.sync_repo:
         if not os.path.lexists(sync.clone):
             print(f'Sync: the clone {sync.clone} is missing; run again with --sync-repo {sync.repo} to make it.')
         if sync_blocked(sync):
@@ -1220,6 +1485,9 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv and interactive():
+        return assistant()
     args = parse_args(argv)
     try:
         return run(args)

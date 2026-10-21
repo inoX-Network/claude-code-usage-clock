@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Added
+
+- The installer asks: run in a terminal without any option, `tools/install.py` asks y/n for each part (status line,
+  usage clock, context reporter, the two gates and their mode, auto-continue, the sync with its repository), with the
+  installed state as the defaults, shows a summary with the equivalent command line and runs exactly that on your
+  yes. Any option, or a stdin or stdout that is no terminal, and it asks nothing, as before. See
+  [docs/install.md](docs/install.md#install).
+
+### Changed
+
+- `--sync-mode off` works without the component `sync`: it only writes `sync.mode` `off` into `config.json` (the
+  installer's answer no to the sync). With the sync installed it is an argument error; `--uninstall --components sync`
+  removes it.
+
 ### Fixed
 
 - A sync repository that does not exist, or that the login cannot reach, was reported as missing credentials, and

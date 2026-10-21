@@ -13,6 +13,8 @@ What differs from Linux and macOS, and what is done about it:
   that runs now (the `python3` of Windows is a Microsoft Store placeholder), and `find_git_bash()` finds Git Bash
   the way Claude Code does (variable CLAUDE_CODE_GIT_BASH_PATH, else git.exe on the PATH).
 - `pread()`: Windows has no os.pread.
+- A terminal: isatty() is true for every character device, the NUL device too (`< NUL`, a scheduled task).
+  `is_console()` asks the console itself, so the installer does not put its questions to the null device.
 - Child processes of the sync: there are no sessions and no process groups to signal. `start_detached()` starts
   with DETACHED_FLAGS (no console window, not ended with the parent), `kill_tree()` ends a child and everything it
   started with taskkill /T.
@@ -189,6 +191,19 @@ def find_git_bash(env=None, settings_env=None) -> str | None:
             return candidate
         folder = os.path.dirname(folder)
     return None
+
+
+def is_console(stream) -> bool:
+    """The stream is a console window: GetConsoleMode answers for its handle (not for NUL, a file or a pipe)."""
+    import ctypes
+    import msvcrt
+    try:
+        handle = msvcrt.get_osfhandle(stream.fileno())
+    except (OSError, ValueError):      # no descriptor of its own (a buffer), or a closed one
+        return False
+    kernel32 = ctypes.WinDLL('kernel32')
+    kernel32.GetConsoleMode.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    return bool(kernel32.GetConsoleMode(handle, ctypes.byref(ctypes.c_ulong())))
 
 
 # --- Child processes ----------------------------------------------------------------------------------------------

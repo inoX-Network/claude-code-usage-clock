@@ -118,31 +118,7 @@ cd claude-code-usage-clock
 
 You see no output; that is fine.
 
-**Step 3: try the installation without changing anything.**
-
-On Linux and macOS:
-
-```sh
-python3 tools/install.py --dry-run
-```
-
-On Windows:
-
-```powershell
-python tools\install.py --dry-run
-```
-
-You should see a list of what would be added, and near the end these two lines:
-
-```
-Smoke test: passed (statusline, usage-clock, context-reporter, spawn-gate, soft-stop).
-DRY RUN - nothing written.
-```
-
-*Smoke test: passed* means the tool tried each of its parts once and they all work on your computer. If you see an
-error instead, look at [Common problems](#common-problems).
-
-**Step 4: install.**
+**Step 3: start the installer.**
 
 On Linux and macOS:
 
@@ -156,9 +132,44 @@ On Windows:
 python tools\install.py
 ```
 
-The same list appears, and at the end:
+It asks one question per part of the tool, each with a line above it that says what the part does:
 
 ```
+Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the usage the other parts read.
+Status line: model, 5h/week usage and context below the prompt? [Y/n]
+```
+
+Press Enter to take the answer in brackets (the capital letter), or type `y` or `n` and press Enter. For a start,
+Enter at every question is a good choice: all five parts, the gates only watch (*shadow mode*, see below), no
+automatic continue and no sync. If you already have a status line of your own, the installer also asks whether to
+replace it; with *no*, yours stays (see [The status line shows nothing](#the-status-line-shows-nothing)). To stop
+without any change, press Ctrl+C.
+
+**Step 4: check the summary and install.**
+
+After the last question you see what you chose, and nothing has been written yet:
+
+```
+Summary:
+  Status line: yes
+  Usage clock: yes
+  Context reporter: yes
+  Spawn gate: yes
+  Soft stop: yes
+  Gates: shadow, they only log
+  Auto-continue: no
+  Sync: no, sync.mode off
+Same as: python3 tools/install.py --components statusline,usage-clock,context-reporter,spawn-gate,soft-stop --mode shadow --sync-mode off
+
+Install now? [Y/n]
+```
+
+The *Same as* line is the same installation as one command, for later or for a script. Press Enter. The installer
+first tries each part once and then writes; near the end you see:
+
+```
+Smoke test: passed (statusline, usage-clock, context-reporter, spawn-gate, soft-stop).
+...
 Written: ...settings.json
 Backup:  ...settings.json.bak-usage-clock-...
 Undo:    cp "..." "..."
@@ -166,11 +177,13 @@ Start a new Claude Code session for the changes to take effect.
 Mode shadow: nothing is blocked, decisions are only logged. Use --mode enforce to switch them on.
 ```
 
-The installer changed one file, the settings of Claude Code, and kept a copy of the old one (*Backup*). The *Undo*
-line is the command that puts the old file back, should you ever want that.
+*Smoke test: passed* means the tool tried each of its parts once and they all work on your computer. If you see an
+error instead, look at [Common problems](#common-problems). The installer changed one file, the settings of Claude
+Code, and kept a copy of the old one (*Backup*; there is none if you had no settings yet). The *Undo* line is the
+command that puts the old file back, should you ever want that. The last line says where the finer settings are.
 
-If a line says `statusLine: an existing status line runs something else and was LEFT UNCHANGED`, you already had a
-status line of your own. See [The status line shows nothing](#the-status-line-shows-nothing).
+Run the installer again later and it asks the same questions, with what is installed as the answers in brackets:
+Enter at every question changes nothing. Want to see what would change without any question? Add `--dry-run`.
 
 **Step 5: restart Claude Code.** Close every Claude Code window and start it again. The tool is only loaded when
 Claude Code starts.
@@ -267,7 +280,8 @@ yours, so that the report on each one shows all of them. It is off until you ins
 python3 tools/install.py --components sync --sync-repo anna/usage-sync
 ```
 
-(On Windows: `python tools\install.py --components sync --sync-repo anna/usage-sync`.) The installer first checks that
+(On Windows: `python tools\install.py --components sync --sync-repo anna/usage-sync`.) Or run the installer without
+options and answer `y` at the sync question, then give the name there: it does the same. The installer first checks that
 nobody can read the repository without logging in. If it is public, it stops and changes nothing in your settings. Then it starts the
 sync in shadow mode: it prepares everything on this computer but sends nothing yet. Do the same on your other
 computers, and switch it on everywhere once you are happy:
