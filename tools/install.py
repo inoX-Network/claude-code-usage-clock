@@ -891,10 +891,12 @@ def check_sync_state(directory: str, repo: str, now: float) -> list[tuple[str, s
     elif checked is None or checked > now:
         results = [('NOTE', 'Sync visibility: not checked yet; the next push checks it.')]
     elif now - checked < _sync_git.VISIBILITY_MAX_AGE_S:
-        results = [('OK', f'Sync visibility: {repo} is not public (checked {int((now - checked) // 3600)} h ago)')]
+        why = f'; {_sync_git.INJECTED_NOTE}' if _sync_git.private_reason(directory, repo) else ''
+        results = [('OK', f'Sync visibility: {repo} is not public (checked {int((now - checked) // 3600)} h ago{why})')]
     else:
-        results = [('NOTE', f'Sync visibility: {repo} was found not public {int((now - checked) // 3600)} h ago; the '
-                            'next push checks again.')]
+        why = f' ({_sync_git.INJECTED_NOTE})' if _sync_git.private_reason(directory, repo) else ''
+        results = [('NOTE', f'Sync visibility: {repo} was found not public {int((now - checked) // 3600)} h ago{why}; '
+                            'the next push checks again.')]
     results.append(('OK', f'Sync last success: {_hours_ago(state.last_success, now)}') if state.last_success else
                    ('NOTE', 'Sync last success: none yet; the first run starts when a session ends.'))
     if state.last_error is None:

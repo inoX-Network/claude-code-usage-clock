@@ -201,8 +201,8 @@ config keys, so the installer writes `sync.mode`, `sync.repo` and `sync.machine_
 `hooks/_setup.py` holds what the installer and `hooks/settings_cli.py` (the Settings tab of `/report`) share: how an
 entry is recognised, the one way `config.json` is written, the clone and the texts of each part. `--sync-mode` sets the mode; without
 it an installed sync keeps the mode of the config and a first one gets `shadow`. `--sync-repo`, after the smoke test and
-before anything is written, under the sync lock: `check_visibility` once (public or unclear: exit 1), the cache of a
-private result, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clone --single-branch --no-checkout
+before anything is written, under the sync lock: `probe_visibility` once (public or unclear: exit 1), the cache of a
+private result with its reason, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clone --single-branch --no-checkout
 --no-tags` with `SETTINGS` and the clone environment without GIT_DIR, `_check_size`, checkout, rename to `repo`; a
 failed attempt removes the temporary folder). A folder already at `repo` stays: kept if it is a git folder whose remote
 is the URL of `sync.repo`, else exit 1. After the lock is released, `clear_visibility` lifts a block after
@@ -628,7 +628,21 @@ run the installer with --sync-repo`).
   public, `visibility` (the core blocks every push until the installer runs again); exit 128 with `could not read
   Username for 'https://github.com': terminal prompts disabled` is private (noted, on we go; a private and a missing
   repository look alike anonymously, both are not public); anything else (an unknown host, another exit, another
-  text, a timeout, no git) is unclear, `network`, no push. The note holds for 24 h (the node asks for it): a
+  text, a timeout, no git) is unclear, `network`, no push. Exit 0 asks a second stage (`probe_visibility`,
+  0034-SYNC-PROXY-SICHT): one anonymous `GET https://api.github.com/repos/<owner>/<name>` (`ask_api`: urllib with
+  the proxy of the environment, no Authorization header, no handler for credentials or cookies, no redirect followed,
+  at most 64 KB read, within what is left of the 15 s). A proxy that adds credentials to every request (a Claude cloud
+  container) lets the ls-remote read a private repository; a truly anonymous request would get 404 there, so a 200
+  with `private` the JSON `true`, `visibility` missing or `private` and `full_name` this repository (any case) proves
+  it: private, noted with `"reason": "credentials_injected"` (`private_reason`, shown by `--check`) and one log line
+  `credentials_injected`. `judge_api`: public only for an explicit answer, `private` false or `visibility` `public`
+  or `internal`, for this repository (the block `visibility`); everything else is unclear (`network`, no push, no
+  cache, the next run asks again) with its reason in the failure line (`GitHub API: <why>`): from `ask_api`
+  `timeout`, `network`, `http_<status>` (every 3xx too), `status_<status>`, `too_large`; from `judge_api` `no_json`,
+  `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`; `no_time` if nothing of the 15 s is left. The
+  body is read in pieces of 16 KB against the clock, as urllib's timeout holds for each read only. Without such a
+  proxy the ls-remote is refused and the API is
+  never asked. The note holds for 24 h (the node asks for it): a
   repository made public within that time is still pushed to until the note is older. Whoever can write
   `<log_dir>/sync/` can write the note as well; the sync folder is as private as the log folder (0700).
 - **4. Update** (`update_clone`, shared with the pull of the report): fetch of the default branch only

@@ -37,11 +37,10 @@ class Machine:
         self.settings.write_text('{}', encoding='utf-8')
         self.install_module = load_install()
         monkeypatch.delenv('CCUC_CONFIG')
-        real = _sync_git.check_visibility
+        real = _sync_git.probe_visibility
         self.probe = answer(128, ASKS)
-        monkeypatch.setattr(_sync_git, 'check_visibility',
-                            lambda repo, directory, deadline=None, execute=None: real(repo, directory, deadline,
-                                                                                      self.probe))
+        monkeypatch.setattr(_sync_git, 'probe_visibility', lambda repo, directory, deadline=None, execute=None,
+                            api=None: real(repo, directory, deadline, self.probe, api))
         self.access = 'reachable'
         monkeypatch.setattr(_sync_git, 'check_access', lambda repo, transport, directory, deadline=None: self.access)
 
@@ -263,6 +262,19 @@ def test_check_repo_gives_each_result_and_writes_nothing(machine, probe, access,
     assert done == dict(done, result=result, repo=OTHER) and done['text']
     assert code == (0 if result == 'private_ok' else 1)
     assert machine.tree() == before
+
+
+@pytest.mark.parametrize('private, result', [(True, 'private_ok'), (False, 'public'), (None, 'unclear')])
+def test_check_repo_behind_a_proxy_that_adds_credentials_takes_the_answer_of_the_api(machine, monkeypatch, private,
+                                                                                      result):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    machine.probe = answer(0)
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: (None, 'timeout') if private is None else (
+        json.dumps({'private': private, 'full_name': repo}).encode(), ''))
+    before = machine.tree()
+    code, done = machine.cli('check-repo', OTHER)
+    assert (code, done['result']) == ((0 if private else 1), result)
+    assert machine.tree() == before                        # writes nothing, also no log line
 
 
 def test_check_repo_refuses_a_name_that_is_no_owner_name_without_asking_github(machine):

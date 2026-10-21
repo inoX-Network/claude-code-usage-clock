@@ -507,7 +507,7 @@ def test_gates_in_two_modes_stay_as_they_are_on_enter_and_install(machine):
 
 def test_an_installed_sync_is_offered_with_its_repository_and_kept_without_a_new_check(machine, monkeypatch):
     machine.install_sync_entries(mode='on', repo='anna/usage-sync')
-    monkeypatch.setattr(_sync_git, 'check_visibility', lambda *a, **k: pytest.fail('no visibility check on Enter'))
+    monkeypatch.setattr(_sync_git, 'probe_visibility', lambda *a, **k: pytest.fail('no visibility check on Enter'))
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
     assert f'{SYNC} [Y/n]' in out and f'{SYNC_REPO} [anna/usage-sync] (current):' in out
     assert f'{SYNC_NAME} [empty, shown as machine-<id>]' in out
@@ -667,10 +667,9 @@ def test_at_the_end_it_says_where_the_fine_tuning_is(machine):
 
 
 def test_a_sync_in_shadow_mode_ends_with_the_command_that_switches_it_on(machine, monkeypatch, remote):
-    real = _sync_git.check_visibility
-    monkeypatch.setattr(_sync_git, 'check_visibility',
-                        lambda repo, directory, deadline=None, execute=None: real(repo, directory, deadline,
-                                                                                  answer(128, ASKS)))
+    real = _sync_git.probe_visibility
+    monkeypatch.setattr(_sync_git, 'probe_visibility', lambda repo, directory, deadline=None, execute=None,
+                        api=None: real(repo, directory, deadline, answer(128, ASKS), api))
     code, out = machine.ask('n', 'n', 'n', 'n', 'n', 'y', REPO, '', '')
     assert code == 0, out
     assert machine.config_data()['sync'] == dict(machine.config_data()['sync'], mode='shadow', repo=REPO,
@@ -796,10 +795,9 @@ def test_in_a_real_terminal_the_installer_asks_and_installs(machine):
 @pytest.fixture
 def private(monkeypatch, remote):
     """The visibility probe answers private; the clone comes from the local bare repository of `remote`."""
-    real = _sync_git.check_visibility
-    monkeypatch.setattr(_sync_git, 'check_visibility',
-                        lambda repo, directory, deadline=None, execute=None: real(repo, directory, deadline,
-                                                                                  answer(128, ASKS)))
+    real = _sync_git.probe_visibility
+    monkeypatch.setattr(_sync_git, 'probe_visibility', lambda repo, directory, deadline=None, execute=None,
+                        api=None: real(repo, directory, deadline, answer(128, ASKS), api))
 
 
 def test_row_8b_a_typed_name_becomes_sync_name(machine):

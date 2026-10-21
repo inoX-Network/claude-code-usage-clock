@@ -6,12 +6,18 @@ config and without the system config, so nothing of the real configuration takes
 push sets it."""
 import copy
 import dataclasses
+import email.message
 import functools
+import http.client
+import io
 import json
 import os
+import socket
 import stat
 import subprocess
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -56,6 +62,9 @@ def git_alone(tmp_path, monkeypatch):
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     monkeypatch.setitem(_sync_git.URLS, 'https', (tmp_path / 'remotes').as_posix() + '/{}.git')
     monkeypatch.setitem(_sync_git.URLS, 'ssh', (tmp_path / 'remotes-ssh').as_posix() + '/{}.git')
+    # A probe that can read the repository asks the API: by default it answers as for a public repository at home
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: (json.dumps(
+        {'private': False, 'visibility': 'public', 'full_name': repo}).encode('utf-8'), ''))
     return config
 
 
@@ -755,6 +764,321 @@ def test_the_probe_has_at_most_15_s_and_never_more_than_the_run(tmp_path):
     assert _sync_git.check_visibility(REPO, str(tmp_path), _sync_core.Deadline(3), execute) == 'private'
     assert 14 < seen[0] <= 15 and seen[1] <= 3
     assert _sync_git.VISIBILITY_TIMEOUT_S == 15 and _sync_git.VISIBILITY_MAX_AGE_S == 24 * 3600
+
+
+# --- Visibility behind a proxy that adds credentials (0034-SYNC-PROXY-SICHT v2) ---------------------------------------
+
+def api(answered):
+    """An anonymous request to the REST API: bytes are the body of a 200, a text is the reason there was none. Records
+    its calls."""
+    def ask(repo, seconds):
+        ask.calls.append((repo, seconds))
+        return (answered, '') if isinstance(answered, bytes) else (None, answered)
+    ask.calls = []
+    return ask
+
+
+def never_asked(repo, seconds):
+    pytest.fail('the API may only be asked after an anonymous ls-remote that could read the repository')
+
+
+def body(**fields):
+    return json.dumps(fields).encode('utf-8')
+
+
+INJECTED = body(id=1, private=True, visibility='private', full_name=REPO)
+PUBLIC_ANSWER = ('public', '')
+
+
+def unclear(reason):
+    return ('unclear', reason)
+
+
+@pytest.mark.parametrize('answered, result', [
+    (body(private=True, full_name=REPO), ('private', 'credentials_injected')),
+    (body(private=True, visibility='private', full_name=REPO), ('private', 'credentials_injected')),
+    (body(private=True, full_name='Owner/NAME'), ('private', 'credentials_injected')),
+    (body(private=False, full_name=REPO), PUBLIC_ANSWER),
+    (body(private=False, visibility='public', full_name=REPO), PUBLIC_ANSWER),
+    (body(private=True, visibility='internal', full_name=REPO), PUBLIC_ANSWER),
+    (body(private=True, visibility='public', full_name=REPO), PUBLIC_ANSWER),       # a word for public decides
+    (body(private=False, visibility='private', full_name=REPO), PUBLIC_ANSWER),
+    (body(visibility='public', full_name=REPO), PUBLIC_ANSWER),
+    ('timeout', unclear('timeout')), ('network', unclear('network')), ('http_301', unclear('http_301')),
+    ('http_403', unclear('http_403')), ('http_404', unclear('http_404')), ('http_429', unclear('http_429')),
+    ('http_500', unclear('http_500')), ('too_large', unclear('too_large')),
+    (b'', unclear('no_json')), (b'not json', unclear('no_json')), (b'\xff\xfe{}', unclear('no_json')),
+    (b'[' * 60000, unclear('no_json')),                                           # nested deeper than the parser goes
+    (b'[{"private": true, "full_name": "owner/name"}]', unclear('not_an_object')),
+    (b'"private"', unclear('not_an_object')),
+    (body(private='true', full_name=REPO), unclear('no_private')),
+    (body(private=1, full_name=REPO), unclear('no_private')),
+    (body(private=None, full_name=REPO), unclear('no_private')),
+    (body(full_name=REPO), unclear('no_private')),                                # `private` missing
+    (body(private=True, visibility=None, full_name=REPO), unclear('visibility_other')),
+    (body(private=True, visibility='PRIVATE', full_name=REPO), unclear('visibility_other')),
+    (body(private=True, full_name='owner/other'), unclear('name_mismatch')),
+    (body(private=True, full_name='other/name'), unclear('name_mismatch')),
+    (body(private=True, full_name='owner/name/x'), unclear('name_mismatch')),
+    (body(private=True), unclear('name_mismatch')),                               # `full_name` missing
+    (body(private=True, full_name=[REPO]), unclear('name_mismatch')),
+    (body(private=False, full_name='owner/other'), unclear('name_mismatch')),     # public, but another repository
+], ids=['private', 'private-visibility', 'case-of-full-name', 'public', 'public-visibility', 'internal',
+        'visibility-public-wins', 'private-false-wins', 'only-visibility', 'timeout', 'network', '301', '403', '404',
+        '429', '500', 'too-large', 'empty', 'no-json', 'not-utf-8', 'too-deep', 'a-list', 'a-string', 'private-string',
+        'private-number', 'private-null', 'private-missing', 'visibility-null', 'visibility-upper-case', 'other-name',
+        'other-owner', 'longer-name', 'full-name-missing', 'full-name-list', 'public-of-another-repo'])
+def test_a_readable_probe_asks_the_api_once_and_only_an_explicit_answer_decides(tmp_path, answered, result):
+    ask = api(answered)
+    assert _sync_git.probe_visibility(REPO, str(tmp_path), execute=answer(0), api=ask) == result
+    assert _sync_git.check_visibility(REPO, str(tmp_path), execute=answer(0), api=api(answered)) == result[0]
+    assert [repo for repo, _seconds in ask.calls] == [REPO]
+
+
+@pytest.mark.parametrize('probe, result', [(answer(128, ASKS), 'private'), (answer(128, UNKNOWN_HOST), 'unclear'),
+                                           (answer(1), 'unclear'), (answer(128, ASKS_GERMAN), 'unclear')],
+                         ids=['private', 'unknown-host', 'exit-1', 'german-text'])
+def test_without_such_a_proxy_the_api_is_never_asked(tmp_path, probe, result):
+    """At home the anonymous ls-remote of a private repository is refused: everything stays as it was."""
+    assert _sync_git.probe_visibility(REPO, str(tmp_path), execute=probe, api=never_asked) == (result, '')
+    assert _sync_git.check_visibility(REPO, str(tmp_path), execute=probe, api=never_asked) == result
+
+
+def test_a_probe_that_times_out_never_asks_the_api(tmp_path):
+    def hangs(argv, deadline, env, cwd):
+        raise _sync_core.SyncError('timeout', 'git did not finish in time')
+    assert _sync_git.probe_visibility(REPO, str(tmp_path), execute=hangs, api=never_asked) == ('unclear', '')
+
+
+def test_the_api_gets_what_is_left_of_the_15_s_and_never_more_than_the_run(tmp_path):
+    ask = api(INJECTED)
+    _sync_git.probe_visibility(REPO, str(tmp_path), execute=answer(0), api=ask)
+    _sync_git.probe_visibility(REPO, str(tmp_path), _sync_core.Deadline(3), answer(0), ask)
+    assert 14 < ask.calls[0][1] <= 15 and 0 < ask.calls[1][1] <= 3
+
+    def slow(argv, deadline, env, cwd):
+        time.sleep(0.3)
+        return subprocess.CompletedProcess(argv, 0, '', '')
+    _sync_git.probe_visibility(REPO, str(tmp_path), execute=slow, api=ask)
+    assert ask.calls[2][1] <= 14.7                         # 15 s for both: what the probe took is gone
+
+
+def test_with_no_time_left_for_the_api_the_visibility_is_unclear(tmp_path):
+    assert _sync_git.probe_visibility(REPO, str(tmp_path), _sync_core.Deadline(0), answer(0),
+                                      never_asked) == unclear('no_time')
+
+
+class Response:
+    """What urlopen hands back: a status and a body, read in pieces; `tick` is called on every read."""
+
+    def __init__(self, status, data, tick=None):
+        self.status, self.data, self.asked, self.tick, self.offset = status, data, [], tick, 0
+
+    def read(self, n=-1):
+        self.asked.append(n)
+        if self.tick:
+            self.tick()
+        piece = self.data[self.offset:] if n < 0 else self.data[self.offset:self.offset + n]
+        self.offset += len(piece)
+        return piece
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class Opener:
+    """An opener that records the request and answers with `outcome` (raised if it is an exception)."""
+
+    def __init__(self, outcome):
+        self.outcome, self.calls = outcome, []
+
+    def open(self, request, timeout=None):
+        self.calls.append((request, timeout))
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return self.outcome
+
+
+def http_error(code):
+    headers = email.message.Message()
+    headers['Location'] = 'https://api.github.com/repositories/1'
+    return urllib.error.HTTPError(_sync_git.API_URL.format(REPO), code, 'status', headers, io.BytesIO(b'{}'))
+
+
+REAL_ASK_API = _sync_git.ask_api       # git_alone puts an API in its place that answers like for a public repository
+
+
+def test_the_api_request_is_an_anonymous_get_of_this_repo():
+    opener = Opener(Response(200, INJECTED))
+    assert REAL_ASK_API(REPO, 7.5, opener) == (INJECTED, '')
+    (request, timeout), = opener.calls
+    assert request.full_url == 'https://api.github.com/repos/owner/name' and request.get_method() == 'GET'
+    assert request.data is None and timeout == 7.5
+    sent = {name.lower() for name in [*request.headers, *request.unredirected_hdrs]}
+    assert 'authorization' not in sent and 'cookie' not in sent
+    assert request.get_header('User-agent') and request.get_header('Accept') == 'application/vnd.github+json'
+
+
+@pytest.mark.parametrize('outcome, reason', [
+    (http_error(301), 'http_301'), (http_error(302), 'http_302'), (http_error(307), 'http_307'),
+    (http_error(308), 'http_308'), (http_error(403), 'http_403'), (http_error(404), 'http_404'),
+    (http_error(429), 'http_429'), (http_error(500), 'http_500'), (http_error(503), 'http_503'),
+    (urllib.error.URLError('down'), 'network'), (urllib.error.URLError(socket.timeout('timed out')), 'timeout'),
+    (TimeoutError(), 'timeout'), (socket.timeout(), 'timeout'), (ConnectionResetError(), 'network'),
+    (http.client.IncompleteRead(b'{'), 'network'), (http.client.RemoteDisconnected('gone'), 'network'),
+    (ValueError('unknown url type'), 'network')],
+    ids=['301', '302', '307', '308', '403', '404', '429', '500', '503', 'url-error', 'url-timeout', 'timeout',
+         'socket-timeout', 'reset', 'incomplete', 'disconnected', 'value-error'])
+def test_any_failure_of_the_api_request_is_no_answer_with_its_reason(outcome, reason):
+    assert REAL_ASK_API(REPO, 5, Opener(outcome)) == (None, reason)
+
+
+@pytest.mark.parametrize('status', [201, 203, 204, 206, 304])
+def test_only_status_200_is_an_answer(status):
+    assert REAL_ASK_API(REPO, 5, Opener(Response(status, INJECTED))) == (None, f'status_{status}')
+
+
+def test_an_answer_over_64_kb_is_no_answer_and_more_is_never_read():
+    limit = 64 * 1024
+    assert _sync_git.API_MAX_BYTES == limit
+    exact = Response(200, b' ' * (limit - len(INJECTED)) + INJECTED)
+    assert REAL_ASK_API(REPO, 5, Opener(exact)) == (exact.data, '')
+    over = Response(200, b' ' * (limit + 2 - len(INJECTED)) + INJECTED)
+    assert REAL_ASK_API(REPO, 5, Opener(over)) == (None, 'too_large')
+    assert sum(n for n in over.asked if n > 0) == limit + 1 and all(0 < n <= limit + 1 for n in over.asked)
+
+
+def test_an_answer_that_trickles_in_past_its_time_is_a_timeout():
+    """urllib's timeout holds for each read of the socket; the whole answer must come within the time given."""
+    clock = [100.0]
+
+    def tick():
+        clock[0] += 2
+    slow = Response(200, b' ' * 40000 + INJECTED, tick)
+    assert REAL_ASK_API(REPO, 5, Opener(slow), clock=lambda: clock[0]) == (None, 'timeout')
+    assert REAL_ASK_API(REPO, 5, Opener(Response(200, INJECTED, tick)), clock=lambda: clock[0]) == (INJECTED, '')
+
+
+def test_the_api_without_an_opener_builds_its_own(monkeypatch):
+    opener = Opener(Response(200, INJECTED))
+    monkeypatch.setattr(_sync_git, 'api_opener', lambda: opener)
+    assert REAL_ASK_API(REPO, 5) == (INJECTED, '') and len(opener.calls) == 1
+
+
+def test_the_opener_takes_the_proxy_follows_no_redirect_and_knows_no_credentials(monkeypatch):
+    monkeypatch.setenv('HTTPS_PROXY', 'http://proxy.invalid:3128')
+    opener = _sync_git.api_opener()
+    assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies.get('https') == 'http://proxy.invalid:3128'
+               for h in opener.handlers)
+    assert not any(isinstance(h, (urllib.request.AbstractBasicAuthHandler, urllib.request.AbstractDigestAuthHandler,
+                                  urllib.request.HTTPCookieProcessor)) for h in opener.handlers)
+    assert not any(type(h) is urllib.request.HTTPRedirectHandler for h in opener.handlers)
+    request = urllib.request.Request(_sync_git.API_URL.format(REPO))
+    for code in (301, 302, 303, 307, 308):
+        headers = email.message.Message()
+        headers['Location'] = 'https://api.github.com/repositories/1'
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            opener.error('https', request, io.BytesIO(b''), code, 'moved', headers)
+        assert caught.value.code == code
+
+
+def test_no_test_reaches_the_network_through_urllib():
+    """The guard of conftest.py: a probe that could read the repository asks the API, which no test may reach."""
+    with pytest.raises(urllib.error.URLError, match='a test may not reach the network'):
+        _sync_git.api_opener().open(_sync_git.API_URL.format(REPO), timeout=1)
+    assert REAL_ASK_API(REPO, 1) == (None, 'network')
+
+
+def test_behind_such_a_proxy_a_private_repo_is_pushed_and_its_reason_cached_and_logged_once(device, remote,
+                                                                                         monkeypatch):
+    ask = api(INJECTED)
+    monkeypatch.setattr(_sync_git, 'ask_api', ask)
+    device.request()
+    readable = answer(0)
+    assert device.push(execute=readable) == 0
+    assert f'{device.own}/machine.json' in remote.files()
+    cache = json.loads((device.log / 'sync' / _sync_git.VISIBILITY_FILE).read_text(encoding='utf-8'))
+    assert (cache['repo'], cache['result'], cache['reason']) == (REPO, 'private', 'credentials_injected')
+    assert _sync_git.private_reason(str(device.log / 'sync'), REPO) == 'credentials_injected'
+    noted = [r for r in device.lines() if r['decision'] == 'credentials_injected']
+    assert len(noted) == 1 and REPO not in noted[0]['reason']
+    device.request()
+    assert device.push(now=NOW + 3600, execute=readable) == 0       # from the cache: no probe, no API, no line
+    assert len(readable.calls) == len(ask.calls) == 1
+    assert len([r for r in device.lines() if r['decision'] == 'credentials_injected']) == 1
+
+
+def test_behind_such_a_proxy_an_explicit_public_answer_blocks_as_before(device, remote, monkeypatch):
+    monkeypatch.setattr(_sync_git, 'ask_api', api(body(private=False, full_name=REPO)))
+    device.request()
+    before = remote.head()
+    assert device.push(execute=answer(0)) == 1
+    assert (device.state().last_error, device.failure()['category']) == ('visibility', 'visibility')
+    assert device.state().blocked
+    assert remote.head() == before and not os.path.exists(device.log / 'sync' / _sync_git.VISIBILITY_FILE)
+    assert not [r for r in device.lines() if r['decision'] == 'credentials_injected']
+
+
+@pytest.mark.parametrize('failed', ['timeout', 'http_429', 'http_301', 'http_503'])
+def test_no_answer_of_the_api_ends_as_network_names_why_and_the_next_run_asks_again(device, remote, monkeypatch,
+                                                                                    failed):
+    monkeypatch.setattr(_sync_git, 'ask_api', api(failed))
+    device.request()
+    before = remote.head()
+    assert device.push(execute=answer(0)) == 1
+    failure = device.failure()
+    assert (failure['category'], device.state().last_error) == ('network', 'network') and not device.state().blocked
+    assert failure['reason'] == f'whether the sync repo is public could not be told (GitHub API: {failed}): nothing ' \
+                                'is pushed'
+    assert remote.head() == before and not os.path.exists(device.log / 'sync' / _sync_git.VISIBILITY_FILE)
+    monkeypatch.setattr(_sync_git, 'ask_api', api(INJECTED))
+    assert device.push(now=NOW + 60, execute=answer(0)) == 0
+    assert f'{device.own}/machine.json' in remote.files()
+
+
+def test_an_unclear_ls_remote_keeps_its_old_reason_text(device, remote):
+    device.request()
+    assert device.push(execute=answer(128, UNKNOWN_HOST)) == 1
+    assert device.failure()['reason'] == 'whether the sync repo is public could not be told: nothing is pushed'
+
+
+def test_a_private_result_found_without_a_proxy_has_no_reason(device, remote):
+    device.request()
+    assert device.push() == 0
+    cache = json.loads((device.log / 'sync' / _sync_git.VISIBILITY_FILE).read_text(encoding='utf-8'))
+    assert 'reason' not in cache
+    assert _sync_git.private_reason(str(device.log / 'sync'), REPO) == ''
+
+
+@pytest.mark.parametrize('content', [
+    {'repo': REPO, 'result': 'private', 'checked': '2026-10-14T12:00:00Z', 'reason': 'credentials_injected'},
+    {'repo': REPO, 'result': 'private', 'checked': '2026-10-14T12:00:00Z', 'reason': 'something else'},
+    {'repo': REPO, 'result': 'private', 'checked': '2026-10-14T12:00:00Z', 'reason': ['credentials_injected']},
+    {'repo': 'other/name', 'result': 'private', 'checked': '2026-10-14T12:00:00Z', 'reason': 'credentials_injected'},
+    {'repo': REPO, 'result': 'public', 'checked': '2026-10-14T12:00:00Z', 'reason': 'credentials_injected'},
+    {'repo': REPO, 'result': 'private', 'checked': 'yesterday', 'reason': 'credentials_injected'},
+    ['credentials_injected'], 'broken', None],
+    ids=['injected', 'unknown-reason', 'reason-list', 'other-repo', 'public', 'bad-time', 'a-list', 'broken',
+         'missing'])
+def test_the_reason_is_read_only_from_a_valid_private_note_of_this_repo(tmp_path, content):
+    if content == 'broken':
+        (tmp_path / _sync_git.VISIBILITY_FILE).write_text('{broken', encoding='utf-8')
+    elif content is not None:
+        (tmp_path / _sync_git.VISIBILITY_FILE).write_text(json.dumps(content), encoding='utf-8')
+    expected = 'credentials_injected' if isinstance(content, dict) and content == {
+        'repo': REPO, 'result': 'private', 'checked': '2026-10-14T12:00:00Z', 'reason': 'credentials_injected'} else ''
+    assert _sync_git.private_reason(str(tmp_path), REPO) == expected
+
+
+def test_an_unknown_reason_is_never_written(tmp_path):
+    _sync_git.remember_private(str(tmp_path), REPO, NOW, 'made up')
+    assert 'reason' not in json.loads((tmp_path / _sync_git.VISIBILITY_FILE).read_text(encoding='utf-8'))
+    _sync_git.remember_private(str(tmp_path), REPO, NOW, 'timeout')
+    assert 'reason' not in json.loads((tmp_path / _sync_git.VISIBILITY_FILE).read_text(encoding='utf-8'))
+
 
 
 def test_a_private_result_is_cached_for_24_hours_for_its_repo_only(device, remote):
