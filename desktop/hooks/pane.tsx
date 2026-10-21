@@ -492,12 +492,14 @@ export function registerReport(on: On): void {
           ])
         }
         const checkRepo = async (name: string) => {
-          await setSettings($, { repo: name, check: null, note: null })
-          // A name the script would refuse starts no process at all
+          // A name the script would refuse starts no process at all. The field gets it without control characters:
+          // the engine draws no Input whose value holds one
           if (!validRepo(name)) {
-            await setSettings($, { check: { result: 'invalid', repo: name, text: INVALID_REPO.replace('{repo}', String(printable(name))) } })
+            const shown = String(printable(name))
+            await setSettings($, { repo: shown, note: null, check: { result: 'invalid', repo: shown, text: INVALID_REPO.replace('{repo}', shown) } })
             return
           }
+          await setSettings($, { repo: name, check: null, note: null })
           // `--`: a name that starts with a dash is a name, not an option of the script
           const run = await runSettings($, ['check-repo', '--', name])
           if (run.status === 'ok' && typeof run.answer.result === 'string') {
