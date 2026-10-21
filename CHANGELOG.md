@@ -92,9 +92,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 - [docs/security.md](docs/security.md#limits-and-threat-model) names what `/usage-export` reads and runs in the VM,
   and that the skill pins a release tag, not a commit.
 
-### Security
-
-Findings of the security review of the installer, the Settings tab and `modules` (part B of the review after 1.6.0):
+The installer, the Settings tab and `modules` (part B of the security review after 1.6.0):
 
 - A gate that `modules` of `config.json` switches off, or sets to shadow while its entry says `--mode=enforce`, now
   shows: `spawn gate off` / `soft stop shadow` in red after the week, in the status line and in the line of the desktop
