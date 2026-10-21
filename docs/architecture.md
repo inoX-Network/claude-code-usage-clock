@@ -646,8 +646,8 @@ run the installer with --sync-repo`).
   each read only and `read(n)` waits for all n bytes; the whole request runs in a daemon thread that the caller waits
   for no longer than its seconds, so a proxy that trickles its answer to `CONNECT`, the TLS handshake or the head ends
   as `timeout` in time too (the thread ends with its socket, at the latest with the process). Without such a proxy
-  the ls-remote of a private repository is refused and the API is never asked. The note holds for 24 h (the node asks for it): a
-  repository made public within that time is still pushed to until the note is older. Whoever can write
+  the ls-remote of a private repository is refused and the API is never asked. The note holds for 24 h (the node
+  asks for it): a repository made public within that time is still pushed to until the note is older. Whoever can write
   `<log_dir>/sync/` can write the note as well; the sync folder is as private as the log folder (0700).
 - **4. Update** (`update_clone`, shared with the pull of the report): fetch of the default branch only
   (`--no-tags`, other branches of the repository never arrive; a remote without it, `couldn't find remote ref`:
