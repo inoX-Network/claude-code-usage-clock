@@ -333,7 +333,7 @@ def test_check_notes_a_config_json_that_only_the_env_of_settings_json_names(setu
     assert setup('--components', 'usage-clock')[0] == 0
     env_config(setup, tmp_path, str(tmp_path / 'elsewhere.json'))
     code, out = setup('--check', '--components', 'usage-clock')
-    assert (f"NOTE config.json: the env of settings.json sets CCUC_CONFIG to '{tmp_path / 'elsewhere.json'}', so the "
+    assert (f"NOTE config.json: the env of settings.json sets CCUC_CONFIG to {str(tmp_path / 'elsewhere.json')!r}, so the "
             f'hooks read that file, but this installer and the Settings tab read and write {setup.target / "config.json"}'
             in out), out
 
