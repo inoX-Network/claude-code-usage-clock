@@ -21,6 +21,7 @@ import pytest
 import _plat
 import _sync_git
 import _win
+import settings_cli
 import sync_format
 from conftest import ROOT
 from test_sync_git import ASKS, REPO, answer, git_alone, remote  # noqa: F401
@@ -186,13 +187,9 @@ def machine(tmp_path, monkeypatch):
 
 
 def runs(module, out):
-    """The equivalent command lines of the summary, each as an argv list."""
-    found = []
-    for line in out.splitlines():
-        for prefix in ('Same as: ', 'then:    '):
-            if line.startswith(prefix + module.PROGRAM + ' '):
-                found.append(shlex.split(line[len(prefix + module.PROGRAM) + 1:]))
-    return found
+    """The equivalent command line of the summary as an argv list, in a list (empty when there is none)."""
+    prefix = f'Same as: {module.PROGRAM} '
+    return [shlex.split(line[len(prefix):]) for line in out.splitlines() if line.startswith(prefix)]
 
 
 def asked(out):
@@ -257,7 +254,7 @@ def option_cases(tmp_path):
     return [['--settings', str(folder / 'settings.json')], ['--target', str(folder / 'target')],
             ['--components', 'statusline'], ['--mode', 'shadow'], ['--week-ok-until', '2026-12-31'],
             ['--replace-statusline'], ['--auto-continue'], ['--sync-repo', REPO], ['--sync-mode', 'on'],
-            ['--sync-name', 'laptop'],
+            ['--sync-name', 'laptop'], ['--on', 'spawn-gate'], ['--off', 'spawn-gate'],
             ['--dry-run'], ['--uninstall'], ['--check'], ['--help']]
 
 
@@ -266,7 +263,7 @@ def test_the_cases_cover_every_option_of_the_parser(machine, tmp_path):
     assert {case[0] for case in option_cases(tmp_path)} == options
 
 
-@pytest.mark.parametrize('index', range(14))
+@pytest.mark.parametrize('index', range(16))
 def test_any_option_switches_it_off_and_nothing_is_read(machine, tmp_path, monkeypatch, index):
     argv = option_cases(tmp_path)[index]
     monkeypatch.setattr(sys, 'stdin', Unreadable(tty=True))
@@ -436,29 +433,29 @@ def test_the_replaced_status_line_is_byte_for_byte_the_same_as_its_command_line(
     assert (machine.settings.read_bytes(), machine.config.read_bytes()) == assistant
 
 
-def test_removing_an_installed_sync_is_byte_for_byte_its_two_command_lines(machine):
+def test_switching_an_installed_sync_off_is_byte_for_byte_its_command_line(machine):
     def start():
         assert machine.cli('--components', 'usage-clock,spawn-gate,soft-stop')[0] == 0
         machine.install_sync_entries()
     start()
     out, assistant = run_and_restart(machine, ['', '', '', '', '', '', 'n', ''])
     commands = runs(machine.module, out)
-    assert commands == [['--components', 'usage-clock,spawn-gate,soft-stop', '--mode', 'shadow'],
-                        ['--uninstall', '--components', 'sync']]
+    assert commands == [['--components', 'usage-clock,spawn-gate,soft-stop,sync', '--mode', 'shadow',
+                         '--sync-mode', 'off']]
     start()
     for argv in commands:
         assert machine.cli(*argv)[0] == 0
     assert (machine.settings.read_bytes(), machine.config.read_bytes()) == assistant
-    assert sync_commands(json.loads(assistant[0])) == [] and json.loads(assistant[1])['sync']['mode'] == 'off'
+    assert len(sync_commands(json.loads(assistant[0]))) == 2 and json.loads(assistant[1])['sync']['mode'] == 'off'
 
 
-def test_a_failing_first_run_stops_before_the_second(machine, monkeypatch):
+def test_a_failing_run_that_switches_the_sync_off_changes_nothing(machine, monkeypatch):
     assert machine.cli('--components', 'usage-clock')[0] == 0
     machine.install_sync_entries()
     monkeypatch.setattr(machine.module, 'smoke_test', lambda *a, **k: ['usage_clock.py: broken'])
     before = machine.files()
     code, out = machine.ask('n', '', '', '', '', 'n', '')
-    assert runs(machine.module, out) == [['--components', 'usage-clock'], ['--uninstall', '--components', 'sync']]
+    assert runs(machine.module, out) == [['--components', 'usage-clock,sync', '--sync-mode', 'off']]
     assert code == 1 and 'SMOKE TEST FAILED' in out and machine.files() == before
 
 
@@ -533,11 +530,20 @@ def test_a_sync_that_is_not_installed_gets_its_repository_checked_even_if_config
     assert runs(machine.module, out)[0][-4:] == ['--sync-repo', 'anna/usage-sync', '--sync-name', PLATFORM]
 
 
-def test_no_on_an_installed_component_leaves_it_installed_and_says_how_to_remove_it(machine):
+def test_no_on_an_installed_component_switches_it_off_and_names_no_uninstall(machine):
     assert machine.cli('--components', 'usage-clock,soft-stop')[0] == 0
     code, out = machine.ask('', 'n', '', '', '', '', '', 'n')
-    assert runs(machine.module, out) == [['--components', 'soft-stop', '--mode', 'shadow', '--sync-mode', 'off']]
-    assert f'{machine.module.PROGRAM} --uninstall --components usage-clock' in out
+    assert runs(machine.module, out) == [['--components', 'soft-stop', '--mode', 'shadow', '--off', 'usage-clock',
+                                          '--sync-mode', 'off']]
+    assert '--uninstall' not in out and 'Stays installed' not in out
+
+
+def test_no_on_an_installed_status_line_leaves_it_installed_and_says_how_to_remove_it(machine):
+    assert machine.cli('--components', 'statusline,usage-clock')[0] == 0
+    code, out = machine.ask('n', '', '', '', '', '', 'n')
+    assert runs(machine.module, out) == [['--components', 'usage-clock', '--sync-mode', 'off']]
+    assert (f'Stays installed: statusline. This assistant removes nothing; to remove it: {machine.module.PROGRAM} '
+            '--uninstall --components statusline') in out
 
 
 def test_no_on_auto_continue_that_is_set_says_it_stays(machine):
@@ -553,10 +559,10 @@ def test_nothing_selected_installs_nothing(machine):
     assert runs(machine.module, out) == [] and not machine.settings.exists()
 
 
-def test_nothing_selected_with_an_installed_sync_only_removes_the_sync(machine):
+def test_nothing_selected_with_an_installed_sync_only_switches_the_sync_off(machine):
     machine.install_sync_entries()
     code, out = machine.ask('', '', '', '', '', 'n', 'n')
-    assert runs(machine.module, out) == [['--uninstall', '--components', 'sync']]
+    assert runs(machine.module, out) == [['--components', 'sync', '--sync-mode', 'off']]
 
 
 # --- No at question 8 -------------------------------------------------------------------------------------------
@@ -1204,9 +1210,9 @@ def test_a_gate_switched_off_in_config_json_is_kept_on_enter(machine):
     set_modules(machine, spawn_gate='off')
     before = machine.config.read_bytes()
     code, out = machine.ask('', '', '', '', '', '', '', '')
-    assert prompt_of(out, ENFORCE).endswith(f'{ENFORCE} [y/n, Enter keeps] ')
-    assert 'spawn-gate off, soft-stop shadow' in out
-    assert '--mode' not in runs(machine.module, out)[0] and machine.config.read_bytes() == before
+    labels(out, (SPAWN_GATE, '[y/N]' + CURRENT), (ENFORCE, '[y/N]' + CURRENT))
+    assert runs(machine.module, out) == [['--components', 'soft-stop', '--mode', 'shadow', '--sync-mode', 'off']]
+    assert machine.config.read_bytes() == before
 
 
 def test_the_only_gate_switched_off_in_config_json_is_kept_on_enter(machine):
@@ -1214,6 +1220,279 @@ def test_the_only_gate_switched_off_in_config_json_is_kept_on_enter(machine):
     set_modules(machine, spawn_gate='off')
     before = machine.config.read_bytes()
     code, out = machine.ask('', '', '', '', '', '', '', '')
-    assert prompt_of(out, ENFORCE).endswith(f'{ENFORCE} [y/n, Enter keeps] ') and 'spawn-gate off;' in out
-    assert runs(machine.module, out) == [['--components', 'spawn-gate', '--sync-mode', 'off']]
-    assert machine.config.read_bytes() == before
+    assert code == 0 and ENFORCE not in asked(out) and 'Nothing selected, nothing to install.' in out
+    assert runs(machine.module, out) == [] and machine.config.read_bytes() == before
+
+
+# --- v8: no switches an installed part off, it stays installed ----------------------------------------------------
+
+SWITCHED_OFF = 'off (stays installed; switch it on again here or in /report → Settings)'
+# (component, key in modules, the value of off, the value of on, label, its question, the index of its answer)
+PARTS = [('usage-clock', 'usage_clock', False, True, 'Usage clock', USAGE_CLOCK, 1),
+         ('context-reporter', 'context_reporter', False, True, 'Context reporter', CONTEXT, 2),
+         ('spawn-gate', 'spawn_gate', 'off', '', 'Spawn gate', SPAWN_GATE, 3),
+         ('soft-stop', 'soft_stop', 'off', '', 'Soft stop', SOFT_STOP, 4)]
+PART_IDS = [part[0] for part in PARTS]
+
+
+def modules(machine):
+    """modules of config.json, as JSON text per key: false and "" stay apart from 0 and None."""
+    return {key: json.dumps(value) for key, value in machine.config_data()['modules'].items()}
+
+
+def tab(machine, key, value):
+    """The Settings tab (hooks/settings_cli.py set) on the installation of the machine."""
+    screen = io.StringIO()
+    machine.monkeypatch.setattr(sys, 'stdout', screen)
+    try:
+        code = settings_cli.main(['--settings', str(machine.settings), '--target', str(machine.target), 'set', key, value])
+    finally:
+        machine.monkeypatch.setattr(sys, 'stdout', sys.__stdout__)
+    assert code == 0, screen.getvalue()
+
+
+def restart(machine):
+    """Moves the home folder away and makes a fresh one with the same path."""
+    os.rename(machine.home, machine.tmp / f'home-{time.monotonic_ns()}')
+    (machine.home / '.claude').mkdir(parents=True)
+
+
+def written(machine):
+    return machine.settings.read_bytes(), machine.config.read_bytes()
+
+
+@pytest.mark.parametrize('component,key,off,on,label,question,at', PARTS, ids=PART_IDS)
+def test_v8_no_at_an_installed_part_switches_it_off_and_its_hook_stays(machine, component, key, off, on, label,
+                                                                        question, at):
+    assert machine.cli('--components', ALL, '--mode', 'shadow')[0] == 0
+    settings = machine.settings.read_bytes()
+    answers = [''] * 9
+    answers[at] = 'n'
+    code, out = machine.ask(*answers)
+    assert code == 0, out
+    assert modules(machine)[key] == json.dumps(off) and machine.settings.read_bytes() == settings
+    rest = ','.join(c for c in ALL.split(',') if c != component)
+    assert runs(machine.module, out) == [['--components', rest, '--mode', 'shadow', '--off', component,
+                                          '--sync-mode', 'off']]
+    assert f'  {label}: {SWITCHED_OFF}' in out and '--uninstall' not in out and 'Stays installed' not in out
+
+
+@pytest.mark.parametrize('component,key,off,on,label,question,at', PARTS, ids=PART_IDS)
+def test_v8_a_switched_off_part_is_offered_as_no_and_yes_switches_it_on_again(machine, component, key, off, on, label,
+                                                                               question, at):
+    assert machine.cli('--components', ALL, '--mode', 'shadow')[0] == 0
+    set_modules(machine, **{key: off})
+    answers = [''] * 9
+    answers[at] = 'y'
+    code, out = machine.ask(*answers)
+    assert code == 0, out
+    lines = out.splitlines()
+    index = next(i for i, line in enumerate(lines) if question in line)
+    assert lines[index].endswith(f'{question} [y/N] (current) y')
+    assert lines[index - 1].endswith('Now: off (your choice).')
+    others = [q for _, _, _, _, _, q, _ in PARTS if q != question]
+    assert not any(lines[i - 1].endswith('(your choice).') for i, line in enumerate(lines) if any(q in line for q in others))
+    # a gate switched on again runs in the mode of question 6 (--mode comes after --on)
+    assert modules(machine)[key] == json.dumps('shadow' if component in ('spawn-gate', 'soft-stop') else on)
+    assert runs(machine.module, out) == [['--components', ALL, '--mode', 'shadow', '--on', component,
+                                          '--sync-mode', 'off']]
+    assert f'  {label}: yes' in out
+
+
+def test_v8_enter_keeps_switched_off_parts_off_and_writes_nothing(machine):
+    assert machine.cli('--components', ALL, '--mode', 'shadow')[0] == 0
+    set_modules(machine, usage_clock=False, spawn_gate='off')
+    before, backups = written(machine), machine.backups()
+    code, out = machine.ask(*[''] * 9)
+    assert code == 0, out
+    labels(out, (USAGE_CLOCK, '[y/N]' + CURRENT), (SPAWN_GATE, '[y/N]' + CURRENT), (SOFT_STOP, '[Y/n]' + CURRENT))
+    assert runs(machine.module, out) == [['--components', 'statusline,context-reporter,soft-stop', '--mode', 'shadow',
+                                          '--sync-mode', 'off']]
+    assert written(machine) == before and machine.backups() == backups
+    assert f'  Usage clock: {SWITCHED_OFF}' in out and f'  Spawn gate: {SWITCHED_OFF}' in out
+
+
+def test_v8_question_6_is_not_asked_when_no_gate_stays_on(machine):
+    assert machine.cli('--components', ALL, '--mode', 'enforce')[0] == 0
+    settings = machine.settings.read_bytes()
+    code, out = machine.ask('', '', '', 'n', 'n', '', '', '')
+    assert code == 0, out
+    assert ENFORCE not in asked(out) and steps(out) == [1, 2, 3, 4, 5, 7, 8]
+    assert runs(machine.module, out) == [['--components', 'statusline,usage-clock,context-reporter',
+                                          '--off', 'spawn-gate,soft-stop', '--sync-mode', 'off']]
+    assert modules(machine)['spawn_gate'] == modules(machine)['soft_stop'] == '"off"'
+    assert machine.settings.read_bytes() == settings
+
+
+def test_v8_a_gate_switched_on_again_takes_the_mode_of_question_6_as_a_new_gate(machine):
+    assert machine.cli('--components', 'spawn-gate', '--mode', 'shadow')[0] == 0
+    set_modules(machine, spawn_gate='off')
+    code, out = machine.ask('', '', 'y', '', 'y', '', '', '')
+    assert code == 0, out
+    labels(out, (SPAWN_GATE, '[y/N]' + CURRENT), (ENFORCE, '[y/N]' + DEFAULT))
+    assert runs(machine.module, out) == [['--components', 'spawn-gate', '--mode', 'enforce', '--on', 'spawn-gate',
+                                          '--sync-mode', 'off']]
+    assert modules(machine)['spawn_gate'] == '"enforce"'
+    assert '--mode=enforce' in machine.module.installed_command(machine.data(), 'spawn-gate', str(machine.target))
+
+
+def test_v8_only_switching_off_installs_nothing_and_copies_no_file(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    hooks = {k: v for k, v in machine.files().items() if not k.endswith('config.json')}
+    code, out = machine.ask('', 'n', '', '', '', '', '')
+    assert code == 0, out
+    assert runs(machine.module, out) == [['--off', 'usage-clock', '--sync-mode', 'off']]
+    assert modules(machine)['usage_clock'] == 'false' and 'Smoke test' not in out and 'Files:' not in out
+    assert {k: v for k, v in machine.files().items() if not k.endswith('config.json') and '.bak-' not in k} == hooks
+
+
+def test_v8_the_context_reporter_is_not_asked_without_the_status_line_and_stays_as_it_is(machine):
+    assert machine.cli('--components', 'statusline,context-reporter')[0] == 0
+    set_modules(machine, context_reporter=False)
+    before = written(machine)
+    code, out = machine.ask('n', '', '', '', '', '', '')
+    assert code == 0 and CONTEXT not in asked(out), out
+    assert '  Context reporter: unchanged (asked only with the status line)' in out
+    assert runs(machine.module, out) == [] and written(machine) == before
+
+
+def test_v8_no_at_an_installed_sync_switches_it_off_and_keeps_hooks_repo_and_name(machine):
+    machine.install_sync_entries(mode='on', repo='anna/usage-sync')
+    cfg = machine.config_data()
+    cfg['sync']['machine_name'] = 'laptop'
+    machine.config.write_text(json.dumps(cfg), encoding='utf-8')
+    hooks = sync_commands(machine.data())
+    code, out = machine.ask('', '', '', '', '', 'n', '')
+    assert code == 0, out
+    assert runs(machine.module, out) == [['--components', 'sync', '--sync-mode', 'off']]
+    assert machine.config_data()['sync'] == {'mode': 'off', 'repo': 'anna/usage-sync', 'machine_name': 'laptop'}
+    assert len(hooks) == 2 and sync_commands(machine.data()) == hooks
+    assert f'  Sync: {SWITCHED_OFF}' in out and '--uninstall' not in out
+    before = written(machine)
+    code, out = machine.ask('', '', '', '', '', '', '')
+    assert code == 0 and 'Now: off (your choice).' in out, out
+    labels(out, (SYNC, '[y/N]' + CURRENT))
+    assert runs(machine.module, out) == [] and written(machine) == before
+
+
+def test_v8_yes_at_an_installed_sync_that_is_off_starts_it_in_shadow(machine, monkeypatch):
+    machine.install_sync_entries(mode='off', repo='anna/usage-sync')
+    monkeypatch.setattr(_sync_git, 'check_visibility', lambda *a, **k: pytest.fail('no visibility check on Enter'))
+    code, out = machine.ask('', '', '', '', '', 'y', '', '', '')
+    assert code == 0, out
+    labels(out, (SYNC, '[y/N]' + CURRENT))
+    assert runs(machine.module, out) == [['--components', 'sync', '--sync-mode', 'shadow']]
+    assert machine.config_data()['sync']['mode'] == 'shadow' and len(sync_commands(machine.data())) == 2
+    assert 'Sync: yes, anna/usage-sync (starts in shadow mode)' in out
+    assert f'{machine.module.PROGRAM} --components sync --sync-mode on' in out.splitlines()[-1]
+
+
+def test_v8_switching_a_gate_off_is_byte_for_byte_its_command_line_and_the_settings_tab(machine):
+    def start():
+        assert machine.cli('--components', ALL, '--mode', 'shadow')[0] == 0
+    start()
+    out, assistant = run_and_restart(machine, ['', '', '', 'n', '', '', '', '', ''])
+    commands = runs(machine.module, out)
+    assert commands == [['--components', 'statusline,usage-clock,context-reporter,soft-stop', '--mode', 'shadow',
+                         '--off', 'spawn-gate', '--sync-mode', 'off']]
+    start()
+    assert machine.cli(*commands[0])[0] == 0
+    assert written(machine) == assistant
+    restart(machine)
+    start()
+    tab(machine, 'modules.spawn_gate', 'off')
+    assert written(machine) == assistant
+    assert json.loads(assistant[1])['modules']['spawn_gate'] == 'off'
+
+
+@pytest.mark.parametrize('component,key,off,on,label,question,at', PARTS, ids=PART_IDS)
+@pytest.mark.parametrize('switch', ['--off', '--on'])
+def test_v8_on_and_off_write_what_the_settings_tab_writes(machine, component, key, off, on, label, question, at, switch):
+    def start():
+        assert machine.cli('--components', ALL)[0] == 0
+        set_modules(machine, **{key: on if switch == '--off' else off})
+    start()
+    code, out = machine.cli(switch, component)
+    assert code == 0, out
+    installer = written(machine)
+    restart(machine)
+    start()
+    value = off if switch == '--off' else on
+    tab(machine, f'modules.{key}', value if isinstance(value, str) else json.dumps(value))
+    assert written(machine) == installer and json.loads(installer[1])['modules'][key] == value
+
+
+def test_v8_off_and_on_leave_settings_json_alone_with_one_backup_per_run(machine):
+    assert machine.cli('--components', ALL)[0] == 0
+    settings = machine.settings.read_bytes()
+    code, out = machine.cli('--off', 'usage-clock,context-reporter,spawn-gate,soft-stop')
+    assert code == 0, out
+    assert modules(machine) == {'usage_clock': 'false', 'context_reporter': 'false', 'spawn_gate': '"off"',
+                                'soft_stop': '"off"'}
+    assert "modules.usage_clock True -> False" in out and "modules.spawn_gate '' -> 'off'" in out
+    assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 1
+    code, out = machine.cli('--on', 'usage-clock,context-reporter,spawn-gate,soft-stop')
+    assert code == 0, out
+    assert modules(machine) == {'usage_clock': 'true', 'context_reporter': 'true', 'spawn_gate': '""', 'soft_stop': '""'}
+    assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 2
+    assert machine.settings.read_bytes() == settings and 'settings.json is already up to date' in out
+    before, backups = written(machine), machine.backups()
+    code, out = machine.cli('--on', 'usage-clock')
+    assert code == 0 and written(machine) == before and machine.backups() == backups
+
+
+def test_v8_on_with_mode_writes_the_mode_and_on_takes_a_part_this_run_installs(machine):
+    assert machine.cli('--components', 'spawn-gate', '--on', 'spawn-gate')[0] == 0
+    assert modules(machine)['spawn_gate'] == '""'
+    assert machine.cli('--components', 'spawn-gate', '--on', 'spawn-gate', '--mode', 'enforce')[0] == 0
+    assert modules(machine)['spawn_gate'] == '"enforce"'
+
+
+@pytest.mark.parametrize('argv,text', [
+    (['--off', 'sync'], "--off: unknown 'sync'"),
+    (['--on', 'statusline'], "--on: unknown 'statusline'"),
+    (['--on', 'spawn-gate', '--off', 'soft-stop,spawn-gate'], '--on and --off both name spawn-gate'),
+    (['--components', 'usage-clock,spawn-gate', '--off', 'spawn-gate'], '--off spawn-gate contradicts --components'),
+    (['--uninstall', '--off', 'spawn-gate'], '--uninstall takes no --on or --off'),
+    (['--check', '--on', 'spawn-gate'], '--check changes nothing')])
+def test_v8_bad_on_and_off_are_exit_2_without_a_change(machine, monkeypatch, argv, text):
+    assert machine.cli('--components', ALL, '--mode', 'shadow')[0] == 0
+    before = machine.files()
+    screen = io.StringIO()
+    monkeypatch.setattr(sys, 'stderr', screen)
+    with pytest.raises(SystemExit) as stop:
+        machine.module.main(argv)
+    assert stop.value.code == 2 and text in screen.getvalue() and machine.files() == before
+
+
+@pytest.mark.parametrize('argv', [['--off', 'soft-stop'], ['--on', 'soft-stop'],
+                                  ['--components', 'usage-clock', '--on', 'usage-clock,soft-stop'],
+                                  ['--components', 'usage-clock', '--off', 'soft-stop', '--dry-run']])
+def test_v8_on_or_off_of_a_part_that_is_not_installed_is_exit_2_without_a_change(machine, argv):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    before = machine.files()
+    code, out = machine.cli(*argv)
+    assert code == 2 and 'soft-stop is not installed' in out and machine.files() == before
+
+
+def test_v8_off_in_a_dry_run_writes_nothing(machine):
+    assert machine.cli('--components', 'spawn-gate')[0] == 0
+    before = machine.files()
+    code, out = machine.cli('--off', 'spawn-gate', '--dry-run')
+    assert code == 0 and "modules.spawn_gate '' -> 'off' would be written" in out and machine.files() == before
+
+
+def test_v8_off_with_a_config_json_that_cannot_be_read_is_exit_2_without_a_change(machine):
+    assert machine.cli('--components', 'spawn-gate')[0] == 0
+    machine.config.write_text('{broken', encoding='utf-8')
+    before = machine.files()
+    code, out = machine.cli('--off', 'spawn-gate')
+    assert code == 2 and 'cannot be read as JSON' in out and machine.files() == before
+
+
+def test_v8_a_missing_key_is_written_as_the_settings_tab_writes_it(machine):
+    assert machine.cli('--components', 'spawn-gate')[0] == 0
+    machine.config.write_text('{"sync": {"mode": "off"}}', encoding='utf-8')
+    code, out = machine.cli('--on', 'spawn-gate')
+    assert code == 0 and "modules.spawn_gate (not set) -> ''" in out
+    assert machine.config_data() == {'sync': {'mode': 'off'}, 'modules': {'spawn_gate': ''}}

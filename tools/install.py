@@ -32,8 +32,10 @@ spawn gate command as well; a run without it removes an earlier value and says s
 
 The sync (0034-SYNC-INSTALL) is installed only when --components names it. Its mode, repository and machine name live in
 config.json (sync.mode, sync.repo, sync.machine_name). With --mode the installer also writes modules.<gate> for each
-gate of the run, which comes before the --mode of the hook entry (--check says where the mode comes from). These are the
-only keys the installer ever writes there, with one backup, and only when they change. --sync-name NAME sets
+gate of the run, which comes before the --mode of the hook entry (--check says where the mode comes from), and --on and
+--off set the switches of modules for installed parts as the Settings tab does (their hooks stay; without --components
+such a run installs nothing). These are the only keys the installer ever writes there, with one backup, and only when
+they change. --sync-name NAME sets
 sync.machine_name, the name of this machine in the report (checked as config.json checks it; the host name is never
 used). --sync-repo owner/name sets sync.repo and, under the sync lock and before anything is written, checks once that
 the repository cannot be read without logging in (public or unclear: exit 1, nothing installed) and clones it into
@@ -45,12 +47,13 @@ status line pushes from the mode alone; the clone and the data in the remote sta
 entries are installed; a sync.mode that is not off without them is a FIX.
 
 --sync-mode off without the component sync writes only sync.mode "off" into config.json, so that the sync is off on
-purpose (the assistant's answer no); with the hooks of the sync installed it is an argument error, as only --uninstall
---components sync removes them.
+purpose (the assistant's answer no); with the hooks of the sync installed it is an argument error: --components sync
+--sync-mode off switches it off and keeps them, --uninstall --components sync removes them.
 
 Run in a terminal without any option, the installer asks first (the assistant): one y/n question per part, the defaults
 being what is installed, then a summary with the equivalent command line, which it runs through main() as if it had
-been typed. Any option, or a stdin or stdout that is no terminal, and it asks nothing.
+been typed. No to an installed part switches it off (--off, the sync --sync-mode off) and removes nothing. Any option,
+or a stdin or stdout that is no terminal, and it asks nothing.
 
 An existing statusLine that runs something else is left alone unless --replace-statusline is given.
 --uninstall removes only the entries that point to scripts in --target, and the statusLine only if it runs
@@ -124,6 +127,7 @@ REPORT_MODULES = ('_transcripts.py',)
 NEVER_BLOCK = ' || true'
 SPAWN_BROKEN = ' || { echo "spawn gate broken - start denied" >&2; exit 2; }'
 GATES = ('spawn-gate', 'soft-stop')  # the components that have a --mode
+SWITCHES = ('usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop')     # the components with a switch in modules
 
 # One typical input per component for the smoke test. The context reporter needs a state file of its session.
 SMOKE_SESSION = 'smoke-test'
@@ -168,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help='sync: off, shadow (commits here, pushes nothing) or on (default: keep the mode of an '
                              'installed sync, shadow if there is none); off without the component sync only writes '
                              'sync.mode off')
+    parser.add_argument('--on', metavar='COMPONENTS',
+                        help='switch installed parts on again in config.json, comma-separated: ' + ', '.join(SWITCHES)
+                             + ' (modules.<name> true, a gate "": the mode of its hook entry, or that of --mode)')
+    parser.add_argument('--off', metavar='COMPONENTS',
+                        help='switch installed parts off in config.json, their hooks stay (modules.<name> false, a gate '
+                             '"off"); without --components the run installs nothing, it only switches')
     parser.add_argument('--dry-run', action='store_true', help='show what would change, write nothing')
     parser.add_argument('--uninstall', action='store_true', help='remove the entries again (files stay)')
     parser.add_argument('--check', action='store_true',
@@ -185,15 +195,30 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
-def validate_args(args: argparse.Namespace) -> None:
-    args.components_given = args.components is not None      # --check adds an installed sync to the default
-    if args.components is None:
-        args.components = ','.join(COMPONENTS if args.uninstall else DEFAULT_COMPONENTS)
-    names = [name.strip() for name in args.components.split(',')]
-    unknown = [name for name in names if name not in COMPONENTS]
+def names_of(value: str, option: str, known: tuple[str, ...]) -> tuple[str, ...]:
+    names = [name.strip() for name in value.split(',')]
+    unknown = [name for name in names if name not in known]
     if unknown:
-        raise UsageError(f'--components: unknown {", ".join(repr(n) for n in unknown)}; choose from {", ".join(COMPONENTS)}')
-    args.components = tuple(dict.fromkeys(names))
+        raise UsageError(f'{option}: unknown {", ".join(repr(n) for n in unknown)}; choose from {", ".join(known)}')
+    return tuple(dict.fromkeys(names))
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    args.on = () if args.on is None else names_of(args.on, '--on', SWITCHES)
+    args.off = () if args.off is None else names_of(args.off, '--off', SWITCHES)
+    both = [name for name in args.on if name in args.off]
+    if both:
+        raise UsageError(f'--on and --off both name {", ".join(both)}.')
+    if args.uninstall and (args.on or args.off):
+        raise UsageError('--uninstall takes no --on or --off.')
+    args.components_given = args.components is not None      # --check adds an installed sync to the default
+    if args.components_given:
+        args.components = names_of(args.components, '--components', COMPONENTS)
+    else:      # a run with only --on or --off installs nothing
+        args.components = COMPONENTS if args.uninstall else () if args.on or args.off else DEFAULT_COMPONENTS
+    contradicting = [name for name in args.off if name in args.components]
+    if contradicting:
+        raise UsageError(f'--off {",".join(contradicting)} contradicts --components, which installs it switched on.')
     if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
     if args.sync_name is not None and not _config._MACHINE_NAME.fullmatch(args.sync_name):
@@ -220,7 +245,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise UsageError('--replace-statusline needs the component statusline.')
     if args.check and (args.dry_run or args.uninstall or args.mode or args.week_ok_until or args.replace_statusline
                        or args.auto_continue or args.sync_repo is not None or args.sync_name is not None
-                       or args.sync_mode):
+                       or args.sync_mode or args.on or args.off):
         raise UsageError('--check changes nothing and takes only --settings, --target and --components.')
 
 
@@ -670,8 +695,8 @@ def plan_sync_mode_off(data: dict, target: str) -> SyncPlan:
     value, so that the sync is off on purpose. A linked config.json that is off already stays as it is (never written
     through); the hooks of an installed sync are removed by --uninstall --components sync, not here."""
     if installed_command(data, 'sync', target) is not None:
-        raise UsageError('the sync is installed: --uninstall --components sync removes its hooks and sets sync.mode to '
-                         'off; nothing changed.')
+        raise UsageError('the sync is installed: --components sync --sync-mode off switches it off and keeps its hooks, '
+                         '--uninstall --components sync removes them and sets sync.mode to off; nothing changed.')
     path = config_file(target)
     cfg = effective_config(path)
     if os.path.islink(path) and cfg['sync']['mode'] == 'off':
@@ -684,7 +709,8 @@ def plan_sync_mode_off(data: dict, target: str) -> SyncPlan:
 
 
 class ModulesPlan(NamedTuple):
-    """modules.<gate> for the gates of a run with --mode (`updates` are the keys `changes` describes)."""
+    """The keys of modules a run sets: --on, --off, and --mode for its gates (`updates` are the keys `changes`
+    describes)."""
     path: str
     existed: bool
     updates: dict
@@ -692,25 +718,33 @@ class ModulesPlan(NamedTuple):
 
 
 def plan_modules(args: argparse.Namespace, target: str) -> ModulesPlan | None:
-    """--mode also sets modules.<gate> for each gate of this run, so that config.json, which comes first, and the hook
-    entry tell the same mode. None without --mode or a gate. A config.json that is a link or cannot be read is not
-    written: a note says so, and the run goes on."""
-    gates = [c for c in args.components if c in GATES]
-    if not args.mode or not gates:
+    """--on and --off set the switch of each part they name as the Settings tab does (settings_cli.py set: true or "",
+    false or "off", and a key that is missing counts as a change). --mode also sets modules.<gate> for each gate of this
+    run, after --on, so that config.json, which comes first, and the hook entry tell the same mode. None if there is
+    nothing to set. A config.json that is a link or cannot be read: with --on or --off an argument error, as nothing
+    else would switch the part; with --mode alone a note, and the run goes on."""
+    values = {}
+    for part in args.on:
+        values[part.replace('-', '_')] = '' if part in GATES else True
+    for part in args.off:
+        values[part.replace('-', '_')] = 'off' if part in GATES else False
+    gates = [c for c in args.components if c in GATES] if args.mode else []
+    for gate in gates:
+        values[gate.replace('-', '_')] = args.mode
+    if not values:
         return None
     path = config_file(target)
     try:
         section = read_config(path).get('modules', {})
     except UsageError as error:
+        if args.on or args.off:
+            raise
         print(f'Note: modules.{"/".join(g.replace("-", "_") for g in gates)} not written ({error}). It comes before '
               f'--mode: if it is set there, set it to {args.mode!r} by hand.')
         return None
-    updates, changes = {}, []
-    for gate in gates:
-        key = gate.replace('-', '_')
-        if section.get(key, '') != args.mode:
-            updates[key] = args.mode
-            changes.append(f'modules.{key} {section.get(key, "")!r} -> {args.mode!r}')
+    updates = {key: value for key, value in values.items() if key not in section or section[key] != value}
+    changes = [f'modules.{key} {repr(section[key]) if key in section else "(not set)"} -> {value!r}'
+               for key, value in updates.items()]
     return ModulesPlan(path, os.path.exists(path), updates, changes)
 
 
@@ -972,6 +1006,7 @@ LEGEND = '(current) = Enter keeps what you have now \u00b7 (default) = the safe 
 STEPS = 8               # the main questions; a sub-question carries the number of its main question
 INFO_WORDS = ('i', '?', 'h', 'help', '--help')      # answers in any case that print the info of a question
 TEXT_INFO_WORDS = ('?', 'help', '--help')           # at the repository and the name, where h and i are answers
+SWITCHED_OFF = 'off (stays installed; switch it on again here or in /report \u2192 Settings)'      # in the summary
 
 
 class Abort(Exception):
@@ -988,11 +1023,12 @@ class Installed(NamedTuple):
     components: frozenset[str]      # the components with entries of ours (the status line: ours runs)
     foreign_statusline: bool
     modes: dict[str, str]           # installed gate -> the mode it runs in (config.json first, off included)
+    off: frozenset[str]             # the installed parts switched off in modules of config.json
     week_ok_until: str | None       # of the installed spawn gate; a run without it would remove it
     auto_continue: bool
     sync_repo: str                  # sync.repo as the hooks read it
     machine_name: str               # sync.machine_name as the hooks read it
-    sync_off: bool                  # config.json says sync.mode "off" and the sync is not installed
+    sync_off: bool                  # off on purpose: installed and sync.mode off, or not installed and "off" written
 
 
 def interactive() -> bool:
@@ -1013,13 +1049,15 @@ def installed_state(data: dict, target: str) -> Installed:
         written = read_config(path).get('sync', {}).get('mode') if os.path.exists(path) else None
     except UsageError:      # a link or no JSON object: the run with --sync-mode off names it
         written = None
-    configured = effective_config(path)['modules']      # modules.<gate> comes before the --mode of the entry
+    cfg = effective_config(path)
+    configured = cfg['modules']      # modules.<gate> comes before the --mode of the entry
     return Installed(frozenset(components), statusline is not None and not ours,
                      {gate: configured[gate.replace('-', '_')] or mode
                       for gate, (mode, _) in resolve_modes(data, gates, target).items()},
+                     frozenset(c for c in SWITCHES if c in components and configured[c.replace('-', '_')] in (False, 'off')),
                      option_value(installed_command(data, 'spawn-gate', target), 'week-ok-until'),
-                     data.get('autoContinueAtUsageLimit') is True, effective_config(path)['sync']['repo'],
-                     effective_config(path)['sync']['machine_name'], 'sync' not in components and written == 'off')
+                     data.get('autoContinueAtUsageLimit') is True, cfg['sync']['repo'], cfg['sync']['machine_name'],
+                     cfg['sync']['mode'] == 'off' if 'sync' in components else written == 'off')
 
 
 def _read(prompt: str) -> str:
@@ -1107,15 +1145,32 @@ def ask_name(default: str, origin: str) -> str:
     raise Abort(2, f'{ATTEMPTS} names that were not allowed')
 
 
-def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
-    """The questions in their order. Returns the runs (argv lists for main) and the summary lines."""
+def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
+    """The questions in their order. Returns the run (argv for main, None if there is nothing to do) and the summary
+    lines. No at an installed part switches it off and leaves it installed (--off, for the sync --sync-mode off), yes
+    at a part switched off switches it on again (--on, the sync in shadow); only the status line has no switch."""
     first = not state.components        # the defaults are the safe start; on a second run what is installed
     origin = 'default' if first else 'current'
 
     def default(component: str) -> bool:
-        return first or component in state.components
+        return (first or component in state.components) and component not in state.off
 
-    chosen, summary, replace = [], [], False
+    chosen, on, off, summary, replace = [], [], [], [], False
+
+    def switch(component: str, label: str, question: str, step: int) -> None:
+        now = ' Now: off (your choice).' if component in state.off else ''
+        if ask(SUMMARY[component] + now, question, default(component), origin, step, component):
+            chosen.append(component)
+            if component in state.off:
+                on.append(component)
+            summary.append(f'  {label}: yes')
+        elif component in state.components:
+            if component not in state.off:
+                off.append(component)
+            summary.append(f'  {label}: {SWITCHED_OFF}')
+        else:
+            summary.append(f'  {label}: no')
+
     if ask(SUMMARY['statusline'], 'Status line: model, 5h/week usage and context below the prompt?',
            default('statusline'), origin, 1, 'statusline'):
         chosen.append('statusline')
@@ -1127,40 +1182,28 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
                                                else ''))
     else:
         summary.append('  Status line: no')
-    if ask(SUMMARY['usage-clock'],
-           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock'),
-           origin, 2, 'usage-clock'):
-        chosen.append('usage-clock')
-    summary.append(f'  Usage clock: {"yes" if "usage-clock" in chosen else "no"}')
+    switch('usage-clock', 'Usage clock', 'Usage clock: one line with usage, reset times and local time in every prompt?',
+           2)
     if 'statusline' in chosen:
-        if ask(SUMMARY['context-reporter'],
-               'Context reporter: tells the model how full its context is (needs the status line)?',
-               default('context-reporter'), origin, 3, 'context-reporter'):
-            chosen.append('context-reporter')
-        summary.append(f'  Context reporter: {"yes" if "context-reporter" in chosen else "no"}')
+        switch('context-reporter', 'Context reporter',
+               'Context reporter: tells the model how full its context is (needs the status line)?', 3)
     else:
-        summary.append('  Context reporter: no (needs the status line)')
-    if ask(SUMMARY['spawn-gate'],
-           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate'), origin,
-           4, 'spawn-gate'):
-        chosen.append('spawn-gate')
-    summary.append(f'  Spawn gate: {"yes" if "spawn-gate" in chosen else "no"}')
-    if ask(SUMMARY['soft-stop'],
-           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop'), origin,
-           5, 'soft-stop'):
-        chosen.append('soft-stop')
-    summary.append(f'  Soft stop: {"yes" if "soft-stop" in chosen else "no"}')
+        summary.append('  Context reporter: ' + ('unchanged (asked only with the status line)'
+                                                 if 'context-reporter' in state.components else
+                                                 'no (needs the status line)'))
+    switch('spawn-gate', 'Spawn gate', 'Spawn gate: stops new agent blocks above a usage threshold?', 4)
+    switch('soft-stop', 'Soft stop', 'Soft stop: slows subagents down near the five-hour limit?', 5)
     mode = None
     gates = [g for g in GATES if g in chosen]
     if gates:
-        kept = {state.modes[g] for g in gates if g in state.modes}
-        keep = len(kept) == 2 or 'off' in kept      # Enter must not switch on a gate the Settings tab switched off
-        now = (' Now: ' + ', '.join(f'{g} {state.modes.get(g, "new")}' for g in gates) + '; Enter keeps each.'
-               if keep else '')
+        # a gate switched on again has no mode of its own yet: like a new one
+        kept = {state.modes[g] for g in gates if g in state.modes and g not in state.off}
+        keep = len(kept) == 2
+        now = ' Now: ' + ', '.join(f'{g} {state.modes[g]}' for g in gates) + '; Enter keeps each.' if keep else ''
         enforce = ask('Shadow only writes to the log what the gates would do; enforce blocks and warns for real.' + now,
                       'Let the gates block for real (enforce)? No = only log (shadow).',
                       None if keep else kept == {'enforce'},
-                      None if keep else {0: 'default', 1: 'current'}.get(len(kept)), 6, 'enforce')
+                      None if keep else 'current' if kept else 'default', 6, 'enforce')
         mode = None if enforce is None else ('enforce' if enforce else 'shadow')
         summary.append('  Gates: ' + {None: 'each keeps its mode', 'enforce': 'enforce, they block for real',
                                       'shadow': 'shadow, they only log'}[mode])
@@ -1172,8 +1215,9 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
                                           'remove it from settings.json by hand)' if state.auto_continue else 'no'))
     repo = None
     installed_sync = 'sync' in state.components
+    sync_off = False        # the run switches an installed sync off
     if ask(SUMMARY['sync'] + (' Now: off (your choice).' if state.sync_off else ''),
-           'Sync across computers through a private GitHub repository?', installed_sync,
+           'Sync across computers through a private GitHub repository?', installed_sync and not state.sync_off,
            'current' if state.sync_off else origin, 8, 'sync'):
         repo = ask_repo(state.sync_repo)
         # the name in config.json; on a first install the platform (an installed sync keeps an empty one on Enter)
@@ -1181,39 +1225,44 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
                         'current' if installed_sync or state.machine_name else 'default')
         chosen.append('sync')
         summary.append(f'  Sync: yes, {repo}' + (f', this computer as "{name}"' if name else '')
-                       + ('' if installed_sync else ' (starts in shadow mode)'))
+                       + ('' if installed_sync and not state.sync_off else ' (starts in shadow mode)'))
+    elif installed_sync:
+        sync_off = not state.sync_off
+        summary.append(f'  Sync: {SWITCHED_OFF}')
     else:
-        summary.append('  Sync: no, its hooks are removed and sync.mode is off' if installed_sync
-                       else '  Sync: no, sync.mode off')
-    staying = [c for c in COMPONENTS if c in state.components and c not in chosen and c != 'sync']
-    if staying:
-        summary.append(f'  Stays installed: {", ".join(staying)}. This assistant removes nothing; to remove it: '
-                       f'{PROGRAM} --uninstall --components {",".join(staying)}')
-    runs = []
-    if chosen:
-        argv = ['--components', ','.join(chosen)]
-        if replace:
-            argv.append('--replace-statusline')
-        if mode:
-            argv += ['--mode', mode]
-        if 'spawn-gate' in chosen and state.week_ok_until:
-            argv += ['--week-ok-until', state.week_ok_until]
-        if auto:
-            argv.append('--auto-continue')
-        if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
-            argv += ['--sync-repo', repo]
-        if repo and name != state.machine_name:
-            argv += ['--sync-name', name]
-        if not repo and not installed_sync:
-            argv += ['--sync-mode', 'off']
-        runs.append(argv)
-    if not repo and installed_sync:
-        runs.append(['--uninstall', '--components', 'sync'])
-    return runs, summary
+        summary.append('  Sync: no, sync.mode off')
+    if 'statusline' in state.components and 'statusline' not in chosen:
+        summary.append('  Stays installed: statusline. This assistant removes nothing; to remove it: '
+                       f'{PROGRAM} --uninstall --components statusline')
+    components = chosen + (['sync'] if sync_off else [])     # --sync-mode off with the component keeps its hooks
+    if not (components or on or off):
+        return None, summary
+    argv = ['--components', ','.join(components)] if components else []
+    if replace:
+        argv.append('--replace-statusline')
+    if mode:
+        argv += ['--mode', mode]
+    if 'spawn-gate' in chosen and state.week_ok_until:
+        argv += ['--week-ok-until', state.week_ok_until]
+    if auto:
+        argv.append('--auto-continue')
+    if on:
+        argv += ['--on', ','.join(on)]
+    if off:
+        argv += ['--off', ','.join(off)]
+    if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
+        argv += ['--sync-repo', repo]
+    if repo and name != state.machine_name:
+        argv += ['--sync-name', name]
+    if sync_off or not repo and not installed_sync:
+        argv += ['--sync-mode', 'off']
+    elif repo and installed_sync and state.sync_off:
+        argv += ['--sync-mode', 'shadow']      # the safe start, as on a first install
+    return argv, summary
 
 
 def assistant() -> int:
-    """Asks for each part, shows the equivalent command lines and runs them through main(), as if they were typed."""
+    """Asks for each part, shows the equivalent command line and runs it through main(), as if it were typed."""
     settings_path = os.path.abspath(os.path.expanduser(DEFAULT_SETTINGS))
     target = os.path.abspath(os.path.expanduser(DEFAULT_TARGET))
     try:
@@ -1227,27 +1276,24 @@ def assistant() -> int:
     print(f'Settings: {settings_path}')
     print(f'Target:   {target}')
     try:
-        runs, summary = interview(state)
+        argv, summary = interview(state)
         print()
         print('Summary:')
         print('\n'.join(summary))
-        if not runs:
+        if argv is None:
             print('Nothing selected, nothing to install.')
             return 0
-        print(f'Same as: {PROGRAM} {shlex.join(runs[0])}')
-        for argv in runs[1:]:
-            print(f'then:    {PROGRAM} {shlex.join(argv)}')
+        print(f'Same as: {PROGRAM} {shlex.join(argv)}')
         if not ask(None, 'Install now?', True):
             print('Nothing changed.')
             return 0
     except Abort as stop:
         print(f'Stopped ({stop}): nothing changed.')
         return stop.code
-    for argv in runs:
-        print()
-        code = main(argv)
-        if code:
-            return code
+    print()
+    code = main(argv)
+    if code:
+        return code
     print()
     print(f'Fine-tuning (thresholds, colours, the sync) is in {config_file(target)}, explained in '
           f'docs/configuration.md: {CONFIGURATION_DOC}')
@@ -1279,7 +1325,13 @@ def run(args: argparse.Namespace) -> int:
     if args.check:
         return check(args, settings_path, target)
     data, existed = load_settings(settings_path)
+    missing = [part for part in args.on + args.off
+               if part not in args.components and installed_command(data, part, target) is None]
+    if missing:
+        raise UsageError(f'{", ".join(missing)} is not installed, so --on or --off cannot switch it; install it with '
+                         f'--components {",".join(missing)}. Nothing changed.')
     before = copy.deepcopy(data)
+    installs = not args.uninstall and bool(args.components)      # a run with only --on or --off copies and tests nothing
     print(f'Settings: {settings_path}' + ('' if existed else ' (does not exist yet)'))
     print(f'Target:   {target}')
     sync = modules = None
@@ -1311,7 +1363,7 @@ def run(args: argparse.Namespace) -> int:
         modules = plan_modules(args, target)
         messages = plan_install(data, args, target, modes)
     print('\n'.join(messages))
-    if not args.uninstall:
+    if installs:
         errors = smoke_test(args, modes, shell)
         if errors:
             print('SMOKE TEST FAILED - nothing written:')
@@ -1327,7 +1379,7 @@ def run(args: argparse.Namespace) -> int:
             print(f'Sync: a push found {sync.repo} public, so nothing is pushed. Make it private, then run install.py '
                   f'--components sync --sync-repo {sync.repo} to lift the block.')
     if args.dry_run:
-        if not args.uninstall:
+        if installs:
             note = 'would be created from config.example.json' if not config_exists(target) else 'exists, stays untouched'
             print(f'Files: {len(runtime_files())} runtime files would be copied to {target}; config.json {note}.')
             print(f'Report: {", ".join(REPORT_FILES + REPORT_MODULES)} would be copied to {target}.')
@@ -1354,7 +1406,7 @@ def run(args: argparse.Namespace) -> int:
                 print(LOCK_HELD)
                 return 1
             print('Sync: the block after a public repo is lifted, the next push is due.')
-    if not args.uninstall:
+    if installs:
         count = copy_runtime_files(target)
         note = 'created from config.example.json' if create_config(target) else 'kept as it is'
         print(f'Files: {count} runtime files copied to {target}; config.json {note}.')

@@ -75,7 +75,9 @@ without a restart and without touching `settings.json`:
 - The status line has no switch: the other parts read its measurement.
 
 The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through
-`settings_cli.py`, with the same check and backup as the installer. Like every key, `modules` is only as safe as
+`settings_cli.py`, with the same check and backup as the installer. The installer sets them too: `install.py --off
+spawn-gate` and `--on spawn-gate` write what the tab writes, and its assistant switches an installed part off this way
+when you answer no ([Install](install.md#install)). Like every key, `modules` is only as safe as
 your guard keeps the model from writing `config.json` ([Working with a guard hook](security.md#working-with-a-guard-hook)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log

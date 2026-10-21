@@ -51,7 +51,7 @@ parts.
 - The log, the history and the report never hold prompt text, commands or file contents.
 - The installer changes only its own entries in `settings.json`. It creates a missing `config.json` from
   `config.example.json`; in an existing one it changes only `sync.mode`, `sync.repo`, `sync.machine_name` and the
-  `modules` keys of the gates (`--mode`). `hooks/settings_cli.py` (the Settings tab) writes only `modules.*` and the
+  `modules` keys (`--mode`, `--on`, `--off`). `hooks/settings_cli.py` (the Settings tab) writes only `modules.*` and the
   sync keys, through the same `_setup.write_keys`; nothing new writes `settings.json`.
 - The sync ([docs/sync.md](docs/sync.md)): a repository that is public, or whose visibility is unclear, gets nothing.
   Nothing exported is thrown away (no reset, clean or stash of the own folder), nothing is merged (rebase only), and

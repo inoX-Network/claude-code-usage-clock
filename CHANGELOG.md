@@ -28,11 +28,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   writes through the new `hooks/settings_cli.py`, which the installer installs next to the hooks, with the check and
   backup of the installer. See [docs/reports.md](docs/reports.md#the-settings-tab).
 
+- `--on COMPONENTS` and `--off COMPONENTS` switch installed parts (`usage-clock`, `context-reporter`, `spawn-gate`,
+  `soft-stop`) on and off in `modules` of `config.json`, with the values and the way of writing of the Settings tab;
+  their hooks stay. A part must be installed or in `--components` of the same run; without `--components` the run
+  installs nothing and only switches. See [docs/install.md](docs/install.md#install).
+
 ### Changed
 
 - `--sync-mode off` works without the component `sync`: it only writes `sync.mode` `off` into `config.json` (the
-  installer's answer no to the sync). With the sync installed it is an argument error; `--uninstall --components sync`
-  removes it.
+  installer's answer no to the sync). With the sync installed it is an argument error; `--components sync --sync-mode
+  off` switches it off and keeps its hooks, `--uninstall --components sync` removes it.
+- The assistant's no to an installed part switches it off and leaves it installed, instead of leaving it on: `--off`
+  for the usage clock, the context reporter and the gates, `sync.mode` `off` for the sync, whose hooks, repository and
+  name stay (it no longer removes the sync). A part switched off is offered as no with `Now: off (your choice).`, and
+  yes switches it on again (the sync in shadow mode). Only the status line, which has no switch, stays installed on
+  no, with the command that removes it.
 
 ### Fixed
 
