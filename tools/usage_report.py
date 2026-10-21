@@ -272,12 +272,12 @@ class Data:
         self.start_times: list[float] = []
         self.price_cache: dict[str, dict | None] = {}
         self.machine: dict[str, str] = {}         # with the sync: CLI id -> the machine it ran on
-        self.only: str | None = None              # --machine: only the requests and starts of this machine count
+        self.only: frozenset[str] | None = None   # --machine: only the requests and starts of these machines count
         self.replaced: set[tuple] = set()         # (machine, day) whose day line counts instead of its requests
 
     def counted(self, ident: str) -> bool:
         """Whether the CLI `ident` (the first 8 characters of a session id) counts: always without --machine."""
-        return self.only is None or self.machine.get(ident) == self.only
+        return self.only is None or self.machine.get(ident) in self.only
 
     def set_requests(self, requests: list[_transcripts.Request]) -> None:
         self.requests = sorted(requests, key=lambda r: r.ts)
@@ -1524,7 +1524,7 @@ def side_report(machines: 'Machines | None', data: Data, prices: list[dict], sta
     without token counts. None without any side line (also with --local or for another --machine)."""
     if machines is None:
         return None
-    mine = (lambda row: data.only is None or row['_machine'] == data.only)
+    mine = (lambda row: data.only is None or row['_machine'] in data.only)
     runs: dict[str, dict] = {}
     for row in machines.side:
         if mine(row) and start <= sync_format.parse_time(row['t']) < end:
@@ -2325,7 +2325,7 @@ CLONE_TEXTS = {'read': None, 'missing': 'no clone of the sync repository',
 
 
 def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _sync_core.State, cfg: dict,
-                  chosen: str | None, now: float, clone: str) -> dict:
+                  chosen: frozenset[str] | None, now: float, clone: str) -> dict:
     """`coverage.sync`: the machines with the time of their last successful push, the pull, the push of --sync, the
     backoff of this machine, whether the clone was read (`clone`: `read`, `missing`, `unread`) and what was skipped in
     it; `text` is the line `Sources:` prints."""
@@ -2334,16 +2334,23 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
     last_pull = state.last_pull
     pull = {**pull, 'last_pull': None if last_pull is None else iso(last_pull)}
     parts = [f'Sync: {_plural(len(keys), "device")}']
-    parts += [f'{machines.names[key]} {_when(machines.last_success[key], now, "never pushed")}' for key in keys]
+    by_name: dict[str, list[str]] = {}
+    for key in keys:      # the devices of one name (the chats of claude-web) in one part, with the newest push
+        by_name.setdefault(machines.names[key], []).append(key)
+    for name, group in by_name.items():
+        pushed = [machines.last_success[key] for key in group if machines.last_success[key] is not None]
+        label = name if len(group) == 1 else f'{name} ({len(group)} devices)'
+        parts.append(f'{label} {_when(max(pushed) if pushed else None, now, "never pushed")}')
     if push is not None:
         parts.append(PUSH_TEXTS[push['status']].format(category=push['category']))
     parts.append(PULL_TEXTS[pull['status']].format(category=pull['category'], last=_when(last_pull, now)))
-    if chosen is not None:
-        parts.append(f'only {machines.names[chosen]}')
+    chosen_name = None if chosen is None else machines.names[next(iter(chosen))]
+    if chosen_name is not None:
+        parts.append(f'only {chosen_name}')
     if CLONE_TEXTS[clone]:
         parts.append(CLONE_TEXTS[clone])
     return {'mode': cfg['sync']['mode'], 'text': ' · '.join(parts), 'clone': clone,
-            'machine': None if chosen is None else machines.names[chosen],
+            'machine': chosen_name,
             'machines': [{'id': key or None, 'name': machines.names[key], 'platform': machines.platforms[key],
                           'own': key == machines.own,
                           'last_success': None if machines.last_success[key] is None else iso(machines.last_success[key]),
@@ -2398,20 +2405,21 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
     return notes
 
 
-def choose_machine(parser, machines: Machines, name: str) -> str:
-    """The key of the machine `--machine` names (its name, or the start of it); exit 2 if none or several fit."""
+def choose_machine(parser, machines: Machines, name: str) -> frozenset[str]:
+    """The keys of the machines `--machine` names: every machine of that name (each chat of Claude Code on the web is a
+    machine `claude-web` of its own), else of the one name it is the start of; exit 2 if none or several names fit."""
     if not name:
         parser.error('--machine must not be empty')
     names = machines.names
     found = [key for key in names if names[key] == name] or [key for key in names if names[key].startswith(name)]
-    if len(found) != 1:
-        listing = ', '.join(sorted(names.values()))
+    if len({names[key] for key in found}) != 1:
+        listing = ', '.join(sorted(set(names.values())))
         parser.error(f"--machine '{name}' matches {'no machine' if not found else f'{len(found)} machines'} "
                      f'(machines: {listing})')
-    return found[0]
+    return frozenset(found)
 
 
-def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Machines, str | None, dict, list[dict]]:
+def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Machines, frozenset[str] | None, dict, list[dict]]:
     """(machines, the key of --machine, coverage.sync, the notable lines of the sync): the push of --sync, the pull,
     then the clone as it is now. A machine id that cannot be used (a link, not a UUID4) leaves the clone unread: its
     own folder could not be told from the others. Nothing here fails the report."""
@@ -2434,13 +2442,14 @@ def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Mach
     return machines, chosen, sync, sync_notes(sync, state, now)
 
 
-def day_lines(machines: Machines, archive: dict[str, dict], chosen: str | None) -> dict[str, list[tuple[str, dict]]]:
+def day_lines(machines: Machines, archive: dict[str, dict],
+              chosen: frozenset[str] | None) -> dict[str, list[tuple[str, dict]]]:
     """The day lines by day, as (machine, figures): this machine's archive first, then the others by id; with
     --machine only that one's."""
     lines: dict[str, list[tuple[str, dict]]] = {}
     sources = [(machines.own, archive)] + sorted(machines.days.items())
     for key, days in sources:
-        if chosen is None or key == chosen:
+        if chosen is None or key in chosen:
             for day, stats in days.items():
                 lines.setdefault(day, []).append((key, stats))
     return lines
@@ -2599,7 +2608,7 @@ def replaced_days(keys: dict[tuple, set], lines: dict[str, list[tuple[str, dict]
 
 
 def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
-              anchor: float | None = None, machines: Machines | None = None, chosen: str | None = None,
+              anchor: float | None = None, machines: Machines | None = None, chosen: frozenset[str] | None = None,
               lines: dict | None = None, whole: set[str] | None = None) -> Data:
     """Requests from the transcripts; for the time before the history began, the usage lines in the transcripts stand in
     for it. With the sync (`machines`) the requests and gate decisions of the other machines join them; `chosen` is the
@@ -2627,8 +2636,9 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
             if label is not None:
                 data.label.setdefault(request.session, label)
         data.only = chosen
-        data.guards = (data.guards if chosen in (None, machines.own) else []) + [
-            guard for key, guards in sorted(machines.guards.items()) if chosen in (None, key) for guard in guards]
+        data.guards = (data.guards if chosen is None or machines.own in chosen else []) + [
+            guard for key, guards in sorted(machines.guards.items()) if chosen is None or key in chosen
+            for guard in guards]
     return data
 
 

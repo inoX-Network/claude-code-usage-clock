@@ -1115,3 +1115,36 @@ def test_without_side_lines_the_report_has_no_side_calls(world, synced):
     report = world.report('--day', '2026-10-13')
     assert 'side_calls' not in report and 'side_calls' not in report['overview']
     assert 'Side calls' not in world.text('--day', '2026-10-13')
+
+
+# --- Gegenprüfung #81: the devices of claude-web as one ------------------------------------------------------------
+
+def three_web_devices(synced):
+    web_machine(synced.clone, WEB1, [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True)],
+                [side_run('2026-10-13T10:06:00Z', 1.0)],
+                [window('2026-10-13T10:12:00Z', '2026-10-13T10:00:00Z', '2026-10-13T10:10:00Z')])
+    web_machine(synced.clone, WEB2, [request_line('2026-10-13T11:05:00Z', 'x1', 2.0, sid='xxxxxxxx-1', first=True)],
+                [side_run('2026-10-13T11:06:00Z', 1.0, sid='xxxxxxxx-1')],
+                [window('2026-10-13T11:12:00Z', '2026-10-13T11:00:00Z', '2026-10-13T11:10:00Z', sid='xxxxxxxx-1')])
+    synced.clone.machine(LAPTOP)
+    synced.clone.requests(LAPTOP, [request_line('2026-10-13T10:05:00Z', 'l1', 4.0, first=True)])
+
+
+@pytest.mark.parametrize('name', ['claude-web', 'claude'])
+def test_machine_takes_every_device_of_that_name(world, synced, name):
+    three_web_devices(synced)
+    report = world.report('--day', '2026-10-13', '--machine', name)
+    assert report['total']['requests'] == 2 and report['total']['cost_usd'] == pytest.approx(3.0)
+    assert report['side_calls']['sources'][0]['runs'] == 2
+    sync_part = report['coverage']['sync']
+    assert sync_part['machine'] == 'claude-web' and sync_part['text'].endswith(' · only claude-web')
+    assert world.report('--day', '2026-10-13', '--machine', 'laptop')['total']['requests'] == 1
+
+
+def test_the_sources_line_shows_the_devices_of_one_name_as_one(world, synced):
+    three_web_devices(synced)
+    synced.clone.machine(WEB2, name='claude-web', last_success='2026-10-14T11:30:00Z')
+    text = world.report('--day', '2026-10-13')['coverage']['sync']['text']
+    assert ' · claude-web (2 devices) 30 min ago · ' in text and text.startswith('Sync: 4 devices · desk ')
+    machines = world.report('--day', '2026-10-13')['coverage']['sync']['machines']
+    assert [m['name'] for m in machines].count('claude-web') == 2          # the JSON keeps each device

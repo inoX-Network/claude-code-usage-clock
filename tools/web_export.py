@@ -91,7 +91,10 @@ def read_debug_log(path: str) -> DebugLog | None:
             line = LINE.fullmatch(raw.rstrip(b'\r\n'))
             if line is None:
                 continue
-            t = _time(line['t'])
+            try:
+                t = _time(line['t'])
+            except ValueError:      # the shape of a time, but no such moment (2026-02-30): not a line that counts
+                continue
             first, last = first or t, t
             rest = line['rest']
             if (found := DISPATCH.fullmatch(rest)) is not None:
@@ -118,19 +121,28 @@ def side_lines(session: str, found: DebugLog | None, now: float) -> list[dict]:
     return lines
 
 
+def _regular(descriptor: int, path: str) -> int:
+    """`descriptor` if it is a regular file, else closed and OSError (a FIFO, a device: never waited on)."""
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise OSError(f'{path} is not a regular file')
+    return descriptor
+
+
 def _known_keys(path: str) -> set[str]:
-    """The keys of the runs already in side-calls.jsonl (a broken line is left to the export, which counts it)."""
+    """The keys of the runs already in side-calls.jsonl (a broken line is left to the export, which counts it). OSError
+    for anything but a regular file."""
     try:
-        descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_BINARY)
+        descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_NONBLOCK | _plat.O_BINARY)
     except FileNotFoundError:
         return set()
-    with os.fdopen(descriptor, 'rb') as f:
+    with os.fdopen(_regular(descriptor, path), 'rb') as f:
         content = f.read(MAX_SIDE_BYTES)
     keys = set()
     for raw in content.splitlines():
         try:
             row = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(row, dict) and isinstance(row.get('k'), str):
             keys.add(row['k'])
@@ -148,8 +160,9 @@ def append_side(log_dir: str, lines: list[dict]) -> int:
         raise OSError(f'{path} is a link')
     known = _known_keys(path)
     new = [line for line in lines if line['kind'] != 'side' or line['k'] not in known]
-    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | _plat.NO_FOLLOW | _plat.O_BINARY, 0o600)
-    with os.fdopen(descriptor, 'ab') as f:
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | _plat.NO_FOLLOW | _plat.O_NONBLOCK
+                         | _plat.O_BINARY, 0o600)
+    with os.fdopen(_regular(descriptor, path), 'ab') as f:
         if os.name != 'nt':
             os.fchmod(descriptor, 0o600)
         f.write(''.join(json.dumps(line, separators=(',', ':')) + '\n' for line in new).encode('utf-8'))
@@ -173,7 +186,7 @@ def _sync_lines(log_dir: str, offset: int) -> list[dict]:
     for raw in raws:
         try:
             row = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(row, dict) and row.get('hook') == 'sync':
             lines.append(row)
@@ -267,7 +280,11 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print('usage-export: the installer stopped (see above); nothing was exported.')
         return 1
     found = read_debug_log(args.debug_log)
-    append_side(log_dir, side_lines(session, found, time.time() if now is None else now))
+    try:
+        append_side(log_dir, side_lines(session, found, time.time() if now is None else now))
+    except OSError as error:
+        print(f'usage-export: {_sync_export.SIDE_FILE} cannot be written ({error}); nothing was pushed.')
+        return 1
     offset = _log_size(log_dir)
     code = run([sys.executable, os.path.join(target, 'sync.py'), 'push', '--now'])
     print('\n'.join(['usage-export:', *(f'  {text}' for text in side_text(found)),

@@ -345,3 +345,71 @@ def test_the_script_runs_as_a_program_and_refuses_outside_the_web(tmp_path):
     done = subprocess.run([os.sys.executable, SCRIPT, '--sync-repo', 'owner/name'], capture_output=True, text=True,
                           env=env, cwd=str(tmp_path))
     assert done.returncode == 2 and 'only in Claude Code on the web' in done.stdout
+
+
+# --- Gegenprüfung #81: impossible times, O_NOFOLLOW alone, FIFOs, nested JSON ----------------------------------------
+
+@pytest.mark.parametrize('bad', ['2026-02-30T10:00:00Z', '2026-13-45T99:99:99Z'])
+def test_a_time_that_does_not_exist_is_passed_over(web, tmp_path, bad):
+    lines = [request(bad, 'extract_memories'), finished(bad, 'extract_memories'), *DEBUG_LOG]
+    found = web.read_debug_log(str(write_log(tmp_path / 'claude-code.log', lines)))
+    assert len(found.runs) == 2 and found.first == '2026-10-21T07:06:13.534Z'
+
+
+@pytest.mark.posix_only
+def test_o_nofollow_alone_refuses_a_linked_debug_log(web, tmp_path, monkeypatch):
+    """The check with islink comes first; O_NOFOLLOW must hold on its own (a link set between check and open)."""
+    real = write_log(tmp_path / 'real.log')
+    os.symlink(real, tmp_path / 'link.log')
+    monkeypatch.setattr(os.path, 'islink', lambda path: False)
+    assert web.read_debug_log(str(tmp_path / 'link.log')) is None
+
+
+@pytest.mark.posix_only
+def test_o_nofollow_alone_refuses_to_append_through_a_link(web, tmp_path, monkeypatch):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    target = tmp_path / 'elsewhere.jsonl'
+    target.write_text('', encoding='utf-8')
+    os.symlink(target, log_dir / 'side-calls.jsonl')
+    monkeypatch.setattr(os.path, 'islink', lambda path: False)
+    with pytest.raises(OSError):                            # reading the keys refuses the link first
+        web._known_keys(str(log_dir / 'side-calls.jsonl'))
+    monkeypatch.setattr(web, '_known_keys', lambda path: set())
+    with pytest.raises(OSError):                            # and so does the append on its own
+        web.append_side(str(log_dir), web.side_lines(SESSION, None, NOW))
+    assert target.read_text(encoding='utf-8') == ''
+
+
+@pytest.mark.posix_only
+def test_a_side_file_that_is_a_fifo_is_refused_without_waiting_for_a_writer(web, tmp_path):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    os.mkfifo(log_dir / 'side-calls.jsonl')
+    with pytest.raises(OSError, match='not a regular file'):
+        web.append_side(str(log_dir), web.side_lines(SESSION, None, NOW))
+
+
+def test_a_side_file_that_cannot_be_written_stops_the_run_before_the_push(web, monkeypatch, cloud, capsys):
+    (cloud / 'log').mkdir()
+    (cloud / 'log' / 'side-calls.jsonl').mkdir()          # a folder in its place
+    steps = Steps(web, cloud)
+    assert run_main(web, monkeypatch, steps, '--debug-log', str(cloud / 'x.log')) == 1
+    assert len(steps.calls) == 1 and 'side-calls.jsonl cannot be written' in capsys.readouterr().out
+
+
+def test_lines_nested_too_deep_are_passed_over(web, monkeypatch, cloud, capsys):
+    (cloud / 'log').mkdir()
+    (cloud / 'log' / 'side-calls.jsonl').write_bytes(b'[' * 100000 + b'\n')
+    found = web.read_debug_log(str(write_log(cloud / 'claude-code.log')))
+    assert web.append_side(str(cloud / 'log'), web.side_lines(SESSION, found, NOW)) == 3
+
+    class Deep(Steps):
+        def __call__(self, argv):
+            if argv[-2:] == ['push', '--now']:
+                with open(self.tmp / 'log' / 'log.jsonl', 'ab') as f:
+                    f.write(b'[' * 100000 + b'\n')
+            return super().__call__(argv)
+    steps = Deep(web, cloud, outcome={'decision': 'success', 'action': 'push'})
+    assert run_main(web, monkeypatch, steps, '--debug-log', str(cloud / 'x.log')) == 0
+    assert 'push: done' in capsys.readouterr().out

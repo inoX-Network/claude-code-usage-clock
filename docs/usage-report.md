@@ -284,11 +284,15 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   come from the local files), so a day stays whole after Claude Code deleted the transcripts. With
   `sync.project_labels` `alias` or `hash` such older days of this machine show the project labels of the repository
   instead of the folder names.
-- **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine. Their points are their
+- **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine, or of every machine of
+  that name: each chat of Claude Code on the web is a machine `claude-web` of its own, and `--machine claude-web`
+  takes them all (also the start of a name, if it fits one name only). Their points are their
   share of each rise among the requests of all machines, so the subscription and its `allocation` stay those of the
   account and the points of the machine add up to less than the rise.
 - **What it shows:** `--full` names every machine in `Sources:` with the age of its last successful push and the
-  result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); each CLI says on which machine it
+  result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); the machines of one name are one
+  part with their number and the newest push (`claude-web (12 devices) 2 h ago`), while `coverage.sync.machines` in
+  the JSON keeps each of them; each CLI says on which machine it
   ran (`on laptop`). `Notable` names a machine without a push for over 24 hours, this machine's sync backing off after
   an error or blocked, a pull that failed with its reason, and a machine id of this machine that cannot be used (then
   the clone is not read). The JSON has `clis[].machine` and `coverage.sync`; without the sync
