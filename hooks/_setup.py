@@ -239,11 +239,15 @@ def write_json(path: str, data: dict, existed: bool, backup: bool | None = None)
                    newline='\n') as f:      # no CRLF on Windows
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write('\n')
-    with open(temp, encoding='utf-8') as f:
-        json.load(f)  # cross-check: valid JSON
-    if existed:
-        shutil.copymode(path, temp)
-    _plat.replace(temp, path)
+    try:
+        with open(temp, encoding='utf-8') as f:
+            json.load(f)  # cross-check: valid JSON
+        if existed:
+            shutil.copymode(path, temp)
+        _plat.replace(temp, path)
+    except BaseException:      # our own temp file: never left behind
+        os.unlink(temp)
+        raise
     return backup
 
 

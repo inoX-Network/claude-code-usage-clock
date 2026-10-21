@@ -17,7 +17,7 @@ settings.json and adds or removes no hook: the parts read their switch from conf
 
 Each key is written as the installer writes it (_setup.write_keys: checked, with a backup, atomically), and only when it
 changes. Every answer is one JSON object on stdout. Exit codes: 0 done, 1 the repository did not pass or could not be
-cloned, 2 bad arguments, a part that is not installed (install.py installs it), or an unusable settings.json or
+cloned, or a file operation failed ({"error": ...}), 2 bad arguments, a part that is not installed (install.py installs it), or an unusable settings.json or
 config.json.
 """
 from __future__ import annotations
@@ -197,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
         return set_repo(args.repo, cfg, path)
     except _setup.UsageError as error:
         return answer({'error': str(error)}, 2)
+    except OSError as error:      # a file operation failed (on Windows a replace another program holds): as install.py
+        return answer({'error': str(error)}, 1)
 
 
 if __name__ == '__main__':

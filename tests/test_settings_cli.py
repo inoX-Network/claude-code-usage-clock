@@ -238,6 +238,19 @@ def test_set_without_config_json_changes_nothing(machine):
     assert code == 2 and 'install.py' in done['error'] and not machine.config.exists()
 
 
+def test_set_that_cannot_replace_config_json_answers_json_and_leaves_no_temporary_file(machine, monkeypatch):
+    machine.install('--components', 'usage-clock')
+    before = machine.config.read_bytes()
+
+    def refused(source, destination):
+        raise PermissionError(13, 'Access is denied', destination)
+    monkeypatch.setattr(settings_cli._setup._plat, 'replace', refused)
+    code, done = machine.cli('set', 'modules.usage_clock', 'false')
+    assert code == 1 and 'Access is denied' in done['error']
+    assert machine.config.read_bytes() == before
+    assert not list(machine.target.glob('*' + settings_cli._setup.TEMP_SUFFIX))
+
+
 def test_an_unusable_settings_json_is_an_error_for_every_command(machine):
     machine.settings.write_text('[1]', encoding='utf-8')
     for args in (['show', '--json'], ['set', 'modules.usage_clock', 'false'], ['check-repo', REPO],
