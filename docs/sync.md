@@ -78,7 +78,7 @@ answer, or none (an error, a redirect, the limit of 60 anonymous requests an hou
 does not fit, anything it cannot read), leaves it unclear: nothing is pushed, the next run asks again, and the log
 line of the failure names why (`GitHub API: http_429`, `timeout`, `name_mismatch` ...), so that a lasting cause such
 as a renamed repository (a redirect on every run) shows. On a computer without such a proxy the
-anonymous read is refused and the API is never asked. Be aware what this means there: the promise above, access to
+anonymous read of a private repository is refused and the API is never asked. Be aware what this means there: the promise above, access to
 **this repository only** (a deploy key or a fine-grained token), does not hold behind such a proxy. The sync then
 writes with the credentials of the session, and those reach whatever the session may reach.
 
@@ -125,10 +125,13 @@ release tag in its settings. It clones this repository at that tag into the VM a
 - reads the debug log of Claude Code (`/tmp/claude-code.log`, numbers, times and source names only) and appends the
   side calls of the session to `<log_dir>/side-calls.jsonl`: the calls that never reach the transcript, above all the
   memory pass `extract_memories` after each answer, which reads the whole cached context once more. One line per run,
-  and one window per export with the span of the log; without a debug log the window says so, and the report shows it
-  as not measured, never as zero;
+  and one window per export with the span of the log (its earliest and its latest time, also when the clock of the VM
+  jumped back); without a debug log the window says so, and the report shows it as not measured, never as zero. A
+  line longer than 64 KB is passed over, and so is a last line without its line feed (Claude Code is still writing
+  it);
 - starts the push of the sync once (`sync.py push --now`): no path of its own, the push and its checks are those of
-  the sync;
+  the sync. The installer and the push run with `python -I`, as the skill starts the script (no `PYTHONPATH`, no
+  user site of the VM);
 - prints the side calls, the outcome of the push and what the repository holds of this session.
 
 Every chat is a machine of its own, with its own machine id (several chats at the same time never write the same

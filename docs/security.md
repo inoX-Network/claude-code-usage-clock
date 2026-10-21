@@ -39,6 +39,15 @@
   after that machine's next push. A push at the end of a session can be cut off when the computer shuts down;
   `SessionStart` catches it up at the next start of the same system. `usage_report.py --sync` pushes and pulls at
   once.
+- In [Claude Code on the web](sync.md#claude-code-on-the-web) the skill `/usage-export` clones this repository into
+  the VM of the chat, installs the sync there and pushes with the credentials of that session, which the proxy of the
+  cloud container adds: they reach whatever the session may reach, not only the sync repository. The export reads one
+  more source, the debug log of Claude Code (`/tmp/claude-code.log`, which every process of the VM may write): only
+  numbers, times and source names leave it, a line longer than 64 KB or without its line feed is passed over, and a
+  planted line can fake the side calls of that chat and the span of its log, nothing else. The skill pins a release
+  tag and checks that the clone stands on it, not which commit that is: whoever can move the tag on GitHub chooses
+  the code that runs there with those credentials. If that matters to you, run the skill from a fork of yours whose
+  tags a ruleset protects.
 - The wake-up watcher is as good as the cache clock Claude Code passes to the status line (`prompt_cache`), which
   is not a versioned API either; without it the watcher never fires. It cannot wake a session whose computer is
   asleep or switched off, and it cannot know that the model will follow the wake-up call. Claude Code itself

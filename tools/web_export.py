@@ -29,7 +29,8 @@ import stat
 import subprocess
 import sys
 import time
-from typing import NamedTuple
+from collections.abc import Iterator
+from typing import BinaryIO, NamedTuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'hooks'))
@@ -46,6 +47,7 @@ DEBUG_LOG = '/tmp/claude-code.log'        # where Claude Code on the web writes 
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 SETTINGS_FILE = 'web-settings.json'      # in the log folder: the installer needs one, the session gets no hook
 MAX_SIDE_BYTES = 8 * 1024 * 1024         # side-calls.jsonl read for the keys already written
+MAX_LINE_BYTES = 64 * 1024               # a longer line of the debug log is passed over (others write into it)
 
 # The shapes of the debug log lines that count. Each line starts with its time and level; only digits, the model and
 # lower-case source names are taken from it.
@@ -60,7 +62,7 @@ MAIN_SOURCE = b'sdk'                     # the requests of the session itself: t
 
 
 class DebugLog(NamedTuple):
-    """What the debug log says: the finished runs, the first and last time in it, and the calls outside the
+    """What the debug log says: the finished runs, the earliest and the latest time in it, and the calls outside the
     transcript that no run with token counts took up."""
     runs: list[dict]
     first: str | None
@@ -68,9 +70,16 @@ class DebugLog(NamedTuple):
     unmeasured: int
 
 
-def _time(raw: bytes) -> str:
-    """A time of the log as the sync writes it (milliseconds at most)."""
-    return sync_format.iso_time(sync_format.parse_time(raw.decode('ascii')))
+def _lines(f: BinaryIO) -> Iterator[bytes]:
+    """The complete lines of `f`, each read in pieces of at most MAX_LINE_BYTES and its line feed: a longer line is
+    passed over to its end, piece by piece (never held as a whole), and a last line without its line feed too (Claude
+    Code may still be writing it, and a run cut short would keep its wrong numbers: its key blocks the whole line)."""
+    while raw := f.readline(MAX_LINE_BYTES + 1):
+        if raw.endswith(b'\n'):
+            yield raw
+        elif len(raw) > MAX_LINE_BYTES:
+            while (rest := f.readline(MAX_LINE_BYTES + 1)) and not rest.endswith(b'\n'):
+                pass
 
 
 def read_debug_log(path: str) -> DebugLog | None:
@@ -87,15 +96,17 @@ def read_debug_log(path: str) -> DebugLog | None:
     runs, pending, model = [], {}, None
     first = last = None
     with os.fdopen(descriptor, 'rb') as f:
-        for raw in f:
+        for raw in _lines(f):
             line = LINE.fullmatch(raw.rstrip(b'\r\n'))
             if line is None:
                 continue
             try:
-                t = _time(line['t'])
+                moment = sync_format.parse_time(line['t'].decode('ascii'))
             except ValueError:      # the shape of a time, but no such moment (2026-02-30): not a line that counts
                 continue
-            first, last = first or t, t
+            t = sync_format.iso_time(moment)            # as the sync writes it (milliseconds at most)
+            first = moment if first is None else min(first, moment)     # the clock may jump back: the span is the
+            last = moment if last is None else max(last, moment)        # earliest and the latest time, not the lines
             rest = line['rest']
             if (found := DISPATCH.fullmatch(rest)) is not None:
                 model = found['model'].decode('ascii')
@@ -107,7 +118,9 @@ def read_debug_log(path: str) -> DebugLog | None:
                 runs.append({'t': t, 'src': found['src'].decode('ascii'), 'model': of, 'calls': calls,
                              'in': int(found['in']), 'cw': int(found['cw']), 'cr': int(found['cr']),
                              'out': int(found['out'])})
-    return DebugLog(runs, first, last, sum(calls for calls, _model in pending.values()))
+    unmeasured = sum(calls for calls, _model in pending.values())
+    return DebugLog(runs, None if first is None else sync_format.iso_time(first),
+                    None if last is None else sync_format.iso_time(last), unmeasured)
 
 
 def side_lines(session: str, found: DebugLog | None, now: float) -> list[dict]:
@@ -175,9 +188,14 @@ def run(argv: list[str]) -> int:
 
 
 def _sync_lines(log_dir: str, offset: int) -> list[dict]:
-    """The lines of hook `sync` that log.jsonl got from byte `offset` on."""
+    """The lines of hook `sync` that log.jsonl got from byte `offset` on; none from anything but a regular file (a
+    link is never followed, a FIFO never waited on)."""
+    path = os.path.join(log_dir, 'log.jsonl')
+    if os.path.islink(path):      # Windows has no O_NOFOLLOW
+        return []
     try:
-        with open(os.path.join(log_dir, 'log.jsonl'), 'rb') as f:
+        descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_NONBLOCK | _plat.O_BINARY)
+        with os.fdopen(_regular(descriptor, path), 'rb') as f:
             f.seek(offset)
             raws = f.read().splitlines()
     except OSError:
@@ -195,13 +213,23 @@ def _sync_lines(log_dir: str, offset: int) -> list[dict]:
 
 def _log_size(log_dir: str) -> int:
     try:
-        return os.path.getsize(os.path.join(log_dir, 'log.jsonl'))
+        return os.lstat(os.path.join(log_dir, 'log.jsonl')).st_size
     except OSError:
         return 0
 
 
+def _shown(value: object) -> str:
+    """A text of the log as the terminal gets it: every character that is not printable (an escape, a control, a
+    change of direction, a line separator) as `?`."""
+    return ''.join(c if c.isprintable() else '?' for c in value) if isinstance(value, str) else ''
+
+
+def _count(value: object) -> int | str:
+    return value if isinstance(value, int) and not isinstance(value, bool) else '?'
+
+
 def push_text(lines: list[dict], repo: str, mode: str) -> str:
-    """What the push did, from the log lines it wrote."""
+    """What the push did, from the log lines it wrote (their text never raw: it goes to the terminal)."""
     outcome = next((line for line in reversed(lines) if line.get('decision') in ('success', 'failure')), None)
     if outcome is None:
         return 'push: no outcome in the log'
@@ -209,11 +237,13 @@ def push_text(lines: list[dict], repo: str, mode: str) -> str:
     if outcome['decision'] == 'success' and shadow is not None:       # shadow, then the core's success
         outcome = shadow
     if outcome['decision'] == 'shadow':
-        return (f'shadow: committed here, pushed nothing ({outcome.get("lines", 0)} lines, {outcome.get("bytes", 0)} '
-                'bytes). Run /usage-export on to push for real.')
+        return (f'shadow: committed here, pushed nothing ({_count(outcome.get("lines", 0))} lines, '
+                f'{_count(outcome.get("bytes", 0))} bytes). Run /usage-export on to push for real.')
     if outcome['decision'] == 'success':
         return f'pushed to {repo}' if mode == 'on' else 'push: done'
-    return f'push failed ({outcome.get("category", "?")}): {outcome.get("reason", "")}'
+    category = outcome.get('category')
+    category = category if isinstance(category, str) and sync_format.WORD.fullmatch(category) else '?'
+    return f'push failed ({category}): {_shown(outcome.get("reason", ""))}'
 
 
 def side_text(found: DebugLog | None) -> list[str]:
@@ -274,9 +304,10 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     settings = os.path.join(log_dir, SETTINGS_FILE)
     if not os.path.lexists(settings):
         _context_state.write_private(log_dir, SETTINGS_FILE, '{}')
-    if run([sys.executable, os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
-            '--components', 'sync', '--sync-repo', args.sync_repo, '--sync-mode', args.sync_mode,
-            '--sync-name', MACHINE_NAME]) != 0:
+    # both steps with -I, as the skill starts this script: no PYTHONPATH and no user site of the VM take part
+    if run([sys.executable, '-I', os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings,
+            '--target', target, '--components', 'sync', '--sync-repo', args.sync_repo,
+            '--sync-mode', args.sync_mode, '--sync-name', MACHINE_NAME]) != 0:
         print('usage-export: the installer stopped (see above); nothing was exported.')
         return 1
     found = read_debug_log(args.debug_log)
@@ -286,7 +317,7 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
         print(f'usage-export: {_sync_export.SIDE_FILE} cannot be written ({error}); nothing was pushed.')
         return 1
     offset = _log_size(log_dir)
-    code = run([sys.executable, os.path.join(target, 'sync.py'), 'push', '--now'])
+    code = run([sys.executable, '-I', os.path.join(target, 'sync.py'), 'push', '--now'])
     print('\n'.join(['usage-export:', *(f'  {text}' for text in side_text(found)),
                      f'  {push_text(_sync_lines(log_dir, offset), args.sync_repo, args.sync_mode)}',
                      f'  {held_text(log_dir, session)}']))

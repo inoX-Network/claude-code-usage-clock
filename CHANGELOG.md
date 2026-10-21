@@ -73,6 +73,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   the installer told you to sign in. The error now says `the repository does not exist or this login cannot reach it
   (check sync.repo)`, and the installer tells you to check the name or create the repository
   (`gh repo create owner/name --private`). The category stays `auth`.
+- `/usage-export`: the window of a debug log whose clock jumped back ran backwards and was left out of the export, so
+  the requests of that chat counted neither inside nor outside a debug log. The span is now the earliest and the
+  latest time of the log. A last line that Claude Code was still writing counted with its numbers cut short; a line
+  counts only with its line feed now.
+
+### Security
+
+- The visibility check of the sync: urllib's timeout holds for each operation of the socket, so a proxy that trickled
+  its answer to `CONNECT`, the TLS handshake or the head could stretch the request to the GitHub API without end. The
+  whole request now ends as `timeout` (unclear, no push) within its seconds, also in the installer and the Settings
+  tab, which have no watchdog.
+- `/usage-export` reads the debug log in lines of at most 64 KB (a longer one is passed over without being held in
+  memory), opens `log.jsonl` never through a link and never waits on a FIFO, and prints the reason and category of a
+  failed push only with printable characters. The installer and the push run with `python -I`.
+- The report: the windows of the debug logs of a session are sorted and merged, so a machine that writes thousands of
+  windows into the sync repository no longer makes `usage_report.py --sync` compare every request with each of them.
+- [docs/security.md](docs/security.md#limits-and-threat-model) names what `/usage-export` reads and runs in the VM,
+  and that the skill pins a release tag, not a commit.
 
 ## [1.6.0] — 2026-10-20 — sync across machines
 

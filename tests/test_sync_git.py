@@ -15,6 +15,7 @@ import os
 import socket
 import stat
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -917,6 +918,7 @@ def http_error(code):
 
 
 REAL_ASK_API = _sync_git.ask_api       # git_alone puts an API in its place that answers like for a public repository
+REAL_OPEN = urllib.request.OpenerDirector.open      # conftest.py puts a refusal in its place for every test
 
 
 def test_the_api_request_is_an_anonymous_get_of_this_repo():
@@ -970,6 +972,53 @@ def test_an_answer_that_trickles_in_past_its_time_is_a_timeout_in_time():
     clock[0] = 100.0
     quick = Response(200, INJECTED, clock, per_byte=0.001, burst=8)
     assert REAL_ASK_API(REPO, 1.0, Opener(quick), clock=lambda: clock[0]) == (INJECTED, '')
+
+
+@pytest.fixture
+def trickling_proxy(monkeypatch):
+    """A proxy on 127.0.0.1 that answers the CONNECT one byte every 0.1 s, a head without end, for at most 5 s: below
+    urllib's timeout for each read of the socket, so only a limit on the whole request ends it in time. The proxy of
+    the environment points to it (the request never leaves this machine), and urllib may open it."""
+    server = socket.create_server(('127.0.0.1', 0))
+    stop = threading.Event()
+
+    def serve():
+        connection, _address = server.accept()
+        with connection:
+            connection.recv(4096)
+            head = b'HTTP/1.1 200 Connection established\r\nX-Slow: '
+            started = time.monotonic()
+            while not stop.is_set() and time.monotonic() - started < 5:
+                connection.sendall(head[:1] or b'a')
+                head = head[1:]
+                stop.wait(0.1)
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    proxy = f'http://127.0.0.1:{server.getsockname()[1]}'
+    for name in ('HTTPS_PROXY', 'https_proxy'):
+        monkeypatch.setenv(name, proxy)
+    for name in ('NO_PROXY', 'no_proxy'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(urllib.request.OpenerDirector, 'open', REAL_OPEN)
+    yield
+    stop.set()
+    thread.join(10)
+    server.close()
+
+
+def test_a_proxy_that_trickles_its_answer_is_a_timeout_within_the_time_of_the_whole_request(trickling_proxy):
+    """Security review v1.7 S-A1: urllib's timeout holds for each operation of the socket, also while it connects,
+    reads the answer of the proxy to CONNECT, shakes hands for TLS and reads the head. The whole request has its
+    seconds: measured before, 1.0 s ended as `network` after 8.8 s."""
+    started = time.monotonic()
+    assert REAL_ASK_API(REPO, 1.0) == (None, 'timeout')
+    assert time.monotonic() - started < 2.0
+
+
+def test_an_unexpected_error_of_the_api_request_reaches_the_caller():
+    """Anything ask_api does not know is no answer it could name: the push ends with `internal`, as before."""
+    with pytest.raises(RuntimeError, match='unexpected'):
+        REAL_ASK_API(REPO, 5, Opener(RuntimeError('unexpected')))
 
 
 def test_the_api_without_an_opener_builds_its_own(monkeypatch):

@@ -244,10 +244,10 @@ def test_the_run_installs_the_sync_as_claude_web_in_shadow_mode_then_pushes_once
     install, push = steps.calls
     target = os.path.expanduser('~/.claude/hooks/usage-clock')
     settings = str(cloud / 'log' / 'web-settings.json')
-    assert install[1:] == [os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
+    assert install[1:] == ['-I', os.path.join(ROOT, 'tools', 'install.py'), '--settings', settings, '--target', target,
                            '--components', 'sync', '--sync-repo', 'owner/name', '--sync-mode', 'shadow',
                            '--sync-name', 'claude-web']
-    assert push[1:] == [os.path.join(target, 'sync.py'), 'push', '--now']
+    assert push[1:] == ['-I', os.path.join(target, 'sync.py'), 'push', '--now']      # S-A9: no PYTHONPATH, no user site
     assert json.loads((cloud / 'log' / 'web-settings.json').read_text(encoding='utf-8')) == {}
     sides = (cloud / 'log' / 'side-calls.jsonl').read_text(encoding='utf-8').splitlines()
     assert [json.loads(line)['kind'] for line in sides] == ['side', 'side', 'side_window']
@@ -413,3 +413,132 @@ def test_lines_nested_too_deep_are_passed_over(web, monkeypatch, cloud, capsys):
     steps = Deep(web, cloud, outcome={'decision': 'success', 'action': 'push'})
     assert run_main(web, monkeypatch, steps, '--debug-log', str(cloud / 'x.log')) == 0
     assert 'push: done' in capsys.readouterr().out
+
+
+# --- Security review v1.7: times out of order, lines too long or not yet complete -------------------------------------
+
+def test_the_span_of_the_debug_log_is_its_earliest_and_latest_time_not_its_first_and_last_line(web, tmp_path):
+    """S-A2: a clock that jumps back (a VM after NTP, two writers) gave a window that runs backwards, which the export
+    then passed over: the requests of the session counted as neither inside nor outside a debug log."""
+    lines = [*DEBUG_LOG, log_line('2026-10-21T08:30:05.500Z', 'late'), log_line('2026-10-21T08:30:05Z', 'back'),
+             log_line('2026-10-21T07:00:00Z', 'Stream started')]
+    found = web.read_debug_log(str(write_log(tmp_path / 'claude-code.log', lines)))
+    assert (found.first, found.last) == ('2026-10-21T07:00:00Z', '2026-10-21T08:30:05.500Z')
+    window = web.side_lines(SESSION, found, NOW)[-1]
+    sync_format.encode('side_window', {key: value for key, value in window.items() if key != 'kind'})
+
+
+def test_a_line_too_long_is_passed_over_with_its_rest_and_the_next_line_counts(web, tmp_path):
+    """S-A3: the debug log holds what others write; a line is read in pieces of at most 64 KB, a longer one passed
+    over to its end, also where its rest looks like a line that counts."""
+    assert web.MAX_LINE_BYTES == 64 * 1024
+    long = finished('2026-10-21T07:00:00Z', 'extract_memories').replace('types=[', 'types=[' + 'x' * 70_000)
+    planted = 'x' * (64 * 1024 + 1) + finished('2026-10-21T07:00:01Z', 'extract_memories')     # its rest a line
+    exact = finished('2026-10-21T07:00:02Z', 'extract_memories')
+    exact = exact.replace('types=[', 'types=[' + 'x' * (64 * 1024 - len(exact)))      # 64 KB before its line feed
+    path = tmp_path / 'claude-code.log'
+    path.write_bytes(('\n'.join([long, planted, exact, *DEBUG_LOG]) + '\n').encode('utf-8'))     # LF on Windows too
+    found = web.read_debug_log(str(path))
+    assert [run['t'] for run in found.runs] == ['2026-10-21T07:00:02Z', '2026-10-21T07:09:39.057Z',
+                                                '2026-10-21T08:04:49.531Z']
+
+
+def test_a_line_too_long_never_lies_in_memory_as_a_whole(web, tmp_path):
+    """S-A3: measured before, a line of 300 MB took 626 MB (the line and its copy without the line feed)."""
+    import tracemalloc
+    path = tmp_path / 'claude-code.log'
+    with open(path, 'wb') as f:
+        f.write(b'2026-10-21T07:00:00Z [DEBUG] ' + b'x' * (8 * 1024 * 1024) + b'\n')
+        f.write((DEBUG_LOG[1] + '\n').encode('utf-8'))
+    tracemalloc.start()
+    try:
+        found = web.read_debug_log(str(path))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1024 * 1024 and found.first == '2026-10-21T07:06:13.534Z'
+
+
+def test_a_last_line_without_its_line_feed_is_not_yet_a_line(web, tmp_path):
+    """S-A5: Claude Code may be writing the last line while the export reads it; `cacheCreate=12` of `12345` would
+    stay, as the key of the run blocks the whole line at the next export."""
+    path = tmp_path / 'claude-code.log'
+    path.write_text('\n'.join([*DEBUG_LOG, finished('2026-10-21T08:30:00Z', 'extract_memories', create=12)]),
+                    encoding='utf-8')
+    found = web.read_debug_log(str(path))
+    assert [run['t'] for run in found.runs] == ['2026-10-21T07:09:39.057Z', '2026-10-21T08:04:49.531Z']
+    assert found.last == '2026-10-21T08:26:37.479Z'
+
+
+# --- Security review v1.7 S-A7: log.jsonl never through a link or a FIFO, its text never raw on the terminal --------
+
+def sync_line(**fields):
+    return json.dumps({'hook': 'sync', **fields}) + '\n'
+
+
+def test_a_log_that_is_a_link_is_not_read(web, tmp_path):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    target = tmp_path / 'elsewhere.jsonl'
+    target.write_text(sync_line(decision='success', action='push') * 100, encoding='utf-8')
+    os.symlink(target, log_dir / 'log.jsonl')
+    assert web._sync_lines(str(log_dir), 0) == []
+    assert web._log_size(str(log_dir)) != target.stat().st_size
+
+
+@pytest.mark.posix_only
+def test_o_nofollow_alone_refuses_a_linked_log(web, tmp_path, monkeypatch):
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    target = tmp_path / 'elsewhere.jsonl'
+    target.write_text(sync_line(decision='success', action='push'), encoding='utf-8')
+    os.symlink(target, log_dir / 'log.jsonl')
+    monkeypatch.setattr(os.path, 'islink', lambda path: False)
+    assert web._sync_lines(str(log_dir), 0) == []
+
+
+@pytest.mark.posix_only
+def test_a_log_that_is_a_fifo_is_passed_over_without_waiting_for_a_writer(web, tmp_path):
+    import threading
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    fifo = log_dir / 'log.jsonl'
+    os.mkfifo(fifo)
+    seen = []
+    reader = threading.Thread(target=lambda: seen.append(web._sync_lines(str(log_dir), 0)), daemon=True)
+    reader.start()
+    reader.join(2)
+    waited = reader.is_alive()
+    if waited:                                              # free the reader that waits for a writer
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(5)
+    assert not waited and seen == [[]] and web._log_size(str(log_dir)) == 0
+    writer = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)      # a writer that holds it open, with a line in it
+    try:
+        os.write(writer, sync_line(decision='success', action='push').encode('utf-8'))
+        assert web._sync_lines(str(log_dir), 0) == []
+    finally:
+        os.close(writer)
+
+
+def test_a_log_that_is_a_device_is_passed_over(web, tmp_path, monkeypatch):
+    """No device node can be made without root: fstat says the file is one (a seek would refuse a FIFO by itself)."""
+    log_dir = tmp_path / 'log'
+    log_dir.mkdir()
+    (log_dir / 'log.jsonl').write_text(sync_line(decision='success', action='push'), encoding='utf-8')
+    device = os.stat_result((stat.S_IFCHR | 0o600, *os.stat(log_dir / 'log.jsonl')[1:]))
+    monkeypatch.setattr(os, 'fstat', lambda descriptor: device)
+    assert web._sync_lines(str(log_dir), 0) == []
+
+
+def test_the_text_of_the_log_reaches_the_terminal_without_escapes_or_controls(web):
+    lines = [{'hook': 'sync', 'decision': 'failure', 'category': 'auth\x1b[31m', 'action': 'push',
+              'reason': 'refused\x1b]0;title\x07 ‮gnp.exe next'}]
+    text = web.push_text(lines, 'owner/name', 'on')
+    assert text == 'push failed (?): refused?]0;title? ?gnp.exe?next'
+    shadow = [{'hook': 'sync', 'decision': 'shadow', 'lines': '\x1b[2J', 'bytes': True},
+              {'hook': 'sync', 'decision': 'success', 'action': 'push'}]
+    assert web.push_text(shadow, 'owner/name', 'shadow').startswith('shadow: committed here, pushed nothing (? lines, '
+                                                                    '? bytes)')
+    assert web.push_text([{'decision': 'failure', 'category': 'network', 'reason': None}], 'o/n', 'on') == \
+        'push failed (network): '
