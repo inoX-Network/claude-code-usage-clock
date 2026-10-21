@@ -436,7 +436,9 @@ def test_a_line_too_long_is_passed_over_with_its_rest_and_the_next_line_counts(w
     planted = 'x' * (64 * 1024 + 1) + finished('2026-10-21T07:00:01Z', 'extract_memories')     # its rest a line
     exact = finished('2026-10-21T07:00:02Z', 'extract_memories')
     exact = exact.replace('types=[', 'types=[' + 'x' * (64 * 1024 - len(exact)))      # 64 KB before its line feed
-    found = web.read_debug_log(str(write_log(tmp_path / 'claude-code.log', [long, planted, exact, *DEBUG_LOG])))
+    path = tmp_path / 'claude-code.log'
+    path.write_bytes(('\n'.join([long, planted, exact, *DEBUG_LOG]) + '\n').encode('utf-8'))     # LF on Windows too
+    found = web.read_debug_log(str(path))
     assert [run['t'] for run in found.runs] == ['2026-10-21T07:00:02Z', '2026-10-21T07:09:39.057Z',
                                                 '2026-10-21T08:04:49.531Z']
 
