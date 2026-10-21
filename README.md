@@ -63,8 +63,18 @@ in its report. Run them that way for a while, read the log, then switch to `enfo
 ```sh
 git clone https://github.com/inoX-Network/claude-code-usage-clock
 cd claude-code-usage-clock
+python3 tools/install.py               # asks y/n for each part, then installs on your yes
+```
+
+Just run it: in a terminal, without options, the installer asks one question per part (Enter takes the answer in
+brackets), shows a summary with the equivalent command line and writes nothing before you confirm. For scripts, any
+option skips the questions, and so does a stdin or stdout that is no terminal: then the options alone decide (none:
+the five parts of the default selection).
+
+```sh
 python3 tools/install.py --dry-run     # shows what would change
-python3 tools/install.py               # installs all five parts, gates in shadow mode
+python3 tools/install.py --components statusline,usage-clock,context-reporter,spawn-gate,soft-stop
+                                       # all five parts without a question, the gates keep their mode (shadow at first)
 ```
 
 Restart Claude Code (or open `/hooks`) after installing. On Windows, run `python tools\install.py` instead

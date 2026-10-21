@@ -54,8 +54,8 @@ that key and writes one line to the log.
 | `sync.max_clone_mb` | `1024` | The most the files of the sync repository may add up to, in MB of 1024 KiB (a whole number, at least 1). A larger remote is neither fast-forwarded nor rebased onto: push and pull end `internal` and nothing is checked out (a small fetch that would unpack to gigabytes). Raise it if the repository really is that large. The number of files has a fixed limit of 100 000 (no key: a real export has about 120 files a machine and month), against a few objects that would check out as millions of empty files. |
 
 The mode of the gates and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config
-file. The sync is the other way round: `sync.mode` and `sync.repo` are in the config file, and the installer sets them
-with `--sync-mode` and `--sync-repo` ([the sync](sync.md)).
+file. The sync is the other way round: `sync.mode`, `sync.repo` and `sync.machine_name` are in the config file, and the
+installer sets them with `--sync-mode`, `--sync-repo` and `--sync-name` ([the sync](sync.md)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
 folder) and `CCUC_USAGE_FILE` (the shared usage file).

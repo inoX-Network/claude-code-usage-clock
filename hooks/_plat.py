@@ -24,6 +24,8 @@ copies them with `_config.py`, so they import this file on Windows only and do t
 - `GROUP_OPTIONS`: the Popen arguments for a child whose whole tree `kill_tree(process)` can end after a timeout
   (git starts ssh or git-remote-https). POSIX: a session of its own and SIGKILL to its process group; Windows: a
   process group without a window and taskkill /T.
+- `is_terminal(stream)`: stdin or stdout is a terminal someone types into (the installer asks questions only then):
+  isatty(); on Windows the console must answer as well, as isatty() is true for the NUL device too.
 - `is_folder(info)`: an `os.lstat` result is a real folder: no link and, on Windows, no reparse point (a junction is a
   folder for lstat, only its file attributes tell it apart), so nothing that must stay inside is led elsewhere.
 - Open flags: `NO_FOLLOW` (no symlink as the last part of the path; Windows has no such flag, 0 there),
@@ -72,6 +74,9 @@ if os.name == 'nt':
 
     def hook_shell(settings_env=None):
         return _win.find_git_bash(settings_env=settings_env)
+
+    def is_terminal(stream):
+        return stream is not None and stream.isatty() and _win.is_console(stream)
 else:
     pread = os.pread
     quote_path = shlex.quote
@@ -91,6 +96,9 @@ else:
 
     def hook_shell(settings_env=None):
         return '/bin/sh'
+
+    def is_terminal(stream):
+        return stream is not None and stream.isatty()
 
     def script_command(script, *arguments):
         return ' '.join(['python3', shlex.quote(script), *arguments])

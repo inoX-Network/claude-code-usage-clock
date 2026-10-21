@@ -1,5 +1,6 @@
 """tools/install.py on Windows: commands for Git Bash, Git Bash as a precondition, the files that are copied."""
 import importlib.util
+import io
 import json
 import os
 import re
@@ -258,3 +259,11 @@ def test_a_variable_that_points_nowhere_is_not_enough(paths, tmp_path):
     env = without_git(tmp_path)
     env[_win.GIT_BASH_ENV] = str(tmp_path / 'nothing' / 'bash.exe')
     assert run('--settings', settings, '--target', target, env=env).returncode == 1
+
+
+def test_the_null_device_a_file_and_a_buffer_are_no_console(tmp_path):
+    """isatty() is true for every character device on Windows, the NUL device too: the assistant of the installer
+    must not take it for a terminal."""
+    with open(os.devnull, encoding='utf-8') as null, open(tmp_path / 'file', 'w', encoding='utf-8') as regular:
+        assert not _win.is_console(null) and not _win.is_console(regular)
+    assert not _win.is_console(io.StringIO())
