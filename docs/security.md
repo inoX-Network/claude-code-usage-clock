@@ -28,7 +28,14 @@
 - The [sync](sync.md) sends only after you opted in, and only into a repository of yours that was found private: one
   that is public, or whose answer does not say, stops the installation, and a push never writes to one found public.
   A private result is kept for 24 hours, so a repository made public later is found within 24 hours (by the next push
-  after that); until then pushes still go to it. Sessions that are still running on another machine appear only
+  after that); until then pushes still go to it. Behind a proxy that adds credentials to every request (a Claude
+  cloud container) the anonymous read works on a private repository too; the check then asks the GitHub API
+  anonymously and counts the repository private only if the answer is `"private": true` for this very repository
+  ([the sync](sync.md#install)). That answer proves that the proxy added credentials (anonymously GitHub answers 404
+  for a private repository) and that GitHub calls the repository private at this moment. It does not prove who else
+  can read it, it does not limit what those credentials may write elsewhere, and it relies on GitHub and the proxy
+  answering truthfully: a proxy that forges answers can make any repository look private, as it could forge the
+  anonymous read before. Sessions that are still running on another machine appear only
   after that machine's next push. A push at the end of a session can be cut off when the computer shuts down;
   `SessionStart` catches it up at the next start of the same system. `usage_report.py --sync` pushes and pulls at
   once.

@@ -39,10 +39,9 @@ class Setup:
         self.settings.write_text('{}', encoding='utf-8')
         self.module = load()
         self.probe = answer(128, ASKS)
-        real = _sync_git.check_visibility
-        monkeypatch.setattr(_sync_git, 'check_visibility',
-                            lambda repo, directory, deadline=None, execute=None: real(repo, directory, deadline,
-                                                                                      self.probe))
+        real = _sync_git.probe_visibility
+        monkeypatch.setattr(_sync_git, 'probe_visibility', lambda repo, directory, deadline=None, execute=None,
+                            api=None: real(repo, directory, deadline, self.probe, api))
         monkeypatch.delenv('CCUC_CONFIG')      # the config of the installation is <target>/config.json
 
     def run(self, *args):
@@ -864,6 +863,47 @@ def test_check_reads_the_visibility_from_the_cache_with_its_age(setup):
     assert code == 0 and f'NOTE Sync visibility: {REPO} was found not public 30 h ago; the next push checks again' in out
     cache.write_text('{broken', encoding='utf-8')
     assert 'NOTE Sync visibility: not checked yet; the next push checks it' in check(setup, '--components', 'sync')[1]
+
+
+INJECTED_ANSWER = json.dumps({'private': True, 'visibility': 'private', 'full_name': REPO}).encode('utf-8')
+INJECTED_NOTE = 'a proxy adds credentials to every request, the GitHub API says private'
+
+
+def test_behind_a_proxy_that_adds_credentials_the_api_decides_and_check_shows_why(setup, monkeypatch):
+    """0034-SYNC-PROXY-SICHT: the anonymous probe reads the private repository (a cloud container adds the
+    credentials of the session); the anonymous API answer `private: true` proves it and the installation goes on."""
+    setup.probe = answer(0)
+    asked = []
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: asked.append(repo) or INJECTED_ANSWER)
+    code, out = setup.sync()
+    assert code == 0, out
+    assert f'Sync: {REPO} is not public ({INJECTED_NOTE}).' in out
+    assert asked == [REPO] and setup.clone.is_dir()
+    cache = json.loads((setup.directory / _sync_git.VISIBILITY_FILE).read_text(encoding='utf-8'))
+    assert (cache['result'], cache['reason']) == ('private', 'credentials_injected')
+    log = [json.loads(line) for line in (setup.log / 'log.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert [entry['decision'] for entry in log if entry.get('hook') == 'sync'] == ['credentials_injected']
+    code, out = check(setup, '--components', 'sync')
+    assert code == 0 and f'OK   Sync visibility: {REPO} is not public (checked 0 h ago; {INJECTED_NOTE})' in out, out
+    old = dict(cache, checked=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 30 * 3600)))
+    (setup.directory / _sync_git.VISIBILITY_FILE).write_text(json.dumps(old), encoding='utf-8')
+    assert (f'NOTE Sync visibility: {REPO} was found not public 30 h ago ({INJECTED_NOTE}); the next push checks '
+            'again') in check(setup, '--components', 'sync')[1]
+
+
+def test_behind_such_a_proxy_a_public_api_answer_stops_the_installation(setup, monkeypatch):
+    setup.probe = answer(0)
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: json.dumps({'private': False,
+                                                                                'full_name': REPO}).encode())
+    code, out = setup.sync()
+    assert code == 1 and 'it is public: nothing was installed' in out, out
+    assert not setup.clone.exists() and not (setup.directory / _sync_git.VISIBILITY_FILE).exists()
+
+
+def test_without_a_proxy_the_installer_says_what_it_always_said(setup):
+    code, out = setup.sync()
+    assert code == 0 and f'Sync: {REPO} is not public (reading it without logging in is refused).' in out, out
+    assert INJECTED_NOTE not in check(setup, '--components', 'sync')[1]
 
 
 @pytest.mark.parametrize('category,status', [('network', 'NOTE'), ('timeout', 'NOTE'), ('auth', 'FIX'),
