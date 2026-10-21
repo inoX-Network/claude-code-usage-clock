@@ -50,6 +50,10 @@ The installer:
   The size of the repository is checked before anything is checked out, as for every pull: above `sync.max_clone_mb`
   (default 1024 MB) or 100 000 files it stops with exit code 1 and checks nothing out. A folder that is already there
   and is a clone of this repository stays as it is; a folder of anything else stays untouched and stops the run.
+  A clone that git refuses stops it too, with exit code 1. If GitHub answers that the repository does not exist (also
+  its answer when your login cannot reach a private one), the installer says so and tells you to check the name or
+  to create the repository (`gh repo create owner/name --private`, or on https://github.com/new); for credentials
+  that are missing or refused it tells you how to sign in.
 
 Run again with the same options, it changes nothing. If a push once found the repository public, nothing is pushed
 any more until you make it private and run the installer again with `--sync-repo`: that run checks again and lifts
