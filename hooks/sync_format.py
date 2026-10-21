@@ -55,6 +55,7 @@ MAX_COUNT = 10 ** 12        # a larger token count or percentage is no measureme
 MAX_TIME = 4_102_444_800    # Unix seconds of 2100-01-01: a later reset time is no measurement
 UTC_STD = (-720, 840)       # the standard offsets of the time zones in minutes, UTC-12 to UTC+14
 MACHINES = 'machines'
+WEB_NAME = 'claude-web'       # the name of every chat of Claude Code on the web (tools/web_export.py)
 ID_FILE = os.path.join('sync', 'machine_id')      # below the log folder
 
 # ASCII digits only: \d would also take digits of other scripts, and these become file names

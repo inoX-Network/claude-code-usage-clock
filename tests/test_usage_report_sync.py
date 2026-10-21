@@ -1148,3 +1148,30 @@ def test_the_sources_line_shows_the_devices_of_one_name_as_one(world, synced):
     assert ' · claude-web (2 devices) 30 min ago · ' in text and text.startswith('Sync: 4 devices · desk ')
     machines = world.report('--day', '2026-10-13')['coverage']['sync']['machines']
     assert [m['name'] for m in machines].count('claude-web') == 2          # the JSON keeps each device
+
+
+# --- Gegenprüfung #81 Runde 2 (Befund D): Notable treats the devices of claude-web as one ---------------------------
+
+def test_notable_names_no_claude_web_device_as_stale_or_in_another_time_zone(world, synced, monkeypatch):
+    """A chat of Claude Code on the web that ended never pushes again, and its VM always runs in UTC: neither is a
+    fault, so `sync_stale` and `sync_timezone` leave every device named claude-web out."""
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    world.projects.mkdir()
+    for key in (WEB1, WEB2):
+        synced.clone.machine(key, name=sync_format.WEB_NAME, last_success='2026-10-01T12:00:00Z', utc_std=0)
+    synced.state(last_success=NOW - 60)
+    notes = {n['rule']: n for n in world.report()['overview']['notable']}
+    assert 'sync_stale' not in notes and 'sync_timezone' not in notes
+    synced.clone.machine(LAPTOP, last_success='2026-10-11T12:00:00Z', utc_std=-480)
+    notes = {n['rule']: n for n in world.report()['overview']['notable']}
+    assert notes['sync_stale']['machines'] == [{'name': 'laptop', 'last_success': '2026-10-11T12:00:00Z'}]
+    assert notes['sync_timezone']['machines'] == [{'name': 'desk', 'utc_std': 60}, {'name': 'laptop', 'utc_std': -480}]
+
+
+def test_the_web_name_is_the_one_the_export_gives():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('web_export_name', os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tools', 'web_export.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.MACHINE_NAME == sync_format.WEB_NAME == 'claude-web'

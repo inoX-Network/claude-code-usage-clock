@@ -132,7 +132,8 @@ release tag in its settings. It clones this repository at that tag into the VM a
 - prints the side calls, the outcome of the push and what the repository holds of this session.
 
 Every chat is a machine of its own, with its own machine id (several chats at the same time never write the same
-files). A chat that was interrupted brings its transcript into its new VM, and the export there writes the same
+files). In `Notable` the report names none of them as without a push (a chat that ended never pushes again) or in another
+time zone (the VM always runs in UTC). A chat that was interrupted brings its transcript into its new VM, and the export there writes the same
 requests again under another id: the report counts a request once by its key, on whichever machine it lies. The
 request of the export itself is not in it: the transcript gets it only after the answer.
 

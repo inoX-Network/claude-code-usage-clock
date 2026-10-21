@@ -2365,9 +2365,11 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
 def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
     """The notable lines of the sync: machines without a push for over 24 hours, machines in different time zones
     (of those whose standard offset is known), this machine blocked or backing off, a pull that failed or found no fast
-    forward."""
+    forward. The devices of Claude Code on the web (sync_format.WEB_NAME) are in neither of the first two: a chat that
+    ended never pushes again, and its VM always runs in UTC."""
     notes = []
-    stale = [machine for machine in sync['machines'] if machine['last_success'] is None
+    machines = [machine for machine in sync['machines'] if machine['name'] != sync_format.WEB_NAME]
+    stale = [machine for machine in machines if machine['last_success'] is None
              or now - _transcripts.parse_ts(machine['last_success']) > STALE_PUSH_S]
     if stale:
         listing = ', '.join(f'{m["name"]} ' + ('never' if m['last_success'] is None else
@@ -2376,7 +2378,7 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
         notes.append({'rule': 'sync_stale', 'machines': [{'name': m['name'], 'last_success': m['last_success']}
                                                          for m in stale],
                       'text': f'no push for over 24 h: {listing}'})
-    zoned = [machine for machine in sync['machines'] if machine['utc_std'] is not None]
+    zoned = [machine for machine in machines if machine['utc_std'] is not None]
     if len({machine['utc_std'] for machine in zoned}) > 1:
         listing = ', '.join(f'{m["name"]} {utc_offset(m["utc_std"])}' for m in zoned)
         notes.append({'rule': 'sync_timezone', 'machines': [{'name': m['name'], 'utc_std': m['utc_std']} for m in zoned],

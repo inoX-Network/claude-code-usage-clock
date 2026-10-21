@@ -41,7 +41,7 @@ import _sync_git  # noqa: E402
 import sync_format  # noqa: E402
 from log_summary import resolve_log_dir  # noqa: E402
 
-MACHINE_NAME = 'claude-web'
+MACHINE_NAME = sync_format.WEB_NAME      # every chat a machine of its own, all of this name
 DEBUG_LOG = '/tmp/claude-code.log'        # where Claude Code on the web writes its debug log (measured 2026-10-21)
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 SETTINGS_FILE = 'web-settings.json'      # in the log folder: the installer needs one, the session gets no hook
