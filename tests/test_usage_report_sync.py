@@ -6,6 +6,7 @@ of tests/test_usage_report.py."""
 import json
 import os
 import shutil
+import types
 
 import pytest
 
@@ -1175,3 +1176,60 @@ def test_the_web_name_is_the_one_the_export_gives():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.MACHINE_NAME == sync_format.WEB_NAME == 'claude-web'
+
+
+# --- Security review v1.7 S-A4: the spans of the debug logs sorted and merged ---------------------------------------
+
+class Compared(float):
+    """A time of a window that counts how often it is compared."""
+    count = 0
+
+    def _count(self, other, compare):
+        Compared.count += 1
+        return compare(float(self), float(other))
+
+    def __lt__(self, other):
+        return self._count(other, float.__lt__)
+
+    def __le__(self, other):
+        return self._count(other, float.__le__)
+
+    def __gt__(self, other):
+        return self._count(other, float.__gt__)
+
+    def __ge__(self, other):
+        return self._count(other, float.__ge__)
+
+
+def side_world(spans, requests, sid=WEB_SESSION):
+    """The machines and the data side_report reads: a window per span (seconds after 10:00) and the requests."""
+    base = T('2026-10-13T10:00:00Z')
+    windows = [{'_machine': WEB1, 't': sync_format.iso_time(base + 7200), 'sid': sid, 'log': True,
+                'from': sync_format.iso_time(base + low), 'to': sync_format.iso_time(base + high), 'unmeasured': 0}
+               for low, high in spans]
+    machines = types.SimpleNamespace(side=[], side_windows=windows)
+    data = types.SimpleNamespace(only=None, counted=lambda ident: True,
+                                 requests=[types.SimpleNamespace(session=sid, ts=base + ts) for ts in requests])
+    return machines, data, base
+
+
+def test_a_request_is_measured_inside_any_span_also_where_spans_overlap_nest_or_come_unsorted():
+    machines, data, base = side_world([(40, 50), (15, 30), (10, 20), (12, 14), (60, 60)],
+                                      [9, 10, 14.5, 30, 31, 45, 55, 60, 61])
+    side = report_module.side_report(machines, data, [], base, base + 3600)
+    assert side['requests_not_measured'] == 4 and side['sessions_without_log'] == 0
+
+
+def test_many_windows_of_one_session_cost_no_comparison_per_window_and_request(monkeypatch):
+    """S-A4: a machine that may write to the repository can put some 40 000 windows into one file for a session id it
+    sees there; each request was compared with every span (20 000 windows x 5 000 requests: 3.1 s, hours for a clone
+    of 1 GB). Sorted and merged, each request is one search: the comparisons grow with n log n, not with n x m."""
+    parse = sync_format.parse_time
+    monkeypatch.setattr(sync_format, 'parse_time', lambda text: Compared(parse(text)))
+    Compared.count = 0
+    windows = 2000
+    machines, data, base = side_world([(10 * i, 10 * i + 5) for i in reversed(range(windows))],
+                                      [10 * i + offset for i in range(windows) for offset in (2, 7)])
+    side = report_module.side_report(machines, data, [], base, base + 7 * 24 * 3600)
+    assert side['requests_not_measured'] == windows
+    assert Compared.count < 200_000                 # each request against each span: over 4 000 000

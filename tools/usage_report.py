@@ -1517,6 +1517,27 @@ def _split_lines(view: dict) -> list[str]:
 SIDE_TITLE = 'Side calls outside the transcripts (Claude Code on the web; not in the sums above)'
 
 
+def merged_spans(spans: list[tuple[float, float]]) -> tuple[list[float], list[float]]:
+    """The spans sorted and merged where they overlap or touch: their starts and their ends, both ascending, for
+    `inside`. A machine that may write to the repository can put thousands of windows into one session."""
+    starts: list[float] = []
+    ends: list[float] = []
+    for low, high in sorted(spans):
+        if ends and low <= ends[-1]:
+            ends[-1] = max(ends[-1], high)
+        else:
+            starts.append(low)
+            ends.append(high)
+    return starts, ends
+
+
+def inside(merged: tuple[list[float], list[float]], moment: float) -> bool:
+    """Whether `moment` lies in one of the merged spans: one search, not a comparison with each."""
+    starts, ends = merged
+    index = bisect.bisect_right(starts, moment) - 1
+    return index >= 0 and moment <= ends[index]
+
+
 def side_report(machines: 'Machines | None', data: Data, prices: list[dict], start: float, end: float) -> dict | None:
     """The side runs of the period (each `k` once) by source, priced with the cache write as 1 hour (an estimate),
     and what has no measurement: the requests of the period of every session with a window that lie outside each span
@@ -1542,9 +1563,10 @@ def side_report(machines: 'Machines | None', data: Data, prices: list[dict], sta
         if known is None or row['t'] >= known['t']:
             newest[(row['_machine'], row['sid'])] = row
     sessions = {row['sid'] for row in windows}
+    merged = {sid: merged_spans(found) for sid, found in spans.items()}
     outside = sum(1 for request in data.requests
                   if request.session in sessions and start <= request.ts < end and data.counted(request.session[:8])
-                  and not any(low <= request.ts <= high for low, high in spans.get(request.session, ())))
+                  and not inside(merged.get(request.session, ([], [])), request.ts))
     sources: dict[str, dict] = {}
     for row in sorted(runs.values(), key=lambda row: row['t']):
         source = sources.setdefault(row['src'], {
