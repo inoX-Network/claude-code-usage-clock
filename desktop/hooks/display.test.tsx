@@ -88,3 +88,42 @@ test('a config_file from the plugin options is read instead', { options: { confi
     expect(read[0]?.endsWith('/etc/usage-clock/config.json')).toBe(true)
     expect((await line($, 'desktop')).week?.props.color).toBe('error')
   })
+
+test('a gate config.json switched off shows after the week, read again with every measurement', async ($, on) => {
+  const folder = 'C:/Users/you/.claude/hooks/usage-clock'
+  const gate = `"C:/Python314/python.exe" -X utf8 "${folder}/spawn_gate.py" --mode=enforce || { echo "spawn gate broken - start denied" >&2; exit 2; }`
+  let config = JSON.stringify({ modules: { spawn_gate: 'off' } })
+  mock.clock(on, { now: Date.parse('2026-10-17T06:00:00Z') })
+  mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
+  on('session.usage', () => ({ value: USAGE }))
+  on('session.id', () => ({ value: 'desk-1' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('settings.read', () => ({
+    value: {
+      statusLine: { type: 'command', command: `"C:/Python314/python.exe" -X utf8 "${folder}/statusline.py"` },
+      hooks: { PreToolUse: [{ matcher: 'Agent|Workflow|Skill', hooks: [{ type: 'command', command: gate }] }] },
+    },
+  }))
+  on('session.start', ($, e) => e)
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('fs.read', ($, e) => (e.path.split(String.fromCharCode(92)).join('/').endsWith('/config.json') ? { value: config } : { deny: 'ENOENT' }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>bypass</Text>
+  })
+  const marker = async () => {
+    const ui = await $.ui.mount({ plugin: 'usage-clock-display', surface: 'desktop', component: 'SessionMode', props: { modes: [] } })
+    const found = await ui.find({ type: 'Text', text: /spawn gate/ })
+    await ui.unmount()
+    return found
+  }
+  await $.session.start({ cwd: 'C:/proj' })
+  await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
+  const found = await marker()
+  expect(found?.text).toBe(' spawn gate off')
+  expect(found?.props.color).toBe('error')
+  config = JSON.stringify({ modules: { spawn_gate: '' } })
+  await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
+  expect(await marker()).toBeUndefined()
+})
