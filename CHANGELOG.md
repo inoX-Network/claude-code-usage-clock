@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-10-21 — installer assistant, Settings tab, Claude Code on the web
+
 ### Added
 
 - Claude Code on the web: the skill `/usage-export` (`skills/usage-export/SKILL.md`) and `tools/web_export.py` put the
@@ -161,7 +163,8 @@ The installer, the Settings tab and `modules` (part B of the security review aft
 
 ## [1.0.0] — 2026-10-13 — first release
 
-[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.7.0
 [1.6.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.6.0
 [1.5.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.5.0
 [1.4.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.4.0
