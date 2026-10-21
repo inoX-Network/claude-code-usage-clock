@@ -494,7 +494,8 @@ def ask_api(repo: str, seconds: float, opener=None,
     """(body, '') of one anonymous `GET API_URL` (no Authorization header, no redirect) if GitHub answered 200 with at
     most API_MAX_BYTES within `seconds` in all; else (None, why): `timeout`, `network`, `http_<status>` (also every
     3xx: no redirect is followed), `status_<status>` (another 2xx) or `too_large`. urllib's timeout holds for each read
-    of the socket, so the body is read in pieces against the clock. `opener` replaces api_opener() (tests)."""
+    of the socket, and read(n) waits for all n bytes: the body is read with read1 (what has arrived) and the clock is
+    checked after each piece. `opener` replaces api_opener() (tests)."""
     import http.client
     import socket
     import urllib.error
@@ -508,7 +509,7 @@ def ask_api(repo: str, seconds: float, opener=None,
                 return None, f'status_{response.status}'
             body = b''
             while len(body) <= API_MAX_BYTES:
-                piece = response.read(min(API_PIECE, API_MAX_BYTES + 1 - len(body)))
+                piece = response.read1(min(API_PIECE, API_MAX_BYTES + 1 - len(body)))     # read(n) waits for n
                 if not piece:
                     break
                 body += piece

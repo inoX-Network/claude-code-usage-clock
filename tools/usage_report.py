@@ -272,12 +272,12 @@ class Data:
         self.start_times: list[float] = []
         self.price_cache: dict[str, dict | None] = {}
         self.machine: dict[str, str] = {}         # with the sync: CLI id -> the machine it ran on
-        self.only: str | None = None              # --machine: only the requests and starts of this machine count
+        self.only: frozenset[str] | None = None   # --machine: only the requests and starts of these machines count
         self.replaced: set[tuple] = set()         # (machine, day) whose day line counts instead of its requests
 
     def counted(self, ident: str) -> bool:
         """Whether the CLI `ident` (the first 8 characters of a session id) counts: always without --machine."""
-        return self.only is None or self.machine.get(ident) == self.only
+        return self.only is None or self.machine.get(ident) in self.only
 
     def set_requests(self, requests: list[_transcripts.Request]) -> None:
         self.requests = sorted(requests, key=lambda r: r.ts)
@@ -1512,6 +1512,78 @@ def _split_lines(view: dict) -> list[str]:
     return lines
 
 
+# --- Side calls outside the transcripts (Claude Code on the web) -----------------------------------------------------
+
+SIDE_TITLE = 'Side calls outside the transcripts (Claude Code on the web; not in the sums above)'
+
+
+def side_report(machines: 'Machines | None', data: Data, prices: list[dict], start: float, end: float) -> dict | None:
+    """The side runs of the period (each `k` once) by source, priced with the cache write as 1 hour (an estimate),
+    and what has no measurement: the requests of the period of every session with a window that lie outside each span
+    of a debug log, the sessions without any log, and the calls the newest window of each machine and session counted
+    without token counts. None without any side line (also with --local or for another --machine)."""
+    if machines is None:
+        return None
+    mine = (lambda row: data.only is None or row['_machine'] in data.only)
+    runs: dict[str, dict] = {}
+    for row in machines.side:
+        if mine(row) and start <= sync_format.parse_time(row['t']) < end:
+            runs.setdefault(row['k'], row)
+    windows = [row for row in machines.side_windows if mine(row)]
+    if not runs and not windows:
+        return None
+    spans: dict[str, list[tuple[float, float]]] = {}
+    newest: dict[tuple[str, str], dict] = {}
+    for row in windows:
+        if row['log']:
+            spans.setdefault(row['sid'], []).append((sync_format.parse_time(row['from']),
+                                                     sync_format.parse_time(row['to'])))
+        known = newest.get((row['_machine'], row['sid']))
+        if known is None or row['t'] >= known['t']:
+            newest[(row['_machine'], row['sid'])] = row
+    sessions = {row['sid'] for row in windows}
+    outside = sum(1 for request in data.requests
+                  if request.session in sessions and start <= request.ts < end and data.counted(request.session[:8])
+                  and not any(low <= request.ts <= high for low, high in spans.get(request.session, ())))
+    sources: dict[str, dict] = {}
+    for row in sorted(runs.values(), key=lambda row: row['t']):
+        source = sources.setdefault(row['src'], {
+            'source': row['src'], 'runs': 0, 'calls': 0, 'cost_usd': 0.0, 'unpriced_runs': 0,
+            'tokens': {'input': 0, 'cache_write': 0, 'cache_read': 0, 'output': 0}})
+        source['runs'] += 1
+        source['calls'] += row['calls']
+        for name, field in (('input', 'in'), ('cache_write', 'cw'), ('cache_read', 'cr'), ('output', 'out')):
+            source['tokens'][name] += row[field]
+        entry = None if row['model'] is None else _price_of(data, prices, row['model'])
+        if entry is None:
+            source['unpriced_runs'] += 1
+        else:
+            source['cost_usd'] += request_cost(entry, (row['in'], 0, row['cw'], row['cr'], row['out']))
+    listed = [sources[name] for name in sorted(sources)]
+    return {'sources': listed, 'cost_usd': sum(source['cost_usd'] for source in listed), 'sessions': len(sessions),
+            'sessions_without_log': len(sessions - set(spans)), 'requests_not_measured': outside,
+            'unmeasured_calls': sum(row['unmeasured'] for row in newest.values())}
+
+
+def _side_lines(side: dict) -> list[str]:
+    lines = [SIDE_TITLE]
+    for source in side['sources']:
+        tokens = source['tokens']
+        unpriced = f', {_plural(source["unpriced_runs"], "run")} without a price' if source['unpriced_runs'] else ''
+        lines += [f'  {source["source"]}  {_plural(source["runs"], "run")}, {_plural(source["calls"], "call")}, '
+                  f'~{usd_text(source["cost_usd"])} USD{unpriced}',
+                  f'    tokens input {tokens_text(tokens["input"])}, cache write {tokens_text(tokens["cache_write"])}, '
+                  f'cache read {tokens_text(tokens["cache_read"])}, output {tokens_text(tokens["output"])}']
+    gaps = [f'{_plural(side["requests_not_measured"], "request")} outside a debug log']
+    if side['sessions_without_log']:
+        gaps[0] += f' ({_plural(side["sessions_without_log"], "session")} without any)'
+    if side['unmeasured_calls']:
+        gaps.append(f'{_plural(side["unmeasured_calls"], "call")} without token counts')
+    if side['requests_not_measured'] or side['unmeasured_calls']:
+        lines.append('  not measured: ' + ', '.join(gaps))
+    return lines
+
+
 def render_overview(report: dict) -> str:
     """The overview, made of `report['overview']` alone: the object in the JSON is what the text says."""
     view = report['overview']
@@ -1530,6 +1602,11 @@ def render_overview(report: dict) -> str:
     blocks += [_table_lines(view), _split_lines(view)] if view['projects'] else [['No requests in this period.']]
     if view['notable']:
         blocks.append(['Notable'] + [f'  {note["text"]}' for note in view['notable']])
+    if view.get('side_calls'):
+        side = view['side_calls']
+        blocks.append([f'Side calls outside the transcripts: ~{usd_text(side["cost_usd"])} USD '
+                       f'({_plural(side["runs"], "run")}), {_plural(side["requests_not_measured"], "request")} '
+                       'not measured · not in the sums · --full'])
     details = view['details']
     options = [f'--project {details["project"]}', f'--session {details["session"]}'] if details['project'] else []
     blocks.append(['Details: ' + ' · '.join(options + ['--full'])])
@@ -1691,6 +1768,8 @@ def render(report: dict, selection: dict | None = None) -> str:
         sections += [_allocation_lines(report['allocation']), _calibration_lines(report['calibration'])]
         if report['guards']:
             sections.append(_guard_lines(report))
+        if report.get('side_calls'):
+            sections.append(_side_lines(report['side_calls']))
     return '\n\n'.join('\n'.join(section) for section in sections)
 
 
@@ -2032,6 +2111,8 @@ class Machines:
         self.days: dict[str, dict[str, dict]] = {}
         self.skipped = dict.fromkeys(sync_format.COUNTERS, 0)
         self.broken_days = 0
+        self.side: list[dict] = []                # side runs and windows of Claude Code on the web, by machine
+        self.side_windows: list[dict] = []
 
     def add(self, key: str, machine: sync_format.Machine) -> None:
         """The folder of another machine. Of lines without `k` a copy (a push cut off and repeated) counts once: a
@@ -2042,6 +2123,7 @@ class Machines:
         self.utc_std[key] = info.get('utc_std')
         self.last_success[key] = sync_format.parse_time(status['last_success']) if status else None
         self.requests += [{**row, '_machine': key} for row in machine.requests]
+        self.add_side(key, machine)
         times: set[float] = set()
         for row in machine.history:
             ts = sync_format.parse_time(row['t'])
@@ -2064,6 +2146,10 @@ class Machines:
                 continue
             days.setdefault(day, stats)
         self.days[key] = days
+
+    def add_side(self, key: str, machine: sync_format.Machine) -> None:
+        self.side += [{**row, '_machine': key} for row in machine.side]
+        self.side_windows += [{**row, '_machine': key} for row in machine.side_windows]
 
     def merge_requests(self, local: list[_transcripts.Request],
                        projects_dir: str) -> tuple[list[tuple[_transcripts.Request, str, str | None]], dict]:
@@ -2173,6 +2259,7 @@ def read_clone(root: str, machines: Machines) -> None:
     if machines.own and os.path.isdir(os.path.join(root, sync_format.MACHINES, machines.own)):
         own = sync_format.read_machine(root, machines.own, machines.skipped)
         machines.requests += [{**row, '_machine': machines.own} for row in own.requests]
+        machines.add_side(machines.own, own)
 
 
 def _state(log_dir: str) -> _sync_core.State:
@@ -2238,7 +2325,7 @@ CLONE_TEXTS = {'read': None, 'missing': 'no clone of the sync repository',
 
 
 def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _sync_core.State, cfg: dict,
-                  chosen: str | None, now: float, clone: str) -> dict:
+                  chosen: frozenset[str] | None, now: float, clone: str) -> dict:
     """`coverage.sync`: the machines with the time of their last successful push, the pull, the push of --sync, the
     backoff of this machine, whether the clone was read (`clone`: `read`, `missing`, `unread`) and what was skipped in
     it; `text` is the line `Sources:` prints."""
@@ -2247,16 +2334,23 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
     last_pull = state.last_pull
     pull = {**pull, 'last_pull': None if last_pull is None else iso(last_pull)}
     parts = [f'Sync: {_plural(len(keys), "device")}']
-    parts += [f'{machines.names[key]} {_when(machines.last_success[key], now, "never pushed")}' for key in keys]
+    by_name: dict[str, list[str]] = {}
+    for key in keys:      # the devices of one name (the chats of claude-web) in one part, with the newest push
+        by_name.setdefault(machines.names[key], []).append(key)
+    for name, group in by_name.items():
+        pushed = [machines.last_success[key] for key in group if machines.last_success[key] is not None]
+        label = name if len(group) == 1 else f'{name} ({len(group)} devices)'
+        parts.append(f'{label} {_when(max(pushed) if pushed else None, now, "never pushed")}')
     if push is not None:
         parts.append(PUSH_TEXTS[push['status']].format(category=push['category']))
     parts.append(PULL_TEXTS[pull['status']].format(category=pull['category'], last=_when(last_pull, now)))
-    if chosen is not None:
-        parts.append(f'only {machines.names[chosen]}')
+    chosen_name = None if chosen is None else machines.names[next(iter(chosen))]
+    if chosen_name is not None:
+        parts.append(f'only {chosen_name}')
     if CLONE_TEXTS[clone]:
         parts.append(CLONE_TEXTS[clone])
     return {'mode': cfg['sync']['mode'], 'text': ' · '.join(parts), 'clone': clone,
-            'machine': None if chosen is None else machines.names[chosen],
+            'machine': chosen_name,
             'machines': [{'id': key or None, 'name': machines.names[key], 'platform': machines.platforms[key],
                           'own': key == machines.own,
                           'last_success': None if machines.last_success[key] is None else iso(machines.last_success[key]),
@@ -2271,9 +2365,11 @@ def sync_coverage(machines: Machines, pull: dict, push: dict | None, state: _syn
 def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
     """The notable lines of the sync: machines without a push for over 24 hours, machines in different time zones
     (of those whose standard offset is known), this machine blocked or backing off, a pull that failed or found no fast
-    forward."""
+    forward. The devices of Claude Code on the web (sync_format.WEB_NAME) are in neither of the first two: a chat that
+    ended never pushes again, and its VM always runs in UTC."""
     notes = []
-    stale = [machine for machine in sync['machines'] if machine['last_success'] is None
+    machines = [machine for machine in sync['machines'] if machine['name'] != sync_format.WEB_NAME]
+    stale = [machine for machine in machines if machine['last_success'] is None
              or now - _transcripts.parse_ts(machine['last_success']) > STALE_PUSH_S]
     if stale:
         listing = ', '.join(f'{m["name"]} ' + ('never' if m['last_success'] is None else
@@ -2282,7 +2378,7 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
         notes.append({'rule': 'sync_stale', 'machines': [{'name': m['name'], 'last_success': m['last_success']}
                                                          for m in stale],
                       'text': f'no push for over 24 h: {listing}'})
-    zoned = [machine for machine in sync['machines'] if machine['utc_std'] is not None]
+    zoned = [machine for machine in machines if machine['utc_std'] is not None]
     if len({machine['utc_std'] for machine in zoned}) > 1:
         listing = ', '.join(f'{m["name"]} {utc_offset(m["utc_std"])}' for m in zoned)
         notes.append({'rule': 'sync_timezone', 'machines': [{'name': m['name'], 'utc_std': m['utc_std']} for m in zoned],
@@ -2311,20 +2407,21 @@ def sync_notes(sync: dict, state: _sync_core.State, now: float) -> list[dict]:
     return notes
 
 
-def choose_machine(parser, machines: Machines, name: str) -> str:
-    """The key of the machine `--machine` names (its name, or the start of it); exit 2 if none or several fit."""
+def choose_machine(parser, machines: Machines, name: str) -> frozenset[str]:
+    """The keys of the machines `--machine` names: every machine of that name (each chat of Claude Code on the web is a
+    machine `claude-web` of its own), else of the one name it is the start of; exit 2 if none or several names fit."""
     if not name:
         parser.error('--machine must not be empty')
     names = machines.names
     found = [key for key in names if names[key] == name] or [key for key in names if names[key].startswith(name)]
-    if len(found) != 1:
-        listing = ', '.join(sorted(names.values()))
+    if len({names[key] for key in found}) != 1:
+        listing = ', '.join(sorted(set(names.values())))
         parser.error(f"--machine '{name}' matches {'no machine' if not found else f'{len(found)} machines'} "
                      f'(machines: {listing})')
-    return found[0]
+    return frozenset(found)
 
 
-def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Machines, str | None, dict, list[dict]]:
+def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Machines, frozenset[str] | None, dict, list[dict]]:
     """(machines, the key of --machine, coverage.sync, the notable lines of the sync): the push of --sync, the pull,
     then the clone as it is now. A machine id that cannot be used (a link, not a UUID4) leaves the clone unread: its
     own folder could not be told from the others. Nothing here fails the report."""
@@ -2347,13 +2444,14 @@ def gather_sync(parser, args, log_dir: str, cfg: dict, now: float) -> tuple[Mach
     return machines, chosen, sync, sync_notes(sync, state, now)
 
 
-def day_lines(machines: Machines, archive: dict[str, dict], chosen: str | None) -> dict[str, list[tuple[str, dict]]]:
+def day_lines(machines: Machines, archive: dict[str, dict],
+              chosen: frozenset[str] | None) -> dict[str, list[tuple[str, dict]]]:
     """The day lines by day, as (machine, figures): this machine's archive first, then the others by id; with
     --machine only that one's."""
     lines: dict[str, list[tuple[str, dict]]] = {}
     sources = [(machines.own, archive)] + sorted(machines.days.items())
     for key, days in sources:
-        if chosen is None or key == chosen:
+        if chosen is None or key in chosen:
             for day, stats in days.items():
                 lines.setdefault(day, []).append((key, stats))
     return lines
@@ -2512,7 +2610,7 @@ def replaced_days(keys: dict[tuple, set], lines: dict[str, list[tuple[str, dict]
 
 
 def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modified_since: float, start: float,
-              anchor: float | None = None, machines: Machines | None = None, chosen: str | None = None,
+              anchor: float | None = None, machines: Machines | None = None, chosen: frozenset[str] | None = None,
               lines: dict | None = None, whole: set[str] | None = None) -> Data:
     """Requests from the transcripts; for the time before the history began, the usage lines in the transcripts stand in
     for it. With the sync (`machines`) the requests and gate decisions of the other machines join them; `chosen` is the
@@ -2540,8 +2638,9 @@ def load_data(projects_dir: str, log_dir: str, history: list[Measurement], modif
             if label is not None:
                 data.label.setdefault(request.session, label)
         data.only = chosen
-        data.guards = (data.guards if chosen in (None, machines.own) else []) + [
-            guard for key, guards in sorted(machines.guards.items()) if chosen in (None, key) for guard in guards]
+        data.guards = (data.guards if chosen is None or machines.own in chosen else []) + [
+            guard for key, guards in sorted(machines.guards.items()) if chosen is None or key in chosen
+            for guard in guards]
     return data
 
 
@@ -2664,6 +2763,12 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     names = None if machines is None else {ident: machines.names[key] for ident, key in data.machine.items()}
     report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate, contexts, names,
                           notes)
+    side = side_report(machines, data, prices, start, end)
+    if side is not None:
+        report['side_calls'] = side
+        report['overview']['side_calls'] = {'cost_usd': side['cost_usd'],
+                                            'runs': sum(source['runs'] for source in side['sources']),
+                                            'requests_not_measured': side['requests_not_measured']}
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

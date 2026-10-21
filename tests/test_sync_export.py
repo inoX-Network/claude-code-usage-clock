@@ -544,7 +544,7 @@ def test_lines_are_in_the_clone_before_their_cursor_moves(world, clone):
     assert 'usage-history.jsonl' in cursor and 'log.jsonl' not in cursor
     (clone / machine / 'gates').unlink()
     result = run(world, clone)
-    assert result.lines == {'request': 0, 'history': 0, 'gate': 1, 'day': 0}
+    assert result.lines == {'request': 0, 'history': 0, 'gate': 1, 'day': 0, 'side': 0}
 
 
 def test_a_clone_that_cannot_be_written_is_internal(world, clone, monkeypatch):
@@ -596,7 +596,7 @@ def test_source_lines_that_do_not_fit_are_counted_and_left_out(world, clone):
                                                  '{"v": 1, "day": "2026-10-13", "stats": {}}'])
     result = run(world, clone)
     assert result.skipped == 3 + 1 + 1
-    assert result.lines == {'request': 0, 'history': 1, 'gate': 1, 'day': 1}
+    assert result.lines == {'request': 0, 'history': 1, 'gate': 1, 'day': 1, 'side': 0}
 
 
 def test_a_source_that_is_no_regular_file_or_cannot_be_read_is_counted(world, clone, monkeypatch):
@@ -657,27 +657,29 @@ class Deadline:
         return 1000 if self.ticks >= 0 else 0
 
 
-@pytest.mark.parametrize('ticks', [0, 1, 2, 6])
+@pytest.mark.parametrize('ticks', [0, 1, 2, 6, 7])
 def test_the_deadline_stops_the_export_at_the_next_file_and_the_next_run_goes_on(world, clone, ticks):
     """Calls of `left`: one per transcript (2), one per log file (history .1 and base, log .1 and base), one before
-    the archive: 7 in all."""
+    the archive, one before the side calls: 8 in all."""
     world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', 'm1', out=10)])
     world.transcript(PROJECT, 'bbbbbbbb-1', [req('2026-10-13T08:00:00Z', 'm2', request='r2', out=20)])
     write_lines(world.log / 'usage-history.jsonl', [history_row(0, 1)])
     gates(world, [GATE])
     write_lines(world.log / 'usage-days.jsonl', ['{"v":1,"day":"2026-10-13","stats":{}}'])
+    write_lines(world.log / _sync_export.SIDE_FILE, [SIDE_WINDOW])
     run(world, clone)                          # a first run, then new lines in every source
     write_lines(world.log / 'usage-history.jsonl', [history_row(1, 2)], mode='a')
     gates(world, [GATE], mode='a')
     write_lines(world.log / 'usage-days.jsonl', ['{"v":1,"day":"2026-10-14","stats":{}}'], mode='a')
+    write_lines(world.log / _sync_export.SIDE_FILE, [SIDE_RUN], mode='a')
     write_lines(transcript_path(world, 'bbbbbbbb-1'), [req('2026-10-13T08:01:00Z', 'm3', request='r3', out=30)],
                 mode='a')
     stopped = run(world, clone, deadline=Deadline(ticks))
     assert not stopped.complete
     rest = run(world, clone)
     total = {kind: stopped.lines[kind] + rest.lines[kind] for kind in _sync_export.KINDS}
-    assert total == {'request': 1, 'history': 1, 'gate': 1, 'day': 1}
-    assert run(world, clone, deadline=Deadline(7)).complete
+    assert total == {'request': 1, 'history': 1, 'gate': 1, 'day': 1, 'side': 1}
+    assert run(world, clone, deadline=Deadline(8)).complete
 
 
 # --- Gegenprüfung #63 -------------------------------------------------------------------------------------------------
@@ -740,7 +742,8 @@ def test_the_cursor_is_saved_after_each_group_of_sources(world, clone, monkeypat
                       ('reads', 'log.jsonl.1'), ('reads', 'log.jsonl'),
                       ('saved', ['log.jsonl', transcript, 'usage-history.jsonl']),
                       ('reads', 'usage-days.jsonl'),
-                      ('saved', ['log.jsonl', transcript, 'usage-days.jsonl', 'usage-history.jsonl'])]
+                      ('saved', ['log.jsonl', transcript, 'usage-days.jsonl', 'usage-history.jsonl']),
+                      ('reads', 'side-calls.jsonl')]
 
 
 def test_a_transcript_shortened_and_then_grown_past_the_old_offset_loses_nothing(world, clone):
@@ -760,3 +763,60 @@ def test_a_transcript_shortened_and_then_grown_past_the_old_offset_loses_nothing
     run(world, clone)
     outs = {r['out'] for r in exported(world, clone).requests}
     assert outs == {10, 20, 30} | {100 + number for number in range(6)}
+
+
+# --- Side calls of Claude Code on the web (side-calls.jsonl, written by tools/web_export.py) ------------------------
+
+SIDE_T = '2026-10-13T08:05:00.500Z'
+SIDE_RUN = {'kind': 'side', 't': SIDE_T, 'k': sync_format.side_key(SESSION, 'extract_memories', SIDE_T),
+            'sid': SESSION, 'src': 'extract_memories', 'model': 'claude-opus-5-5', 'calls': 2, 'in': 1685, 'cw': 1700,
+            'cr': 182693, 'out': 451}
+SIDE_WINDOW = {'kind': 'side_window', 't': '2026-10-13T09:00:00Z', 'sid': SESSION, 'log': True,
+               'from': '2026-10-13T07:00:00Z', 'to': '2026-10-13T08:59:00Z', 'unmeasured': 0}
+
+
+def without_kind(line):
+    return {'v': 1, **{key: value for key, value in line.items() if key != 'kind'}}
+
+
+def test_side_calls_and_their_window_go_to_their_own_files(world, clone):
+    write_lines(world.log / _sync_export.SIDE_FILE, [SIDE_RUN, SIDE_WINDOW])
+    result = run(world, clone)
+    assert result.lines == {'request': 0, 'history': 0, 'gate': 0, 'day': 0, 'side': 2}
+    machine = exported(world, clone)
+    assert machine.side == [without_kind(SIDE_RUN)] and machine.side_windows == [without_kind(SIDE_WINDOW)]
+    own = sync_format.machine_dir(own_id(world))
+    assert {path for path in files(clone) if '/side' in path} == {f'{own}/side/2026-10.jsonl',
+                                                                   f'{own}/side_windows/2026-10.jsonl'}
+
+
+def test_side_calls_are_read_on_from_where_the_last_run_stopped(world, clone):
+    path = world.log / _sync_export.SIDE_FILE
+    write_lines(path, [SIDE_RUN])
+    run(world, clone)
+    assert run(world, clone).lines['side'] == 0
+    later = dict(SIDE_RUN, t='2026-10-13T08:15:00Z', k=sync_format.side_key(SESSION, 'extract_memories',
+                                                                         '2026-10-13T08:15:00Z'), out=300)
+    write_lines(path, [later, SIDE_WINDOW], mode='a')
+    assert run(world, clone).lines['side'] == 2
+    machine = exported(world, clone)
+    assert [r['out'] for r in machine.side] == [451, 300] and len(machine.side_windows) == 1
+
+
+@pytest.mark.parametrize('line', [
+    '{broken', dict(SIDE_RUN, kind='request'), dict(SIDE_RUN, kind='other'), dict(SIDE_RUN, src='Extract'),
+    dict(SIDE_RUN, cr=-1), dict(SIDE_WINDOW, log=False), {key: v for key, v in SIDE_RUN.items() if key != 'kind'},
+    ['side'], dict(SIDE_RUN, t='yesterday')],
+    ids=['no-json', 'request-kind', 'unknown-kind', 'source', 'negative', 'no-log-with-span', 'no-kind', 'a-list',
+         'bad-time'])
+def test_a_side_line_that_does_not_fit_is_counted_and_left_out(world, clone, line):
+    write_lines(world.log / _sync_export.SIDE_FILE, [line, SIDE_RUN])
+    result = run(world, clone)
+    assert (result.skipped, result.lines['side']) == (1, 1)
+    assert exported(world, clone).side == [without_kind(SIDE_RUN)]
+
+
+def test_without_side_calls_nothing_of_them_is_written(world, clone):
+    world.transcript(PROJECT, SESSION, [req('2026-10-13T08:00:00Z', out=10)])
+    result = run(world, clone)
+    assert result.lines['side'] == 0 and not [path for path in files(clone) if '/side' in path]

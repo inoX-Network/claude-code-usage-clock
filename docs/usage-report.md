@@ -256,6 +256,14 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   2 minutes are one: every machine measures the same subscription. Within a window (the same reset time) a value only
   rises, and a window that ended does not come back: a lower value of another machine, or one of a window that already
   ended, is a stale state and counts as the highest value of the newest window so far.
+- **Side calls of Claude Code on the web** ([the sync](sync.md#claude-code-on-the-web)): a machine of Claude Code on the
+  web also exports the calls that never reach the transcript (the memory pass `extract_memories`). The report shows
+  them in a section of their own, `Side calls outside the transcripts`, at the end of `--full`, and in one line of the
+  overview, but never in the sums, the shares or the allocation of points: the sums stay those of the transcripts.
+  The cost prices the cache write as 1 hour (the debug log does not split it), so it is an estimate (`~`). A run
+  without a model or with a model without a price is counted but not priced. `not measured` counts the requests of
+  the period that lie outside every span of a debug log of their session (a session without any log too, never as
+  zero), and the calls the debug log named without token counts.
 - **Sharing a rise:** a rise of the subscription is shared by the cost of the requests of all machines, so it is
   "unexplained" only if no machine made a request in between. "Only one CLI active" for the calibration means on all
   machines together.
@@ -276,11 +284,15 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   come from the local files), so a day stays whole after Claude Code deleted the transcripts. With
   `sync.project_labels` `alias` or `hash` such older days of this machine show the project labels of the repository
   instead of the folder names.
-- **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine. Their points are their
+- **`--machine NAME`** shows the sessions, requests, starts and gate decisions of one machine, or of every machine of
+  that name: each chat of Claude Code on the web is a machine `claude-web` of its own, and `--machine claude-web`
+  takes them all (also the start of a name, if it fits one name only). Their points are their
   share of each rise among the requests of all machines, so the subscription and its `allocation` stay those of the
   account and the points of the machine add up to less than the rise.
 - **What it shows:** `--full` names every machine in `Sources:` with the age of its last successful push and the
-  result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); each CLI says on which machine it
+  result of the pull (`Sync: 3 devices · desk 4 min ago · laptop 3 h ago · pull ok`); the machines of one name are one
+  part with their number and the newest push (`claude-web (12 devices) 2 h ago`), while `coverage.sync.machines` in
+  the JSON keeps each of them; each CLI says on which machine it
   ran (`on laptop`). `Notable` names a machine without a push for over 24 hours, this machine's sync backing off after
   an error or blocked, a pull that failed with its reason, and a machine id of this machine that cannot be used (then
   the clone is not read). The JSON has `clis[].machine` and `coverage.sync`; without the sync

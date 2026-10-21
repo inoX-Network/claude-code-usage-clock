@@ -95,7 +95,9 @@ Only what the report needs, per machine below `machines/<machine id>/` ([the for
 - the measurements of the usage history and, with `sync.include_gates` (default `true`), the decisions of the two
   gates (time, gate, decision, mode and the kind of the reason, no text);
 - the day archive of the report, with the same project labels;
-- `machine.json` (name, platform, time zone offset) and `status.json` (last success, version).
+- `machine.json` (name, platform, time zone offset) and `status.json` (last success, version);
+- from Claude Code on the web only: the side calls the debug log measured, and per export the span of that log (see
+  [Claude Code on the web](#claude-code-on-the-web)).
 
 No prompt, answer, file content, command or path leaves the machine, and no host name: an empty `sync.machine_name`
 gives `machine-` and 6 characters of a random id.
@@ -107,6 +109,33 @@ or `hash` (with `sync.label_salt`, the same on every machine) ([Configuration](c
 **Old months.** A machine keeps its requests in the repository for `sync.keep_request_months` (default 3) full months;
 older months are compacted to their day lines. For those months the report has only the split each machine made
 locally, no allocation across machines.
+
+## Claude Code on the web
+
+A chat of Claude Code on the web (claude.ai) runs in a VM of its own, without the hooks of this tool. The skill
+`/usage-export` ([`skills/usage-export/SKILL.md`](../skills/usage-export/SKILL.md)) puts the usage of that one session
+into the sync repository at the end of the chat; save it as a skill of your account with your repository and a
+release tag in its settings. It clones this repository at that tag into the VM and runs `tools/web_export.py`, which
+
+- runs only where `CLAUDE_CODE_REMOTE` is `true` and refuses anywhere else (exit 2);
+- installs the component `sync` into the VM with the installer: the name `claude-web`, your repository, shadow mode
+  unless you give `on` (`/usage-export on`), and a settings file of its own in the log folder (`web-settings.json`),
+  so that the session it runs in gets no hook. The installer checks the visibility as on every computer; behind the
+  proxy of the cloud container the check needs the GitHub API (see [Install](#install));
+- reads the debug log of Claude Code (`/tmp/claude-code.log`, numbers, times and source names only) and appends the
+  side calls of the session to `<log_dir>/side-calls.jsonl`: the calls that never reach the transcript, above all the
+  memory pass `extract_memories` after each answer, which reads the whole cached context once more. One line per run,
+  and one window per export with the span of the log; without a debug log the window says so, and the report shows it
+  as not measured, never as zero;
+- starts the push of the sync once (`sync.py push --now`): no path of its own, the push and its checks are those of
+  the sync;
+- prints the side calls, the outcome of the push and what the repository holds of this session.
+
+Every chat is a machine of its own, with its own machine id (several chats at the same time never write the same
+files). In `Notable` the report names none of them as without a push (a chat that ended never pushes again) or in another
+time zone (the VM always runs in UTC). A chat that was interrupted brings its transcript into its new VM, and the export there writes the same
+requests again under another id: the report counts a request once by its key, on whichever machine it lies. The
+request of the export itself is not in it: the transcript gets it only after the answer.
 
 ## Limits
 

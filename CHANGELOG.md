@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Added
 
+- Claude Code on the web: the skill `/usage-export` (`skills/usage-export/SKILL.md`) and `tools/web_export.py` put the
+  usage of a chat into the sync repository at its end, as the machine `claude-web` (one machine id per chat, shadow
+  mode unless `on`, the regular push of the sync). A request a continued chat exports again counts once by its key.
+  The calls that never reach the transcript (the memory pass `extract_memories`) come from the debug log, numbers
+  only, as the new line kinds `side` and `side_window` of the sync repository; the report shows them apart from the
+  sums (`Side calls outside the transcripts`, `side_calls` in `--json`), and a session without a debug log as not
+  measured, never as zero. `--machine claude-web` takes every chat, and `Sources:` shows the machines of one name as
+  one part (`claude-web (12 devices) 2 h ago`). See [docs/sync.md](docs/sync.md#claude-code-on-the-web).
 - The installer asks: run in a terminal without any option, `tools/install.py` asks y/n for each part (status line,
   usage clock, context reporter, the two gates and their mode, auto-continue, the sync with its repository and the
   name of this computer). Each question says where its default comes from: `(current)` for what you have now,

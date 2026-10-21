@@ -1020,3 +1020,158 @@ def test_the_archive_stays_that_of_this_machine(world, synced):
 def test_age_texts():
     assert [report_module.age_text(s) for s in (0, 59, 60, 3599, 3600, 48 * 3600 - 1, 48 * 3600)] == [
         'just now', 'just now', '1 min ago', '59 min ago', '1 h ago', '47 h ago', '2 d ago']
+
+
+# --- Claude Code on the web: one machine per chat, side calls (tools/web_export.py) -------------------------------
+
+WEB1 = '3ccccccc-0000-4000-8000-000000000003'
+WEB2 = '4ddddddd-0000-4000-a000-000000000004'
+WEB_SESSION = 'wwwwwwww-1'
+
+
+def side_run(t, cost_cr=0, sid=WEB_SESSION, model='claude-opus-5-5', **more):
+    """A side run of the format; `cost_cr` dollars of cache read (0.20 USD per million for opus-5-5)."""
+    return {'t': t, 'k': sync_format.side_key(sid, 'extract_memories', t), 'sid': sid, 'src': 'extract_memories',
+            'model': model, 'calls': 2, 'in': 1685, 'cw': 0, 'cr': round(cost_cr * 5_000_000), 'out': 0, **more}
+
+
+def window(t, start=None, end=None, sid=WEB_SESSION, unmeasured=0):
+    return {'t': t, 'sid': sid, 'log': start is not None, 'from': start, 'to': end, 'unmeasured': unmeasured}
+
+
+def web_machine(clone, machine_id, requests=(), runs=(), windows=()):
+    clone.machine(machine_id, name='claude-web')
+    clone.requests(machine_id, requests)
+    for values in runs:
+        sync_format.append(clone.root, machine_id, sync_format.side_path(machine_id, values['t']),
+                           [sync_format.encode('side', values)])
+    for values in windows:
+        sync_format.append(clone.root, machine_id, sync_format.side_window_path(machine_id, values['t']),
+                           [sync_format.encode('side_window', values)])
+
+
+def test_a_chat_that_went_on_in_a_new_vm_counts_each_request_once(world, synced):
+    """Every chat of Claude Code on the web is a machine of its own; a chat that was interrupted brings its transcript
+    into the new VM, whose export writes the same requests again under another machine id. `k` counts them once."""
+    first = [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True),
+             request_line('2026-10-13T10:15:00Z', 'w2', 1.0, sid=WEB_SESSION)]
+    web_machine(synced.clone, WEB1, first)
+    web_machine(synced.clone, WEB2, first + [request_line('2026-10-13T10:25:00Z', 'w3', 2.0, sid=WEB_SESSION)])
+    report = world.report('--day', '2026-10-13')
+    assert report['total']['requests'] == 3 and report['total']['cost_usd'] == pytest.approx(4.0)
+    assert by_id(report)['wwwwwwww']['requests'] == 3
+
+
+def test_side_calls_are_shown_apart_from_the_sums_and_a_missing_log_is_never_zero(world, synced):
+    requests = [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True),
+                request_line('2026-10-13T10:15:00Z', 'w2', 1.0, sid=WEB_SESSION)]
+    run = side_run('2026-10-13T10:06:00Z', cost_cr=0.5)
+    web_machine(synced.clone, WEB1, requests, [run], [window('2026-10-13T10:12:00Z', '2026-10-13T10:00:00Z',
+                                                             '2026-10-13T10:10:00Z', unmeasured=1)])
+    web_machine(synced.clone, WEB2, [request_line('2026-10-13T10:20:00Z', 'x1', 1.0, sid='xxxxxxxx-1', first=True)],
+                [run], [window('2026-10-13T10:30:00Z', sid='xxxxxxxx-1')])     # the same run again: counts once
+    report = world.report('--day', '2026-10-13')
+    assert report['total']['cost_usd'] == pytest.approx(3.0)            # side calls are not in the sums
+    side = report['side_calls']
+    expected_cost = (1685 * 4 + run['cr'] * 0.20) / 1e6
+    assert side == {
+        'sources': [{'source': 'extract_memories', 'runs': 1, 'calls': 2, 'cost_usd': pytest.approx(expected_cost),
+                     'tokens': {'input': 1685, 'cache_write': 0, 'cache_read': run['cr'], 'output': 0},
+                     'unpriced_runs': 0}],
+        'cost_usd': pytest.approx(expected_cost), 'sessions': 2, 'sessions_without_log': 1,
+        'requests_not_measured': 2, 'unmeasured_calls': 1}
+    assert report['overview']['side_calls'] == {'cost_usd': pytest.approx(expected_cost), 'runs': 1,
+                                                'requests_not_measured': 2}
+    text = world.text('--day', '2026-10-13')
+    assert 'Side calls outside the transcripts (Claude Code on the web; not in the sums above)' in text
+    assert '  extract_memories  1 run, 2 calls' in text
+    assert 'not measured: 2 requests outside a debug log (1 session without any), 1 call without token counts' in text
+    assert 'Side calls outside the transcripts: ~' in world.overview('--day', '2026-10-13')
+
+
+def test_a_side_run_without_a_known_model_has_no_price(world, synced):
+    web_machine(synced.clone, WEB1, [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True)],
+                [side_run('2026-10-13T10:06:00Z', 1.0, model=None),
+                 side_run('2026-10-13T10:07:00Z', 1.0, model='claude-mystery-9')],
+                [window('2026-10-13T10:12:00Z', '2026-10-13T10:00:00Z', '2026-10-13T10:10:00Z')])
+    source, = world.report('--day', '2026-10-13')['side_calls']['sources']
+    assert (source['runs'], source['unpriced_runs'], source['cost_usd']) == (2, 2, 0)
+    assert '2 runs without a price' in world.text('--day', '2026-10-13')
+
+
+def test_side_calls_follow_the_period_and_the_machine(world, synced):
+    web_machine(synced.clone, WEB1, [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True)],
+                [side_run('2026-10-13T10:06:00Z', 1.0), side_run('2026-10-14T10:06:00Z', 1.0)],
+                [window('2026-10-14T10:12:00Z', '2026-10-13T10:00:00Z', '2026-10-14T10:10:00Z')])
+    synced.clone.machine(LAPTOP)
+    synced.clone.requests(LAPTOP, [request_line('2026-10-13T10:05:00Z', 'l1', 1.0, first=True)])
+    assert world.report('--day', '2026-10-13')['side_calls']['sources'][0]['runs'] == 1
+    assert 'side_calls' not in world.report('--day', '2026-10-13', '--machine', 'laptop')
+    assert 'side_calls' not in world.report('--day', '2026-10-13', '--local')
+
+
+def test_without_side_lines_the_report_has_no_side_calls(world, synced):
+    two_machines(world, synced)
+    report = world.report('--day', '2026-10-13')
+    assert 'side_calls' not in report and 'side_calls' not in report['overview']
+    assert 'Side calls' not in world.text('--day', '2026-10-13')
+
+
+# --- Gegenprüfung #81: the devices of claude-web as one ------------------------------------------------------------
+
+def three_web_devices(synced):
+    web_machine(synced.clone, WEB1, [request_line('2026-10-13T10:05:00Z', 'w1', 1.0, sid=WEB_SESSION, first=True)],
+                [side_run('2026-10-13T10:06:00Z', 1.0)],
+                [window('2026-10-13T10:12:00Z', '2026-10-13T10:00:00Z', '2026-10-13T10:10:00Z')])
+    web_machine(synced.clone, WEB2, [request_line('2026-10-13T11:05:00Z', 'x1', 2.0, sid='xxxxxxxx-1', first=True)],
+                [side_run('2026-10-13T11:06:00Z', 1.0, sid='xxxxxxxx-1')],
+                [window('2026-10-13T11:12:00Z', '2026-10-13T11:00:00Z', '2026-10-13T11:10:00Z', sid='xxxxxxxx-1')])
+    synced.clone.machine(LAPTOP)
+    synced.clone.requests(LAPTOP, [request_line('2026-10-13T10:05:00Z', 'l1', 4.0, first=True)])
+
+
+@pytest.mark.parametrize('name', ['claude-web', 'claude'])
+def test_machine_takes_every_device_of_that_name(world, synced, name):
+    three_web_devices(synced)
+    report = world.report('--day', '2026-10-13', '--machine', name)
+    assert report['total']['requests'] == 2 and report['total']['cost_usd'] == pytest.approx(3.0)
+    assert report['side_calls']['sources'][0]['runs'] == 2
+    sync_part = report['coverage']['sync']
+    assert sync_part['machine'] == 'claude-web' and sync_part['text'].endswith(' · only claude-web')
+    assert world.report('--day', '2026-10-13', '--machine', 'laptop')['total']['requests'] == 1
+
+
+def test_the_sources_line_shows_the_devices_of_one_name_as_one(world, synced):
+    three_web_devices(synced)
+    synced.clone.machine(WEB2, name='claude-web', last_success='2026-10-14T11:30:00Z')
+    text = world.report('--day', '2026-10-13')['coverage']['sync']['text']
+    assert ' · claude-web (2 devices) 30 min ago · ' in text and text.startswith('Sync: 4 devices · desk ')
+    machines = world.report('--day', '2026-10-13')['coverage']['sync']['machines']
+    assert [m['name'] for m in machines].count('claude-web') == 2          # the JSON keeps each device
+
+
+# --- Gegenprüfung #81 Runde 2 (Befund D): Notable treats the devices of claude-web as one ---------------------------
+
+def test_notable_names_no_claude_web_device_as_stale_or_in_another_time_zone(world, synced, monkeypatch):
+    """A chat of Claude Code on the web that ended never pushes again, and its VM always runs in UTC: neither is a
+    fault, so `sync_stale` and `sync_timezone` leave every device named claude-web out."""
+    monkeypatch.setattr(sync_format.time, 'timezone', -3600)
+    world.projects.mkdir()
+    for key in (WEB1, WEB2):
+        synced.clone.machine(key, name=sync_format.WEB_NAME, last_success='2026-10-01T12:00:00Z', utc_std=0)
+    synced.state(last_success=NOW - 60)
+    notes = {n['rule']: n for n in world.report()['overview']['notable']}
+    assert 'sync_stale' not in notes and 'sync_timezone' not in notes
+    synced.clone.machine(LAPTOP, last_success='2026-10-11T12:00:00Z', utc_std=-480)
+    notes = {n['rule']: n for n in world.report()['overview']['notable']}
+    assert notes['sync_stale']['machines'] == [{'name': 'laptop', 'last_success': '2026-10-11T12:00:00Z'}]
+    assert notes['sync_timezone']['machines'] == [{'name': 'desk', 'utc_std': 60}, {'name': 'laptop', 'utc_std': -480}]
+
+
+def test_the_web_name_is_the_one_the_export_gives():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('web_export_name', os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tools', 'web_export.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.MACHINE_NAME == sync_format.WEB_NAME == 'claude-web'

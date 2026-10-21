@@ -974,7 +974,8 @@ def test_the_report_format_describes_every_field_and_file_of_the_sync_repository
     fields = {name for kind in sf.FIELDS.values() for name in kind} | {'v', 'day', 'stats'}
     assert fields - described == set()
     layout = {'machine.json', 'status.json', 'requests/<YYYY-MM>/<session_id>.jsonl', 'history/<YYYY-MM>.jsonl',
-              'gates/<YYYY-MM>.jsonl', 'days/<YYYY-MM>.jsonl', 'sync.project_labels', 'sync.keep_request_months'}
+              'gates/<YYYY-MM>.jsonl', 'days/<YYYY-MM>.jsonl', 'side/<YYYY-MM>.jsonl', 'side_windows/<YYYY-MM>.jsonl',
+              'sync.project_labels', 'sync.keep_request_months'}
     assert layout - described == set()
     for counter in sf.COUNTERS:
         assert f'`{counter}`' in section
@@ -1109,3 +1110,87 @@ def test_a_day_line_with_a_number_json_cannot_write_is_refused():
     assert sf.encode_day(raw, 'plain', {}, '') == raw + '\n'      # plain: the archive line as it is
     with pytest.raises(sf.FormatError, match='JSON number'):
         sf.encode_day(raw, 'alias', {}, '')
+
+
+# --- Side calls outside the transcripts (Claude Code on the web, /usage-export) -------------------------------------
+
+SIDE_T = '2026-10-13T12:30:00.250Z'
+SIDE = {'t': SIDE_T, 'k': sf.side_key(SESSION, 'extract_memories', SIDE_T), 'sid': SESSION, 'src': 'extract_memories',
+        'model': 'claude-opus-5-5', 'calls': 2, 'in': 1685, 'cw': 1700, 'cr': 182693, 'out': 451}
+WINDOW = {'t': '2026-10-13T13:00:00Z', 'sid': SESSION, 'log': True, 'from': '2026-10-13T12:00:00.000Z',
+          'to': '2026-10-13T12:59:00Z', 'unmeasured': 0}
+UNMEASURED = {'t': '2026-10-13T13:00:00Z', 'sid': SESSION, 'log': False, 'from': None, 'to': None, 'unmeasured': 0}
+
+
+@pytest.mark.parametrize('kind, values', [('side', SIDE), ('side_window', WINDOW), ('side_window', UNMEASURED)],
+                         ids=['side', 'window', 'no-log'])
+def test_round_trip_of_the_side_kinds(kind, values):
+    line = sf.encode(kind, values)
+    assert line.endswith('\n') and line.count('\n') == 1
+    assert sf.decode(kind, line) == {'v': 1, **values}
+
+
+def test_the_side_key_is_16_hex_characters_of_sha256_of_session_source_and_time():
+    import hashlib
+    assert sf.side_key(SESSION, 'extract_memories', SIDE_T) == hashlib.sha256(
+        f'{SESSION}\nextract_memories\n{SIDE_T}'.encode()).hexdigest()[:16]
+    assert sf.side_key(SESSION, 'extract_memories', '2026-10-13T12:30:00.251Z') != SIDE['k']
+
+
+def test_the_model_of_a_side_call_may_be_unknown():
+    assert sf.decode('side', sf.encode('side', dict(SIDE, model=None)))['model'] is None
+    assert json.loads(sf.encode('side', {key: value for key, value in SIDE.items() if key != 'model'}))['model'] is None
+
+
+@pytest.mark.parametrize('kind, changes', [
+    ('side', {'src': 'Extract'}), ('side', {'src': 'a b'}), ('side', {'src': ''}), ('side', {'calls': -1}),
+    ('side', {'in': True}), ('side', {'cr': 1.5}), ('side', {'out': None}), ('side', {'k': 'x'}),
+    ('side', {'sid': '../x'}), ('side', {'t': '2026-10-13 12:30:00Z'}),
+    ('side_window', {'log': 1}), ('side_window', {'from': None}), ('side_window', {'to': None}),
+    ('side_window', {'from': '2026-10-13T13:00:01Z'}), ('side_window', {'unmeasured': -1}),
+    ('side_window', {'log': False}), ('side_window', {'from': 'yesterday'}),
+])
+def test_a_side_value_outside_the_format_is_refused(kind, changes):
+    with pytest.raises(sf.FormatError) as error:
+        sf.encode(kind, dict(SIDE if kind == 'side' else WINDOW, **changes))
+    assert error.value.category == 'internal'
+
+
+def test_a_window_without_a_log_has_no_span():
+    with pytest.raises(sf.FormatError, match='side_window: a window without a log has no span'):
+        sf.encode('side_window', dict(UNMEASURED, **{'from': WINDOW['from']}))
+    with pytest.raises(sf.FormatError, match='side_window: a window without a log has no span'):
+        sf.decode('side_window', json.dumps({'v': 1, **dict(UNMEASURED, to=WINDOW['to'])}))
+
+
+@pytest.mark.parametrize('field', ['t', 'k', 'sid', 'src', 'calls', 'in', 'cw', 'cr', 'out'])
+def test_a_missing_required_side_field_is_refused(field):
+    values = dict(SIDE)
+    del values[field]
+    with pytest.raises(sf.FormatError, match=f'side.{field}: missing'):
+        sf.encode('side', values)
+
+
+def test_the_paths_of_the_side_files():
+    base = f'machines/{OWN}'
+    assert sf.side_path(OWN, '2026-10-31T23:59:59Z') == f'{base}/side/2026-10.jsonl'
+    assert sf.side_window_path(OWN, '2026-11-01T00:00:00Z') == f'{base}/side_windows/2026-11.jsonl'
+    for call in (lambda: sf.side_path(OWN, '13:00'), lambda: sf.side_window_path('../x', SIDE_T)):
+        with pytest.raises(sf.FormatError):
+            call()
+
+
+def test_side_lines_go_through_the_files_of_the_layout_and_are_read_back(tmp_path):
+    root = str(tmp_path)
+    assert sf.append(root, OWN, sf.side_path(OWN, SIDE['t']), [sf.encode('side', SIDE)])
+    assert sf.append(root, OWN, sf.side_window_path(OWN, WINDOW['t']),
+                     [sf.encode('side_window', WINDOW), sf.encode('side_window', UNMEASURED)])
+    machine_file(root, OWN, 'side/2026-09.jsonl', sf.encode('side', SIDE))          # the line is of October
+    repo = sf.read_repo(root)
+    machine = repo.machines[OWN]
+    assert machine.side == [{'v': 1, **SIDE}]
+    assert machine.side_windows == [{'v': 1, **WINDOW}, {'v': 1, **UNMEASURED}]
+    assert repo.skipped == dict(dict.fromkeys(sf.COUNTERS, 0), misplaced=1)
+    assert sf.LAYOUT_LINES.fullmatch(sf.side_path(OWN, SIDE['t']))
+    assert sf.LAYOUT_LINES.fullmatch(sf.side_window_path(OWN, WINDOW['t']))
+    assert not sf.LAYOUT_LINES.fullmatch(f'machines/{OWN}/side/2026-10/x.jsonl')

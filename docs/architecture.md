@@ -32,7 +32,9 @@ tools/
   log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
   usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
+  web_export.py           Claude Code on the web: installs the sync into the VM (claude-web), the side calls of the debug log into side-calls.jsonl, one push (the skill /usage-export)
   prices.json             API prices per million tokens for usage_report.py, with source and date
+skills/usage-export/      the skill /usage-export for Claude Code on the web (runs tools/web_export.py)
 windows/                  everything Windows-specific, see windows/README.md
   cli/_win.py             file lock, replace retry, path normalisation, Git Bash commands (copied next to the hooks on Windows)
   cli/tests/              the Windows test track (collected on Windows only)
@@ -640,7 +642,8 @@ run the installer with --sync-repo`).
   cache, the next run asks again) with its reason in the failure line (`GitHub API: <why>`): from `ask_api`
   `timeout`, `network`, `http_<status>` (every 3xx too), `status_<status>`, `too_large`; from `judge_api` `no_json`,
   `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`; `no_time` if nothing of the 15 s is left. The
-  body is read in pieces of 16 KB against the clock, as urllib's timeout holds for each read only. Without such a
+  body is read with `read1` in pieces of at most 16 KB, the clock checked after each, as urllib's timeout holds for
+  each read only and `read(n)` waits for all n bytes. Without such a
   proxy the ls-remote is refused and the API is
   never asked. The note holds for 24 h (the node asks for it): a
   repository made public within that time is still pushed to until the note is older. Whoever can write
