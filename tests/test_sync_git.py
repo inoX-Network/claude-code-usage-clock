@@ -821,6 +821,26 @@ def test_missing_or_refused_credentials_are_auth(device, remote, monkeypatch, er
         'auth', 'the fetch was refused: credentials missing or not accepted')
 
 
+# Measured (git 2.56, a valid login): https with its two lines; ssh as GitHub answers it
+@pytest.mark.parametrize('errors', ["remote: Repository not found.\nfatal: repository "
+                                    "'https://github.com/owner/name.git/' not found\n",
+                                    'ERROR: Repository not found.\nfatal: Could not read from remote repository.\n'])
+def test_a_repository_that_does_not_exist_is_auth_and_names_sync_repo(device, remote, monkeypatch, errors):
+    device.request()
+    scripted(monkeypatch, {'fetch': (128, '', errors)})
+    assert device.push() == 1
+    assert (device.failure()['category'], device.failure()['reason']) == (
+        'auth', 'the fetch was refused: the repository does not exist or this login cannot reach it (check sync.repo)')
+
+
+def test_a_not_found_without_the_answer_of_github_stays_network(device, remote, monkeypatch):
+    device.request()
+    scripted(monkeypatch, {'fetch': (128, '', "fatal: repository 'https://example.org/owner/name.git/' not found\n")})
+    assert device.push() == 1
+    assert (device.failure()['category'], device.failure()['reason']) == (
+        'network', 'the fetch did not reach the sync repo')
+
+
 def test_update_clone_fast_forwards_rebases_or_leaves_a_dirty_clone_alone(device, remote):
     run = run_of(device)
     clone = _sync_git.open_clone(run)

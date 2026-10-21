@@ -46,8 +46,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
 8. **Shadow:** no push; one log line `shadow` with the lines and bytes of this export.
 9. **Push:** every outgoing commit, one by one, passes the same guard again (no merge commit); refused because
    another machine was faster (porcelain `[rejected] (fetch first)` / `(non-fast-forward)`): fetch, rebase, push once
-   more, then `rejected`. Refused by the repository: `rejected`. Credentials missing or refused: `auth` (AUTH_TEXTS);
-   any other failure to reach it: `network`.
+   more, then `rejected`. Refused by the repository: `rejected`. Credentials missing or refused: `auth` (AUTH_TEXTS;
+   a repository that does not exist or that the login cannot reach has its own text, NOT_FOUND); any other failure to
+   reach it: `network`.
 
 Nothing exported is ever thrown away: no reset, checkout, clean or stash of the own folder, also not after `conflict`
 or a failed guard (the export cursor has moved on); only paths outside it are put back as HEAD has them (`_heal`).
@@ -137,6 +138,10 @@ VISIBILITY_TABLE = ((0, '', PUBLIC), (128, ASKS_FOR_USER, PRIVATE))
 AUTH_TEXTS = ('could not read Username', 'could not read Password', 'terminal prompts disabled',
               'Authentication failed', 'Permission denied', 'Repository not found', 'denied to',
               'returned error: 401', 'returned error: 403', 'Invalid username or password')
+# Of those, the answer of GitHub to a repository that does not exist or that the login cannot reach (https:
+# `remote: Repository not found.`, ssh: `ERROR: Repository not found.`): still `auth`, but its text names sync.repo.
+NOT_FOUND_TEXT = 'Repository not found'
+NOT_FOUND = 'the repository does not exist or this login cannot reach it (check sync.repo)'
 # Push refused because the remote has commits this clone lacks (`git push --porcelain`)
 BEHIND_REASONS = ('(fetch first)', '(non-fast-forward)')
 
@@ -513,7 +518,8 @@ def _ensure_private(run: _sync_core.Run, repo: str, execute: Execute | None) -> 
 
 def _remote_error(done: subprocess.CompletedProcess, action: str) -> _sync_core.SyncError:
     if any(text in done.stderr for text in AUTH_TEXTS):
-        return _fail('auth', f'the {action} was refused: credentials missing or not accepted')
+        reason = NOT_FOUND if NOT_FOUND_TEXT in done.stderr else 'credentials missing or not accepted'
+        return _fail('auth', f'the {action} was refused: {reason}')
     return _fail('network', f'the {action} did not reach the sync repo')
 
 

@@ -695,6 +695,9 @@ LOCK_HELD = 'Error: a sync run holds the lock right now. Run the installer again
 CREDENTIALS = ('git has to reach the repository without asking: sign in once with a credential helper (the Git '
                'Credential Manager of Git for Windows, or `gh auth setup-git`), or use sync.transport ssh with a key '
                'whose host github.com is in known_hosts. The installer never asks for credentials itself.')
+MISSING_REPO = ('Check the name ({repo}, owner/name). A repository that does not exist yet: create it private with '
+                '`gh repo create {repo} --private` or on https://github.com/new. One that exists: give the login of git '
+                'access to it (a fine-grained token needs this repository selected). Then run the installer again.')
 
 
 class SyncPlan(NamedTuple):
@@ -837,7 +840,8 @@ def prepare_clone(plan: SyncPlan) -> bool:
         except _sync_core.SyncError as error:
             print(f'Sync: {error.detail}')
             if error.category == 'auth':
-                print(CREDENTIALS)
+                print(MISSING_REPO.format(repo=plan.repo) if error.detail.endswith(_sync_git.NOT_FOUND) else
+                      CREDENTIALS)
             print('Nothing was installed.')
             return False
     print(f'Sync: cloned {plan.repo} to {plan.clone}.')

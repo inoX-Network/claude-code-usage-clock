@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Fixed
+
+- A sync repository that does not exist, or that the login cannot reach, was reported as missing credentials, and
+  the installer told you to sign in. The error now says `the repository does not exist or this login cannot reach it
+  (check sync.repo)`, and the installer tells you to check the name or create the repository
+  (`gh repo create owner/name --private`). The category stays `auth`.
+
 ## [1.6.0] — 2026-10-20 — sync across machines
 
 ### Added

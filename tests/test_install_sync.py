@@ -540,6 +540,25 @@ def test_refused_credentials_are_named(setup, monkeypatch):
     assert code == 1 and 'credentials missing or not accepted' in out and 'never asks for credentials' in out, out
 
 
+def test_a_repository_that_does_not_exist_is_named_instead_of_the_login(setup, monkeypatch):
+    real = _sync_core.run_command
+
+    def run_command(argv, deadline, env=None, cwd=None):
+        if 'clone' in argv:
+            return subprocess.CompletedProcess(argv, 128, '', "remote: Repository not found.\nfatal: repository "
+                                                              f"'https://github.com/{REPO}.git/' not found\n")
+        return real(argv, deadline, env, cwd)
+    monkeypatch.setattr(_sync_core, 'run_command', run_command)
+    code, out = setup.sync()
+    assert code == 1, out
+    assert ('Sync: the clone was refused: the repository does not exist or this login cannot reach it (check '
+            'sync.repo)') in out, out
+    assert f'gh repo create {REPO} --private' in out and 'https://github.com/new' in out, out
+    assert 'give the login of git access to it' in out, out      # GitHub says the same to a token without access
+    assert 'never asks for credentials' not in out and 'Nothing was installed.' in out, out
+    assert not setup.clone.exists() and setup.leftovers() == [] and setup.data() == {}
+
+
 def test_a_clone_without_a_branch_is_refused(setup, monkeypatch):
     real = _sync_core.run_command
 
