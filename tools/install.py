@@ -834,6 +834,17 @@ def check_config(path: str) -> tuple[list[tuple[str, str]], dict]:
     return [('OK', f'config.json: {path}')], cfg
 
 
+def check_env_config(env, path: str) -> list[tuple[str, str]]:
+    """CCUC_CONFIG in the env of settings.json reaches the hooks only: this installer and the Settings tab, which do not
+    run under Claude Code's env, read and write `path`."""
+    hooks_config = env.get('CCUC_CONFIG') if isinstance(env, dict) else None
+    if not isinstance(hooks_config, str) or not hooks_config or os.path.abspath(hooks_config) == os.path.abspath(path):
+        return []
+    return [('NOTE', f'config.json: the env of settings.json sets CCUC_CONFIG to {hooks_config[:200]!r}, so the hooks read '
+                     f'that file, but this installer and the Settings tab read and write {path}. Set CCUC_CONFIG for '
+                     'them as well, or remove it from the env of settings.json.')]
+
+
 def check_usage(cfg: dict) -> list[tuple[str, str]]:
     path = os.path.expanduser(os.environ.get('CCUC_USAGE_FILE') or cfg['usage_file'])
     usage = _usage.read_usage(path, max_age_min=cfg['thresholds']['max_age_min'])
@@ -978,6 +989,7 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
     results += check_entries(data, args, target, cfg)
     results += check_files(target)
     results += config_results
+    results += check_env_config(data.get('env'), config_file(target))
     shell = _plat.hook_shell(data.get('env'))
     if shell is None:
         results.append(('FIX', 'Git Bash: not found. Claude Code runs the hooks in Git Bash on Windows; install Git for '

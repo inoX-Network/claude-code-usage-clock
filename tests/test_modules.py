@@ -291,3 +291,28 @@ def test_install_with_mode_and_a_config_json_that_cannot_be_read_notes_it_and_in
     code, out = setup('--components', 'spawn-gate', '--mode', 'enforce')
     assert code == 0 and 'Note: modules.spawn_gate not written' in out and "set it to 'enforce' by hand" in out
     assert (setup.target / 'config.json').read_text(encoding='utf-8') == '{broken'
+
+
+def env_config(setup, tmp_path, value):
+    data = json.loads((tmp_path / 'settings.json').read_text(encoding='utf-8'))
+    data['env'] = {'CCUC_CONFIG': value}
+    (tmp_path / 'settings.json').write_text(json.dumps(data), encoding='utf-8')
+
+
+def test_check_notes_a_config_json_that_only_the_env_of_settings_json_names(setup, tmp_path):
+    assert setup('--components', 'usage-clock')[0] == 0
+    env_config(setup, tmp_path, str(tmp_path / 'elsewhere.json'))
+    code, out = setup('--check', '--components', 'usage-clock')
+    assert (f"NOTE config.json: the env of settings.json sets CCUC_CONFIG to '{tmp_path / 'elsewhere.json'}', so the "
+            f'hooks read that file, but this installer and the Settings tab read and write {setup.target / "config.json"}'
+            in out), out
+
+
+@pytest.mark.parametrize('same', ['target', 'environment'])
+def test_check_notes_nothing_when_the_env_of_settings_json_names_the_same_config_json(setup, tmp_path, monkeypatch, same):
+    assert setup('--components', 'usage-clock')[0] == 0
+    path = str(setup.target / 'config.json') if same == 'target' else str(tmp_path / 'elsewhere.json')
+    if same == 'environment':
+        monkeypatch.setenv('CCUC_CONFIG', path)
+    env_config(setup, tmp_path, path)
+    assert 'CCUC_CONFIG' not in setup('--check', '--components', 'usage-clock')[1]

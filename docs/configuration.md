@@ -81,7 +81,9 @@ when you answer no ([Install](install.md#install)). Like every key, `modules` is
 your guard keeps the model from writing `config.json` ([Working with a guard hook](security.md#working-with-a-guard-hook)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
-folder) and `CCUC_USAGE_FILE` (the shared usage file).
+folder) and `CCUC_USAGE_FILE` (the shared usage file). Set only in the `env` of `settings.json`, `CCUC_CONFIG` reaches
+the hooks alone: the installer and the Settings tab still read and write the `config.json` next to the scripts, and
+`install.py --check` notes the difference.
 
 ### Model names, effort values and exceptions
 
