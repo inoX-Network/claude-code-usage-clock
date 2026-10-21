@@ -18,8 +18,12 @@ nothing. After the brackets each question says where its default comes from: `(c
 that is not installed included (`Sync across computers through a private GitHub repository? [y/N] (current)`),
 `(default)` is the safe start for something that has no state yet: everything on a first install, and on a second run
 for example the mode of gates that are new in this run. Two gates in different modes say `[y/n, Enter keeps]`
-instead. The first line of the assistant explains both words. Then it shows the parts in
-plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
+instead. The first line of the assistant explains both words. Each of the eight questions starts with its step,
+`Step 1/8` to `Step 8/8`; the number is fixed, so a question that is skipped leaves a gap (no status line: step 2 is
+followed by step 4), and a follow-up question (replace, repository, name) carries the number of its question. The
+answer `i` or `?` prints a few lines about the question, what it writes into `settings.json` or `config.json` and a
+link to its section here, then asks again; it does not count as a wrong answer. At the repository and the name only `?`
+works, as `i` is an answer there. Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).
 

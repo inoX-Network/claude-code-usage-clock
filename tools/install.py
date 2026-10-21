@@ -1165,12 +1165,71 @@ def check(args: argparse.Namespace, settings_path: str, target: str) -> int:
 # --- Assistant --------------------------------------------------------------------------------------------------
 
 PROGRAM = 'python tools\\install.py' if os.name == 'nt' else 'python3 tools/install.py'      # as the README spells it
-CONFIGURATION_DOC = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/configuration.md'
+DOCS = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/'
+CONFIGURATION_DOC = DOCS + 'configuration.md'
 ATTEMPTS = 3            # answers to one question before the assistant gives up
 SUFFIXES = {True: '[Y/n]', False: '[y/N]', None: '[y/n, Enter keeps]'}       # by the answer that Enter gives
 # After the brackets: where the default of the question comes from (current: what is installed, also "not installed";
 # default: there is nothing installed for it, the safe start applies)
 LEGEND = '(current) = Enter keeps what you have now \u00b7 (default) = the safe start for something new'
+STEPS = 8               # the main questions; a sub-question carries the number of its main question
+# What the answer i or ? prints for a question: what the part does, what it writes, where the documentation is
+INFO = {
+    'statusline': (
+        '  Runs statusline.py below the prompt every 60 s: model, 5h and weekly usage with reset times, context, cache.',
+        '  It is the part that measures: it writes the usage file (usage_file) the other parts read.',
+        '  Writes: statusLine in settings.json.',
+        f'  More: {DOCS}statusline.md#what-the-status-line-shows'),
+    'replace': (
+        '  Yes puts our status line in place of the other one (statusLine in settings.json). The other one is not',
+        '  restored on uninstall: copy it back from the backup the installer names. No keeps it, and nothing measures.',
+        f'  More: {DOCS}install.md#uninstall-completely'),
+    'usage-clock': (
+        '  Adds one line for the model to every prompt you send: 5h and weekly usage, reset times, local time.',
+        '  Writes: a UserPromptSubmit hook (usage_clock.py) in settings.json; display in config.json turns parts off.',
+        f'  More: {DOCS}statusline.md#what-the-model-sees'),
+    'context-reporter': (
+        '  Tells the model how full its context window is, as the status line measured it: with every prompt, and',
+        '  after tool calls once the window is fuller (context_reporter in config.json).',
+        '  Writes: a UserPromptSubmit and a PostToolUse hook (context_reporter.py) in settings.json.',
+        f'  More: {DOCS}statusline.md#the-context-window'),
+    'spawn-gate': (
+        '  Checks every start of an agent, workflow or skill: no new block from 75 % of the 5-hour usage, a warning or',
+        '  a stop near the weekly limit, and model and effort in the agent definitions (thresholds in config.json).',
+        '  Writes: a PreToolUse hook (spawn_gate.py, matcher Agent|Workflow|Skill) in settings.json.',
+        f'  More: {DOCS}gates.md#the-two-gates'),
+    'soft-stop': (
+        '  Watches every tool call of a subagent: a warning from 85 % of the 5-hour usage, only checkpoint writes from',
+        '  92 %, everything else denied from 95 % (thresholds in config.json).',
+        '  Writes: a PreToolUse hook (soft_stop.py, matcher *) in settings.json.',
+        f'  More: {DOCS}gates.md#the-two-gates'),
+    'enforce': (
+        '  Shadow: the gates decide, write the decision to the log and tell the model, but block nothing.',
+        '  Enforce: they block and warn for real, and a broken spawn gate denies starts.',
+        '  Writes: --mode=shadow or --mode=enforce in the commands of both gate hooks in settings.json.',
+        f'  More: {DOCS}gates.md#from-shadow-to-enforce'),
+    'auto-continue': (
+        '  Claude Code waits when a usage limit is reached and goes on by itself once it resets.',
+        '  Writes: autoContinueAtUsageLimit: true in settings.json. The installer never switches it off; remove the key',
+        '  by hand.',
+        f'  More: {DOCS}install.md#install'),
+    'sync': (
+        '  Puts the usage of this computer into a private GitHub repository of yours, so that the report of every',
+        '  computer shows all of them; no prompt, file content or host name leaves it. Starts in shadow: pushes nothing.',
+        '  Writes: SessionStart and SessionEnd hooks (sync.py) in settings.json; sync.mode, sync.repo and',
+        '  sync.machine_name in config.json; a clone below the log folder.',
+        f'  More: {DOCS}sync.md#what-it-does'),
+    'repo': (
+        '  owner/name of a PRIVATE repository on GitHub. The installer checks once that it cannot be read without',
+        '  logging in (public: nothing installed) and clones it; git must reach it without asking for a password.',
+        '  Writes: sync.repo in config.json.',
+        f'  More: {DOCS}sync.md#install'),
+    'name': (
+        '  How this computer appears in the report of all your computers. Empty shows machine- and the start of its',
+        '  id; the host name is never used. At most 64 letters, digits, spaces and . + @ = - _.',
+        '  Writes: sync.machine_name in config.json.',
+        f'  More: {DOCS}configuration.md#configuration'),
+}
 
 
 class Abort(Exception):
@@ -1234,14 +1293,20 @@ def _label(origin: str | None) -> str:
     return f' ({origin})' if origin else ''
 
 
-def ask(explanation: str | None, question: str, default: bool | None, origin: str | None = None) -> bool | None:
+def _step(step: int | None) -> str:
+    return f'Step {step}/{STEPS} - ' if step else ''
+
+
+def ask(explanation: str | None, question: str, default: bool | None, origin: str | None = None,
+        step: int | None = None, info: str | None = None) -> bool | None:
     """y, yes, n or no in any case; Enter takes `default` (None: keep, for two gates in different modes). `origin`
-    (current or default) is shown after the brackets."""
+    (current or default) is shown after the brackets. i or ? prints INFO[info] and asks again, no failed attempt."""
     print()
     if explanation:
         print(explanation)
-    prompt = f'{question} {SUFFIXES[default]}{_label(origin)} '
-    for _ in range(ATTEMPTS):
+    prompt = f'{_step(step)}{question} {SUFFIXES[default]}{_label(origin)} '
+    failed = 0
+    while failed < ATTEMPTS:
         answer = _read(prompt).lower()
         if not answer:
             return default
@@ -1249,6 +1314,10 @@ def ask(explanation: str | None, question: str, default: bool | None, origin: st
             return True
         if answer in ('n', 'no'):
             return False
+        if info and answer in ('i', '?'):
+            print('\n'.join(INFO[info]))
+            continue
+        failed += 1
         print('Please answer y or n.')
     raise Abort(2, f'{ATTEMPTS} answers that were not y or n')
 
@@ -1257,11 +1326,17 @@ def ask_repo(default: str) -> str:
     """owner/name, checked as --sync-repo checks it."""
     print('Create one first with `gh repo create NAME --private` or at https://github.com/new')
     # a repository in brackets always comes from config.json
-    prompt = 'Name of your PRIVATE repository (owner/name)' + (f' [{default}] (current)' if default else '') + ': '
-    for _ in range(ATTEMPTS):
+    prompt = (f'{_step(STEPS)}Name of your PRIVATE repository (owner/name)'
+              + (f' [{default}] (current)' if default else '') + ': ')
+    failed = 0
+    while failed < ATTEMPTS:
         answer = _read(prompt) or default
         if _config.valid_sync_repo(answer):
             return answer
+        if answer == '?':       # only ?: i is an answer here (no owner/name, so a failed attempt)
+            print('\n'.join(INFO['repo']))
+            continue
+        failed += 1
         print('That is no owner/name as on GitHub, for example anna/usage-sync.')
     raise Abort(2, f'{ATTEMPTS} answers that were no owner/name')
 
@@ -1269,11 +1344,17 @@ def ask_repo(default: str) -> str:
 def ask_name(default: str, origin: str) -> str:
     """sync.machine_name, checked as --sync-name checks it. Enter takes `default`, which is never the host name."""
     print('Shown in the report of every computer; the host name of this one is never sent.')
-    prompt = f'Name of this computer in the report? [{default or "empty, shown as machine-<id>"}]{_label(origin)} '
-    for _ in range(ATTEMPTS):
+    prompt = (f'{_step(STEPS)}Name of this computer in the report? [{default or "empty, shown as machine-<id>"}]'
+              f'{_label(origin)} ')
+    failed = 0
+    while failed < ATTEMPTS:
         answer = _read(prompt) or default
+        if answer == '?':       # only ?: i is a valid name
+            print('\n'.join(INFO['name']))
+            continue
         if _config._MACHINE_NAME.fullmatch(answer):
             return answer
+        failed += 1
         print('At most 64 letters, digits, spaces and . + @ = - _.')
     raise Abort(2, f'{ATTEMPTS} names that were not allowed')
 
@@ -1289,34 +1370,37 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
     chosen, summary, replace = [], [], False
     if ask('Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the usage the '
            'other parts read.', 'Status line: model, 5h/week usage and context below the prompt?',
-           default('statusline'), origin):
+           default('statusline'), origin, 1, 'statusline'):
         chosen.append('statusline')
         if state.foreign_statusline:
             replace = bool(ask('Your settings.json runs another status line. Without ours nothing measures the usage, '
-                               'and the hooks see it as unknown.', 'Replace it?', False, 'current'))
+                               'and the hooks see it as unknown.', 'Replace it?', False, 'current', 1, 'replace'))
         summary.append('  Status line: yes' + (', replaces the status line that is there' if replace else
                                                ', but the status line that is there stays' if state.foreign_statusline
                                                else ''))
     else:
         summary.append('  Status line: no')
     if ask('Gives the model the usage and the local time with every prompt you send.',
-           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock'), origin):
+           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock'),
+           origin, 2, 'usage-clock'):
         chosen.append('usage-clock')
     summary.append(f'  Usage clock: {"yes" if "usage-clock" in chosen else "no"}')
     if 'statusline' in chosen:
         if ask('Says how full the context window is, as the status line measured it.',
                'Context reporter: tells the model how full its context is (needs the status line)?',
-               default('context-reporter'), origin):
+               default('context-reporter'), origin, 3, 'context-reporter'):
             chosen.append('context-reporter')
         summary.append(f'  Context reporter: {"yes" if "context-reporter" in chosen else "no"}')
     else:
         summary.append('  Context reporter: no (needs the status line)')
     if ask('Checks every start of an agent, workflow or skill against the usage and the model rules.',
-           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate'), origin):
+           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate'), origin,
+           4, 'spawn-gate'):
         chosen.append('spawn-gate')
     summary.append(f'  Spawn gate: {"yes" if "spawn-gate" in chosen else "no"}')
     if ask('Makes subagents save a checkpoint and finish when the five-hour usage gets high.',
-           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop'), origin):
+           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop'), origin,
+           5, 'soft-stop'):
         chosen.append('soft-stop')
     summary.append(f'  Soft stop: {"yes" if "soft-stop" in chosen else "no"}')
     mode = None
@@ -1328,13 +1412,13 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
         enforce = ask('Shadow only writes to the log what the gates would do; enforce blocks and warns for real.' + now,
                       'Let the gates block for real (enforce)? No = only log (shadow).',
                       None if len(kept) == 2 else kept == {'enforce'},
-                      {0: 'default', 1: 'current'}.get(len(kept)))
+                      {0: 'default', 1: 'current'}.get(len(kept)), 6, 'enforce')
         mode = None if enforce is None else ('enforce' if enforce else 'shadow')
         summary.append('  Gates: ' + {None: 'each keeps its mode', 'enforce': 'enforce, they block for real',
                                       'shadow': 'shadow, they only log'}[mode])
     auto = bool(ask('Claude Code then waits for the reset of a usage limit and goes on by itself.',
                     'Continue automatically after a usage limit resets?', state.auto_continue,
-                    'current' if state.auto_continue else origin))
+                    'current' if state.auto_continue else origin, 7, 'auto-continue'))
     summary.append('  Auto-continue: ' + ('yes' if auto else
                                           'autoContinueAtUsageLimit stays true (the installer does not switch it off; '
                                           'remove it from settings.json by hand)' if state.auto_continue else 'no'))
@@ -1344,7 +1428,7 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
            'them; a first install starts in shadow mode and pushes nothing.'
            + (' Now: off (your choice).' if state.sync_off else ''),
            'Sync across computers through a private GitHub repository?', installed_sync,
-           'current' if state.sync_off else origin):
+           'current' if state.sync_off else origin, 8, 'sync'):
         repo = ask_repo(state.sync_repo)
         # the name in config.json; on a first install the platform (an installed sync keeps an empty one on Enter)
         name = ask_name(state.machine_name if installed_sync else state.machine_name or sync_format.platform_name(),
@@ -1392,8 +1476,8 @@ def assistant() -> int:
         print(f'Error: {error}')
         return 2
     state = installed_state(data, target)
-    print(f'usage-clock installer: a few questions, Enter takes the answer in [brackets]: {LEGEND}. Nothing is written '
-          'before you confirm. Options for scripts: --help.')
+    print(f'usage-clock installer: a few questions, Enter takes the answer in [brackets]: {LEGEND}; i = more about a '
+          'question. Nothing is written before you confirm. Options for scripts: --help.')
     print(f'Settings: {settings_path}')
     print(f'Target:   {target}')
     try:
