@@ -12,7 +12,7 @@ import { PERIODS, PERIOD_ONLY, VIEWS, localTime, parsePeriod, parseReport, repor
 import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
-import { UPDATE_LINE, activeChoice, choiceLabel, parseAnswer, parseShown, settingsArgv } from './settings'
+import { INVALID_REPO, UPDATE_LINE, activeChoice, choiceLabel, parseAnswer, parseShown, printable, settingsArgv, validRepo } from './settings'
 import type { Part, Shown } from './settings'
 
 const PANE = 'usage-report'
@@ -493,6 +493,11 @@ export function registerReport(on: On): void {
         }
         const checkRepo = async (name: string) => {
           await setSettings($, { repo: name, check: null, note: null })
+          // A name the script would refuse starts no process at all
+          if (!validRepo(name)) {
+            await setSettings($, { check: { result: 'invalid', repo: name, text: INVALID_REPO.replace('{repo}', String(printable(name))) } })
+            return
+          }
           // `--`: a name that starts with a dash is a name, not an option of the script
           const run = await runSettings($, ['check-repo', '--', name])
           if (run.status === 'ok' && typeof run.answer.result === 'string') {
@@ -502,6 +507,7 @@ export function registerReport(on: On): void {
           }
         }
         const save = async () => {
+          if (!validRepo(repo)) return      // never offered then (canSave), and never run
           const run = await runSettings($, ['set-repo', '--', repo], SAVE_TIMEOUT_MS)
           const text = run.status === 'ok' && typeof run.answer.text === 'string' ? run.answer.text : noteOf(run)
           await setSettings($, { check: null, repo: null, note: text })

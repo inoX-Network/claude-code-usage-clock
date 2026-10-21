@@ -50,11 +50,34 @@ export function settingsArgv(command: unknown, args: readonly string[]): { argv:
   return { argv: [...argv.slice(0, at), script, ...args], script }
 }
 
-/** The JSON object the script prints, null for anything else. */
+// owner/name as sync.repo takes it: _SYNC_REPO and valid_sync_repo of hooks/_config.py (tests/test_settings_cli.py
+// compares them); the text of RESULTS['invalid'] in hooks/settings_cli.py
+const SYNC_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/
+export const INVALID_REPO = '{repo} is no owner/name as on GitHub, for example anna/usage-sync.'
+// C0 but the line break, DEL and C1, as hooks/settings_cli.py replaces them
+const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g
+
+/** A name the script would take as sync.repo: only such a name starts a process. */
+export function validRepo(name: string): boolean {
+  return SYNC_REPO.test(name) && !name.includes('..') && !name.endsWith('/.')
+}
+
+/** Every text of `value` without control characters: what the tab draws never carries an escape sequence. */
+export function printable(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(CONTROL, '?')
+  if (Array.isArray(value)) return value.map(printable)
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, printable(item)]))
+  }
+  return value
+}
+
+/** The JSON object the script prints, its texts printable; null for anything else. */
 export function parseAnswer(stdout: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(stdout)
-    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (printable(value) as Record<string, unknown>) : null
   } catch {
     return null
   }

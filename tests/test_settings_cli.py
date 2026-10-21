@@ -539,3 +539,17 @@ def test_the_time_limits_of_the_tab_cover_the_budgets_of_the_script():
     save = check + max(git + visibility + git, visibility + clone)
     assert (check, save) == (30, 345)
     assert tab_timeout('SETTINGS_TIMEOUT_MS') >= check + 15 and tab_timeout('SAVE_TIMEOUT_MS') >= save + 15
+
+
+def test_the_tab_checks_a_name_and_drops_control_characters_as_the_script_does():
+    """desktop/hooks/settings.ts starts no process for a name the script would refuse, says so with the script's own
+    text, and replaces the control characters this script replaces."""
+    import _config
+    with open(os.path.join(ROOT, 'desktop', 'hooks', 'settings.ts'), encoding='utf-8') as f:
+        source = f.read()
+    repo = re.search(r"const SYNC_REPO = /\^(.*)\$/\n", source).group(1).replace('\\/', '/')
+    assert repo == _config._SYNC_REPO.pattern
+    assert re.search(r"export const INVALID_REPO = '(.*)'\n", source).group(1) == settings_cli.RESULTS['invalid']
+    control = re.compile(re.search(r"const CONTROL = /(.*)/g\n", source).group(1))
+    assert [c for c in range(0x200) if control.fullmatch(chr(c))] == [
+        c for c in range(0x200) if settings_cli.CONTROL.fullmatch(chr(c))]

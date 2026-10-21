@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { localTime } from './report'
 import { REPORT } from './report-fixture'
-import { UPDATE_LINE } from './settings'
+import { INVALID_REPO, UPDATE_LINE, parseAnswer, validRepo } from './settings'
 
 const COMMAND = '"C:/Python314/python.exe" -X utf8 "C:/Users/you/.claude/hooks/usage-clock/statusline.py"'
 const CLI = 'C:/Users/you/.claude/hooks/usage-clock/settings_cli.py'
@@ -194,14 +194,25 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`${surface}: the repository goes to check-repo unchanged as one word of the argv`, async ($, on) => {
+  test(`${surface}: an owner/name goes to check-repo unchanged as one word of the argv`, async ($, on) => {
     const seen = world(on, { check: 'public' })
     const ui = await open($, surface)
     expect((await ui.find({ key: 'repo' }))?.props.value).toBe('anna/usage-sync')
-    await ui.input({ key: 'repo', text: SPECIAL })
-    expect(settingsRuns(seen).at(-1)).toEqual([...PREFIX, 'check-repo', '--', SPECIAL])
-    await ui.input({ key: 'repo', text: '--help' })
-    expect(settingsRuns(seen).at(-1)).toEqual([...PREFIX, 'check-repo', '--', '--help'])
+    await ui.input({ key: 'repo', text: 'an-na/usage.sync_2' })
+    expect(settingsRuns(seen).at(-1)).toEqual([...PREFIX, 'check-repo', '--', 'an-na/usage.sync_2'])
+    await ui.unmount()
+  })
+
+  test(`${surface}: a name that is no owner/name starts no process and says so`, async ($, on) => {
+    const seen = world(on)
+    const ui = await open($, surface)
+    const before = settingsRuns(seen).length
+    for (const name of [SPECIAL, '--help', 'a/../b', 'a/.', '-x/y', 'a\u001b]52;c;SGk=\u0007/b']) {
+      await ui.input({ key: 'repo', text: name })
+      expect(await ui.find({ key: 'save' })).toBeUndefined()
+    }
+    expect(settingsRuns(seen)).toHaveLength(before)
+    expect(await hasText(ui, 'a?]52;c;SGk=?/b is no owner/name as on GitHub, for example anna/usage-sync.')).toBe(true)
     await ui.unmount()
   })
 
@@ -424,4 +435,17 @@ test('terminal: the tab as text, top to bottom', async ($, on) => {
     at = found + line.length
   }
   await ui.unmount()
+})
+
+test('an answer of the script reaches the tab without control characters, its lines kept', () => {
+  const answer = parseAnswer(JSON.stringify({ problems: ['modules.x\u001b]52;c;SGk=\u0007\u009b\u0000\t: unknown key'], info: 'a\nb', n: 1 }))
+  expect(answer).toEqual({ problems: ['modules.x?]52;c;SGk=????: unknown key'], info: 'a\nb', n: 1 })
+})
+
+test('only an owner/name as sync.repo takes it is a repository', () => {
+  for (const name of ['anna/usage-sync', 'a/b', 'A-1/x.y_z', `${'a'.repeat(39)}/${'b'.repeat(100)}`]) expect(validRepo(name)).toBe(true)
+  for (const name of ['', 'a', 'a/b/c', '-a/b', 'a/..', 'a/.', 'a/b..c', `${'a'.repeat(40)}/b`, `a/${'b'.repeat(101)}`, 'a /b', 'a/b\n']) {
+    expect(validRepo(name)).toBe(false)
+  }
+  expect(INVALID_REPO).toContain('{repo}')
 })
