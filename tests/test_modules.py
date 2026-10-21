@@ -183,6 +183,24 @@ def test_a_broken_list_of_sessions_logs_again_and_is_written_new(tmp_path):
     assert json.loads((folder / 'usage_clock.json').read_text(encoding='utf-8')) == ['']
 
 
+def test_a_list_of_sessions_nested_too_deep_logs_again_and_never_raises(tmp_path):
+    folder = tmp_path / 'log' / 'disabled'
+    folder.mkdir(parents=True)
+    (folder / 'spawn_gate.json').write_text('[' * 100_000 + ']' * 100_000, encoding='utf-8')
+    _hookio.log_disabled('spawn_gate', 'spawn_gate', {'session_id': 's'})
+    assert len(log(tmp_path, 'spawn_gate')) == 1
+    assert json.loads((folder / 'spawn_gate.json').read_text(encoding='utf-8')) == ['s']
+
+
+def test_the_spawn_gate_switched_off_stays_silent_with_a_list_of_sessions_nested_too_deep(tmp_path):
+    folder = tmp_path / 'log' / 'disabled'
+    folder.mkdir(parents=True)
+    (folder / 'spawn_gate.json').write_text('[' * 100_000 + ']' * 100_000, encoding='utf-8')
+    config(tmp_path, spawn_gate='off')
+    assert run('spawn_gate.py', AGENT, '--mode=enforce') == ''
+    assert [r['decision'] for r in log(tmp_path, 'spawn_gate')] == ['disabled']
+
+
 def test_logging_disabled_never_raises(tmp_path, monkeypatch):
     def broken(*args):
         raise OSError('disk full')

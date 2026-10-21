@@ -200,7 +200,7 @@ def log_disabled(hook: str, key: str, hook_input: dict) -> None:
         with open(path, encoding='utf-8') as f:
             seen = json.loads(f.read(DISABLED_MAX_BYTES))
         seen = [str(item) for item in seen] if isinstance(seen, list) else []
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         seen = []
     if session in seen:
         return
