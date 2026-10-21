@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -160,6 +161,26 @@ def test_show_names_the_problems_of_config_json(machine):
     shown = machine.cli('show', '--json')[1]
     assert modules(shown)['usage_clock']['value'] is True
     assert any('modules.usage_clock' in problem for problem in shown['problems'])
+
+
+CONTROL = '\x1b]52;c;SGk=\x07\x9b2J\x00\t\r\x7f'      # OSC 52, a C1 CSI, NUL, tab, carriage return, DEL
+
+
+def test_show_answers_no_control_character_of_config_json(machine):
+    machine.install('--components', 'usage-clock')
+    machine.config.write_text(json.dumps({'modules': {f'x{CONTROL}': 1}}), encoding='utf-8')
+    code, shown = machine.cli('show', '--json')
+    problem = next(p for p in shown['problems'] if p.startswith('modules.x'))
+    assert problem == 'modules.x?]52;c;SGk=??2J????: unknown key ignored'
+    assert '\n' in modules(shown)['usage_clock']['info']      # the lines of the info stay lines
+
+
+@pytest.mark.parametrize('command', ['check-repo', 'set-repo'])
+def test_a_repository_name_with_control_characters_is_answered_without_them(machine, command):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    code, done = machine.cli(command, f'a{CONTROL}/b')
+    assert code == 1 and done['result'] == 'invalid'
+    assert not re.search('[\x00-\x09\x0b-\x1f\x7f-\x9f]', done['repo'] + done['text']) and '?]52' in done['repo']
 
 
 # --- set --------------------------------------------------------------------------------------------------------

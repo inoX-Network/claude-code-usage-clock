@@ -27,6 +27,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -46,6 +47,7 @@ PARTS = (('statusline', 'statusline', None, 'Status line'),
 SWITCH_VALUES = ('true', 'false')
 GATE_VALUES = ('off', 'shadow', 'enforce')
 SYNC_MODES = ('off', 'shadow', 'on')
+CONTROL = re.compile('[\x00-\x09\x0b-\x1f\x7f-\x9f]')
 RESULTS = {
     'private_ok': '{repo} is private and this login reaches it.',
     'public': '{repo} can be read without logging in: it is public. The sync writes only to a private repository.',
@@ -60,8 +62,20 @@ RESULTS = {
 }
 
 
+def printable(value):
+    """Every text of the answer without control characters (C0 but the line break, DEL, C1): a key of config.json or a
+    typed name could carry an escape sequence the tab would draw."""
+    if isinstance(value, str):
+        return CONTROL.sub('?', value)
+    if isinstance(value, list):
+        return [printable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: printable(item) for key, item in value.items()}
+    return value
+
+
 def answer(value: dict, code: int = 0) -> int:
-    print(json.dumps(value, ensure_ascii=False))
+    print(json.dumps(printable(value), ensure_ascii=False))
     return code
 
 
