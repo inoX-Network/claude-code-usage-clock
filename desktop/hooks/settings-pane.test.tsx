@@ -118,6 +118,12 @@ async function labelOf(ui: Pane, key: string): Promise<Record<string, unknown>> 
   return (label as { props?: Record<string, unknown> } | undefined)?.props ?? {}
 }
 
+/** The Text whose whole text is `text` (the engine finds a Text by its text, not by its key). */
+async function exact(ui: Pane, text: string) {
+  const escaped = text.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')
+  return ui.find({ type: 'Text', text: new RegExp('^' + escaped + '$') })
+}
+
 async function hasText(ui: Pane, text: string): Promise<boolean> {
   return (await ui.find({ type: 'Text', text })) !== undefined
 }
@@ -307,10 +313,10 @@ for (const surface of SURFACES) {
     })
     const opening = ui.press({ key: 'view-settings' })
     await reading
-    expect(await ui.find({ key: 'settings-loading' })).toBeDefined()
+    expect(await exact(ui, 'loading…')).toBeDefined()
     release()
     await opening
-    expect(await ui.find({ key: 'settings-loading' })).toBeUndefined()
+    expect(await exact(ui, 'loading…')).toBeUndefined()
     expect(await ui.find({ key: 'row-usage_clock' })).toBeDefined()
     await ui.unmount()
   })
@@ -318,7 +324,7 @@ for (const surface of SURFACES) {
   test(`${surface}: the last success of the sync is a local time as the report writes it, not ISO UTC`, async ($, on) => {
     world(on, { sync: { last_success: '2026-10-21T12:33:45Z', last_error: 'network' } })
     const ui = await open($, surface)
-    expect((await ui.find({ key: 'sync-state' }))?.text).toBe(`last success ${localTime('2026-10-21T12:33:45Z')} · last error network`)
+    expect(await exact(ui, `last success ${localTime('2026-10-21T12:33:45Z')} · last error network`)).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /2026-10-21T/ })).toBeUndefined()
     await ui.unmount()
   })
@@ -326,7 +332,8 @@ for (const surface of SURFACES) {
   test(`${surface}: the sentence of the sync is the summary of show --json, nothing added`, async ($, on) => {
     world(on)
     const ui = await open($, surface)
-    expect((await ui.find({ key: 'summary-sync' }))?.text).toBe('What the sync does.')
+    expect(await exact(ui, 'What the sync does.')).toBeDefined()
+    expect((await ui.find({ key: 'body-sync' }))?.text).toContain('What the sync does.')
     await ui.unmount()
   })
 }
@@ -336,13 +343,13 @@ test('terminal: a row is the name on its own line and one block indented by a Bo
   const ui = await open($, 'terminal')
   for (const [id, label] of [['statusline', 'Status line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'],
     ['soft_stop', 'Soft stop'], ['sync', 'Sync'], ['repo', 'Sync repository']] as const) {
-    const name = await ui.find({ key: `part-${id}` })
+    const name = await exact(ui, label)
     expect([id, name?.text, name?.props.weight]).toEqual([id, label, 'bold'])
     const block = await ui.find({ key: `body-${id}` })
     expect([id, block?.props.paddingLeft]).toEqual([id, 2])
   }
   // The sentence without spaces in front: the Box indents it, also where it wraps
-  expect((await ui.find({ key: 'summary-usage_clock' }))?.text).toBe('What Usage clock does.')
+  expect(await exact(ui, 'What Usage clock does.')).toBeDefined()
   expect((await ui.find({ key: 'body-usage_clock' }))?.text).toContain('What Usage clock does.')
   await ui.unmount()
 })
@@ -371,10 +378,12 @@ test('terminal: the info is a block indented deeper, a line per line, the link o
   const info = await ui.find({ key: 'info-text-spawn_gate' })
   expect(info?.props.paddingLeft).toBe(2)
   expect((await ui.find({ key: 'body-spawn_gate' }))?.text).toContain('About Spawn gate.')
-  expect((await ui.find({ key: 'info-spawn_gate-0' }))?.text).toBe('About Spawn gate.')
-  expect((await ui.find({ key: 'info-spawn_gate-1' }))?.text).toBe('More:')
-  expect((await ui.find({ key: 'info-spawn_gate-2' }))?.text).toBe('https://x/docs#spawn_gate')
-  expect((await ui.find({ key: 'info-spawn_gate-3' }))?.text).toBe('In the tab Spawn gate works so.')
+  expect(await exact(ui, 'About Spawn gate.')).toBeDefined()
+  expect(await exact(ui, 'More:')).toBeDefined()
+  expect(await exact(ui, 'https://x/docs#spawn_gate')).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /More: https/ })).toBeUndefined()
+  expect(await exact(ui, 'In the tab Spawn gate works so.')).toBeDefined()
+  expect(info?.text).toContain('https://x/docs#spawn_gate')
   await ui.unmount()
 })
 
