@@ -769,10 +769,33 @@ def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
     return None
 
 
+# What a part switched off in modules lets through, by component
+LETS_THROUGH = {'spawn-gate': 'every start', 'soft-stop': 'every call'}
+
+
+def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
+    """A NOTE for an installed part that modules of config.json switches off, or whose gate it sets to shadow while
+    the entry says enforce (as the status line marks it); a gate in shadow from its own entry gets none."""
+    if component not in SWITCHES:      # the sync has its mode in sync.mode
+        return []
+    key, script = component.replace('-', '_'), SCRIPTS[component]
+    value = cfg['modules'][key]
+    again = f'Switch it on with install.py --on {component} or in the Settings tab of /report.'
+    if value is False:
+        return [('NOTE', f'{script}: switched off in config.json (modules.{key} false), it adds nothing. {again}')]
+    if value == 'off':
+        return [('NOTE', f'{script}: switched off in config.json (modules.{key} "off"), it lets '
+                         f'{LETS_THROUGH[component]} through. {again}')]
+    if value == 'shadow' and option_value(command, 'mode') == 'enforce':
+        return [('NOTE', f'{script}: runs in shadow mode from config.json (modules.{key} "shadow") although its entry '
+                         'has --mode=enforce: it blocks nothing.')]
+    return []
+
+
 def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) -> list[tuple[str, str]]:
     results = []
     for component in (c for c in args.components if c in HOOKS):
-        script = SCRIPTS[component]
+        script, installed = SCRIPTS[component], None
         for event, matcher in HOOKS[component]:
             found = _find_entry(data, event, os.path.join(target, script))
             if found is None:
@@ -789,6 +812,9 @@ def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) 
                 entry_mode = 'enforce' if option_value(entry.get('command'), 'mode') == 'enforce' else 'shadow'
                 details.append(f'mode {configured} from config' if configured else f'mode {entry_mode} from settings.json')
             results.append(('OK', f'{event}: {script}' + (f' ({", ".join(details)})' if details else '')))
+            installed = entry
+        if installed is not None:
+            results += switched_off(component, cfg, installed.get('command'))
     if 'statusline' in args.components:
         current = data.get('statusLine')
         if isinstance(current, dict) and points_to(current.get('command'), os.path.join(target, SCRIPTS['statusline'])):

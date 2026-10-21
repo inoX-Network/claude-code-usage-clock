@@ -71,7 +71,8 @@ without a restart and without touching `settings.json`:
   leaves the mode to the entry, as before. `install.py --mode X` writes `X` here as well for each gate it installs,
   so that the two never disagree, and `install.py --check` says where the mode comes from (`from config` or `from
   settings.json`).
-- A hook switched off writes one log line `disabled` per session, no more.
+- A hook switched off writes one log line `disabled` per session, no more; `log_summary.py` lists them per hook with
+  the time of the last one, and `install.py --check` notes each part switched off.
 - The status line has no switch: the other parts read its measurement.
 
 The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through

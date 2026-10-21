@@ -372,3 +372,32 @@ def test_a_category_that_is_no_category_name_is_shown_as_a_question_mark(tmp_pat
     code, out = run(write_log(tmp_path, lines))
     assert code == 0 and '\x1b' not in out and 'x' * 30 not in out, out
     assert '  push: 3 runs, 0 succeeded, 3 failed (? 2, network 1)' in out
+
+
+def disabled(time, hook):
+    return json.dumps({'time': time, 'hook': hook, 'mode': 'off', 'decision': 'disabled',
+                       'reason': f'modules.{hook} is off in config.json'})
+
+
+def test_the_parts_switched_off_are_listed_with_their_sessions_and_the_last_time(tmp_path):
+    lines = SAMPLE + [disabled('2026-01-14T11:00:00+00:00', 'spawn_gate'), disabled('2026-01-15T09:00:00+00:00', 'spawn_gate'),
+                      disabled('2026-01-14T12:00:00+00:00', 'usage_clock'),
+                      json.dumps({'time': '2026-01-15T10:00:00+00:00', 'hook': 'sync', 'mode': 'off', 'decision': 'off',
+                                  'action': 'push'})]
+    code, out = run(write_log(tmp_path, lines))
+    assert code == 0, out
+    assert ('Switched off in config.json (modules; one line per session):\n'
+            '  spawn_gate     2 sessions, last 2026-01-15T09:00:00+00:00\n'
+            '  usage_clock    1 session, last 2026-01-14T12:00:00+00:00\n') in out
+
+
+def test_without_a_part_switched_off_there_is_no_such_section(tmp_path):
+    assert 'Switched off' not in run(write_log(tmp_path, SAMPLE))[1]
+
+
+def test_the_section_reads_what_a_hook_switched_off_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv('CCUC_LOG_DIR', str(tmp_path / 'log'))
+    import _hookio
+    _hookio.log_disabled('soft_stop', 'soft_stop', {'session_id': 's1'})
+    code, out = run(tmp_path / 'log' / 'log.jsonl')
+    assert code == 0 and re.search(r'\n  soft_stop      1 session, last \d{4}-\d\d-\d\dT', out), out

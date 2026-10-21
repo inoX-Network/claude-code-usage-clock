@@ -274,15 +274,45 @@ def test_a_dry_run_with_mode_writes_no_config(setup):
     assert (setup.target / 'config.json').read_bytes() == before
 
 
-@pytest.mark.parametrize('value,expected', [('', 'mode enforce from settings.json'), ('shadow', 'mode shadow from config'),
-                                            ('off', 'mode off from config')])
-def test_check_names_where_the_mode_comes_from(setup, value, expected):
+GATE_OFF = ('NOTE spawn_gate.py: switched off in config.json (modules.spawn_gate "off"), it lets every start through. '
+            'Switch it on with install.py --on spawn-gate or in the Settings tab of /report.')
+GATE_SHADOW = ('NOTE spawn_gate.py: runs in shadow mode from config.json (modules.spawn_gate "shadow") although its entry '
+               'has --mode=enforce: it blocks nothing.')
+
+
+@pytest.mark.parametrize('value,expected,note', [('', 'mode enforce from settings.json', None),
+                                                 ('enforce', 'mode enforce from config', None),
+                                                 ('shadow', 'mode shadow from config', GATE_SHADOW),
+                                                 ('off', 'mode off from config', GATE_OFF)])
+def test_check_names_where_the_mode_comes_from_and_notes_a_gate_switched_off(setup, value, expected, note):
     assert setup('--components', 'spawn-gate', '--mode', 'enforce')[0] == 0
     cfg = setup.config()
     cfg['modules']['spawn_gate'] = value
     (setup.target / 'config.json').write_text(json.dumps(cfg), encoding='utf-8')
     code, out = setup('--check', '--components', 'spawn-gate')
-    assert f'PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, {expected})' in out
+    assert f'OK   PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, {expected})' in out
+    assert [line for line in out.splitlines() if line.startswith('NOTE spawn_gate')] == ([note] if note else [])
+    assert code == 0, out
+
+
+def test_check_notes_no_gate_in_shadow_mode_from_its_own_entry(setup):
+    assert setup('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    assert 'NOTE soft_stop' not in setup('--check', '--components', 'soft-stop')[1]
+
+
+@pytest.mark.parametrize('component,script,key', [('usage-clock', 'usage_clock.py', 'usage_clock'),
+                                                  ('context-reporter', 'context_reporter.py', 'context_reporter'),
+                                                  ('soft-stop', 'soft_stop.py', 'soft_stop')])
+def test_check_notes_each_part_switched_off_once(setup, component, script, key):
+    assert setup('--components', f'statusline,{component}')[0] == 0
+    assert setup('--off', component)[0] == 0
+    code, out = setup('--check', '--components', f'statusline,{component}')
+    value = '"off"' if component == 'soft-stop' else 'false'
+    notes = [line for line in out.splitlines() if line.startswith(f'NOTE {script}')]
+    assert len(notes) == 1 and f'switched off in config.json (modules.{key} {value})' in notes[0], out
+    assert f'install.py --on {component}' in notes[0] and code == 0
+    assert setup('--on', component)[0] == 0
+    assert f'NOTE {script}' not in setup('--check', '--components', f'statusline,{component}')[1]
 
 
 def test_install_with_mode_and_a_config_json_that_cannot_be_read_notes_it_and_installs(setup):

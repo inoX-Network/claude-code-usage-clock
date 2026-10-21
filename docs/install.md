@@ -100,7 +100,7 @@ Options:
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
-| `--check` | Check an existing installation and change nothing: the entries in `settings.json` (for the gates with the mode and where it comes from: `from config` or `from settings.json`), the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
+| `--check` | Check an existing installation and change nothing: the entries in `settings.json` (for the gates with the mode and where it comes from: `from config` or `from settings.json`; a `NOTE` for each part `modules` switches off, and for a gate it sets to `shadow` while its entry says `--mode=enforce`), a `CCUC_CONFIG` that only the `env` of `settings.json` sets (`NOTE`), the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
 
 Restart Claude Code (or open `/hooks`) after installing.
 
