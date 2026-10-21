@@ -52,7 +52,8 @@ The installer:
   and is a clone of this repository stays as it is; a folder of anything else stays untouched and stops the run.
   A clone that git refuses stops it too, with exit code 1. If GitHub answers that the repository does not exist (also
   its answer when your login cannot reach a private one), the installer says so and tells you to check the name or
-  to create the repository (`gh repo create owner/name --private`, or on https://github.com/new); for credentials
+  to create the repository (`gh repo create owner/name --private`, or on https://github.com/new), or, if it exists, to
+  give your login access to it (a fine-grained token needs the repository selected); for credentials
   that are missing or refused it tells you how to sign in.
 
 Run again with the same options, it changes nothing. If a push once found the repository public, nothing is pushed

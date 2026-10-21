@@ -554,6 +554,7 @@ def test_a_repository_that_does_not_exist_is_named_instead_of_the_login(setup, m
     assert ('Sync: the clone was refused: the repository does not exist or this login cannot reach it (check '
             'sync.repo)') in out, out
     assert f'gh repo create {REPO} --private' in out and 'https://github.com/new' in out, out
+    assert 'give the login of git access to it' in out, out      # GitHub says the same to a token without access
     assert 'never asks for credentials' not in out and 'Nothing was installed.' in out, out
     assert not setup.clone.exists() and setup.leftovers() == [] and setup.data() == {}
 

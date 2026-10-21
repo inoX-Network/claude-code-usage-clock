@@ -696,7 +696,8 @@ CREDENTIALS = ('git has to reach the repository without asking: sign in once wit
                'Credential Manager of Git for Windows, or `gh auth setup-git`), or use sync.transport ssh with a key '
                'whose host github.com is in known_hosts. The installer never asks for credentials itself.')
 MISSING_REPO = ('Check the name ({repo}, owner/name). A repository that does not exist yet: create it private with '
-                '`gh repo create {repo} --private` or on https://github.com/new, then run the installer again.')
+                '`gh repo create {repo} --private` or on https://github.com/new. One that exists: give the login of git '
+                'access to it (a fine-grained token needs this repository selected). Then run the installer again.')
 
 
 class SyncPlan(NamedTuple):
