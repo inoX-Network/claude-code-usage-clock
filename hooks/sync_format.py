@@ -10,6 +10,9 @@ Below the root of a checked-out sync repository every machine has one folder of 
       history/<YYYY-MM>.jsonl                   the measurement history (month of `t`, UTC)
       gates/<YYYY-MM>.jsonl                     the decisions of the two gates (month of `t`, UTC)
       days/<YYYY-MM>.jsonl                      the lines of the day archive, as they are (month of `day`)
+      side/<YYYY-MM>.jsonl                      calls outside the transcripts that a debug log measured (Claude Code on
+                                                the web, tools/web_export.py): one line per run (month of `t`, UTC)
+      side_windows/<YYYY-MM>.jsonl              per export the span of the debug log read, or that there was none
 
 No file name has a colon; times are in the lines only. Every `.jsonl` file is UTF-8, one record per line, appended
 to only; the one exception is `compact`, which removes old request months of the own machine. Only the own machine
@@ -216,8 +219,20 @@ FIELDS: dict[str, dict[str, Check]] = {
     'status': {
         'last_success': _time, 'tool_version': _text(TOOL_VERSION), 'schema': _schema,
     },
+    # A run of calls outside the transcript (`src` as the debug log names it, e.g. extract_memories); `cw` is the cache
+    # write without the split into 5 min and 1 h, which the debug log does not give
+    'side': {
+        't': _time, 'k': _text(KEY), 'sid': _text(SESSION_ID), 'src': _text(WORD), 'model': _optional(_model),
+        'calls': _count, 'in': _count, 'cw': _count, 'cr': _count, 'out': _count,
+    },
+    # What one export could measure of a session: `log` false (no debug log: nothing measured, never zero), else the
+    # span `from`-`to` of the log; `unmeasured` counts calls of the log outside the transcript without token counts
+    'side_window': {
+        't': _time, 'sid': _text(SESSION_ID), 'log': _flag, 'from': _optional(_time), 'to': _optional(_time),
+        'unmeasured': _count,
+    },
 }
-OPTIONAL = {'request': ('sub', 'think', 'ws', 'wf')}
+OPTIONAL = {'request': ('sub', 'think', 'ws', 'wf'), 'side': ('model',), 'side_window': ('from', 'to')}
 DAY_FIELDS = ('v', 'day', 'stats')
 
 
@@ -230,7 +245,19 @@ def _clean(kind: str, values: object) -> dict:
         if name not in values and name not in OPTIONAL.get(kind, ()):
             raise FormatError(f'{kind}.{name}: missing')
         record[name] = check(values.get(name), f'{kind}.{name}')
+    if kind == 'side_window':
+        _check_window(record)
     return record
+
+
+def _check_window(record: dict) -> None:
+    """A window with a log has a span that does not run backwards; one without a log has none."""
+    span = (record['from'], record['to'])
+    if not record['log']:
+        if span != (None, None):
+            raise FormatError('side_window: a window without a log has no span')
+    elif None in span or parse_time(span[0]) > parse_time(span[1]):
+        raise FormatError('side_window: the span of the log is missing or runs backwards')
 
 
 def _clean_day(values: dict) -> dict:
@@ -252,8 +279,9 @@ def _dump(record: dict) -> str:
 
 
 def encode(kind: str, values: dict) -> str:
-    """One record of `kind` (`request`, `history`, `gate`, `machine`, `status`) as text: a line ending in a line
-    break. Only the fields of the format, each checked; `v` is set here. FormatError for a missing or wrong value."""
+    """One record of `kind` (`request`, `history`, `gate`, `machine`, `status`, `side`, `side_window`) as text: a line
+    ending in a line break. Only the fields of the format, each checked; `v` is set here. FormatError for a missing or
+    wrong value."""
     return _dump(_clean(kind, values)) + '\n'
 
 
@@ -315,6 +343,12 @@ def decode(kind: str, raw: str | bytes) -> dict:
 
 
 # --- Fields made from local data ----------------------------------------------------------------------------------
+
+def side_key(session_id: str, source: str, t: str) -> str:
+    """The key of a side run: 16 hex characters of SHA-256 of session, source and time. The same run exported twice
+    (another machine with the same debug log, a repeated export) counts once."""
+    return hashlib.sha256(f'{session_id}\n{source}\n{t}'.encode('utf-8')).hexdigest()[:16]
+
 
 def request_key(message_id: str, request_id: str) -> str:
     """`k` of a request: the first 16 hex characters of SHA-256 of message id, line break, request id."""
@@ -493,6 +527,16 @@ def gate_path(machine_id: str, t: str) -> str:
     return f'{machine_dir(machine_id)}/gates/{t[:7]}.jsonl'
 
 
+def side_path(machine_id: str, t: str) -> str:
+    parse_time(t)
+    return f'{machine_dir(machine_id)}/side/{t[:7]}.jsonl'
+
+
+def side_window_path(machine_id: str, t: str) -> str:
+    parse_time(t)
+    return f'{machine_dir(machine_id)}/side_windows/{t[:7]}.jsonl'
+
+
 def day_path(machine_id: str, day: str) -> str:
     """The file of a day line: `days/<month of day>.jsonl`."""
     _clean_day({'day': day, 'stats': {}})
@@ -500,7 +544,7 @@ def day_path(machine_id: str, day: str) -> str:
 
 
 LAYOUT_LINES = re.compile(r'machines/(?P<id>[^/]+)/(?:requests/[0-9]{4}-[0-9]{2}/[A-Za-z0-9_-]{1,128}'
-                          r'|(?:history|gates|days)/[0-9]{4}-[0-9]{2})\.jsonl')
+                          r'|(?:history|gates|days|side|side_windows)/[0-9]{4}-[0-9]{2})\.jsonl')
 
 
 # --- Writing ------------------------------------------------------------------------------------------------------
@@ -636,6 +680,8 @@ class Machine:
     history: list[dict] = field(default_factory=list)
     gates: list[dict] = field(default_factory=list)
     days: list[dict] = field(default_factory=list)
+    side: list[dict] = field(default_factory=list)
+    side_windows: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -751,7 +797,7 @@ def _single(root: str, path: str, info: os.stat_result, kind: str, skipped: dict
 
 
 # The folders of a machine with line files directly in them: the kind of their lines
-KIND_OF = {'history': 'history', 'gates': 'gate', 'days': 'day'}
+KIND_OF = {'history': 'history', 'gates': 'gate', 'days': 'day', 'side': 'side', 'side_windows': 'side_window'}
 
 
 def _line_files(root: str, folder: str, pattern: re.Pattern, kind: str, skipped: dict[str, int],

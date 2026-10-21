@@ -1512,6 +1512,78 @@ def _split_lines(view: dict) -> list[str]:
     return lines
 
 
+# --- Side calls outside the transcripts (Claude Code on the web) -----------------------------------------------------
+
+SIDE_TITLE = 'Side calls outside the transcripts (Claude Code on the web; not in the sums above)'
+
+
+def side_report(machines: 'Machines | None', data: Data, prices: list[dict], start: float, end: float) -> dict | None:
+    """The side runs of the period (each `k` once) by source, priced with the cache write as 1 hour (an estimate),
+    and what has no measurement: the requests of the period of every session with a window that lie outside each span
+    of a debug log, the sessions without any log, and the calls the newest window of each machine and session counted
+    without token counts. None without any side line (also with --local or for another --machine)."""
+    if machines is None:
+        return None
+    mine = (lambda row: data.only is None or row['_machine'] == data.only)
+    runs: dict[str, dict] = {}
+    for row in machines.side:
+        if mine(row) and start <= sync_format.parse_time(row['t']) < end:
+            runs.setdefault(row['k'], row)
+    windows = [row for row in machines.side_windows if mine(row)]
+    if not runs and not windows:
+        return None
+    spans: dict[str, list[tuple[float, float]]] = {}
+    newest: dict[tuple[str, str], dict] = {}
+    for row in windows:
+        if row['log']:
+            spans.setdefault(row['sid'], []).append((sync_format.parse_time(row['from']),
+                                                     sync_format.parse_time(row['to'])))
+        known = newest.get((row['_machine'], row['sid']))
+        if known is None or row['t'] >= known['t']:
+            newest[(row['_machine'], row['sid'])] = row
+    sessions = {row['sid'] for row in windows}
+    outside = sum(1 for request in data.requests
+                  if request.session in sessions and start <= request.ts < end and data.counted(request.session[:8])
+                  and not any(low <= request.ts <= high for low, high in spans.get(request.session, ())))
+    sources: dict[str, dict] = {}
+    for row in sorted(runs.values(), key=lambda row: row['t']):
+        source = sources.setdefault(row['src'], {
+            'source': row['src'], 'runs': 0, 'calls': 0, 'cost_usd': 0.0, 'unpriced_runs': 0,
+            'tokens': {'input': 0, 'cache_write': 0, 'cache_read': 0, 'output': 0}})
+        source['runs'] += 1
+        source['calls'] += row['calls']
+        for name, field in (('input', 'in'), ('cache_write', 'cw'), ('cache_read', 'cr'), ('output', 'out')):
+            source['tokens'][name] += row[field]
+        entry = None if row['model'] is None else _price_of(data, prices, row['model'])
+        if entry is None:
+            source['unpriced_runs'] += 1
+        else:
+            source['cost_usd'] += request_cost(entry, (row['in'], 0, row['cw'], row['cr'], row['out']))
+    listed = [sources[name] for name in sorted(sources)]
+    return {'sources': listed, 'cost_usd': sum(source['cost_usd'] for source in listed), 'sessions': len(sessions),
+            'sessions_without_log': len(sessions - set(spans)), 'requests_not_measured': outside,
+            'unmeasured_calls': sum(row['unmeasured'] for row in newest.values())}
+
+
+def _side_lines(side: dict) -> list[str]:
+    lines = [SIDE_TITLE]
+    for source in side['sources']:
+        tokens = source['tokens']
+        unpriced = f', {_plural(source["unpriced_runs"], "run")} without a price' if source['unpriced_runs'] else ''
+        lines += [f'  {source["source"]}  {_plural(source["runs"], "run")}, {_plural(source["calls"], "call")}, '
+                  f'~{usd_text(source["cost_usd"])} USD{unpriced}',
+                  f'    tokens input {tokens_text(tokens["input"])}, cache write {tokens_text(tokens["cache_write"])}, '
+                  f'cache read {tokens_text(tokens["cache_read"])}, output {tokens_text(tokens["output"])}']
+    gaps = [f'{_plural(side["requests_not_measured"], "request")} outside a debug log']
+    if side['sessions_without_log']:
+        gaps[0] += f' ({_plural(side["sessions_without_log"], "session")} without any)'
+    if side['unmeasured_calls']:
+        gaps.append(f'{_plural(side["unmeasured_calls"], "call")} without token counts')
+    if side['requests_not_measured'] or side['unmeasured_calls']:
+        lines.append('  not measured: ' + ', '.join(gaps))
+    return lines
+
+
 def render_overview(report: dict) -> str:
     """The overview, made of `report['overview']` alone: the object in the JSON is what the text says."""
     view = report['overview']
@@ -1530,6 +1602,11 @@ def render_overview(report: dict) -> str:
     blocks += [_table_lines(view), _split_lines(view)] if view['projects'] else [['No requests in this period.']]
     if view['notable']:
         blocks.append(['Notable'] + [f'  {note["text"]}' for note in view['notable']])
+    if view.get('side_calls'):
+        side = view['side_calls']
+        blocks.append([f'Side calls outside the transcripts: ~{usd_text(side["cost_usd"])} USD '
+                       f'({_plural(side["runs"], "run")}), {_plural(side["requests_not_measured"], "request")} '
+                       'not measured · not in the sums · --full'])
     details = view['details']
     options = [f'--project {details["project"]}', f'--session {details["session"]}'] if details['project'] else []
     blocks.append(['Details: ' + ' · '.join(options + ['--full'])])
@@ -1691,6 +1768,8 @@ def render(report: dict, selection: dict | None = None) -> str:
         sections += [_allocation_lines(report['allocation']), _calibration_lines(report['calibration'])]
         if report['guards']:
             sections.append(_guard_lines(report))
+        if report.get('side_calls'):
+            sections.append(_side_lines(report['side_calls']))
     return '\n\n'.join('\n'.join(section) for section in sections)
 
 
@@ -2032,6 +2111,8 @@ class Machines:
         self.days: dict[str, dict[str, dict]] = {}
         self.skipped = dict.fromkeys(sync_format.COUNTERS, 0)
         self.broken_days = 0
+        self.side: list[dict] = []                # side runs and windows of Claude Code on the web, by machine
+        self.side_windows: list[dict] = []
 
     def add(self, key: str, machine: sync_format.Machine) -> None:
         """The folder of another machine. Of lines without `k` a copy (a push cut off and repeated) counts once: a
@@ -2042,6 +2123,7 @@ class Machines:
         self.utc_std[key] = info.get('utc_std')
         self.last_success[key] = sync_format.parse_time(status['last_success']) if status else None
         self.requests += [{**row, '_machine': key} for row in machine.requests]
+        self.add_side(key, machine)
         times: set[float] = set()
         for row in machine.history:
             ts = sync_format.parse_time(row['t'])
@@ -2064,6 +2146,10 @@ class Machines:
                 continue
             days.setdefault(day, stats)
         self.days[key] = days
+
+    def add_side(self, key: str, machine: sync_format.Machine) -> None:
+        self.side += [{**row, '_machine': key} for row in machine.side]
+        self.side_windows += [{**row, '_machine': key} for row in machine.side_windows]
 
     def merge_requests(self, local: list[_transcripts.Request],
                        projects_dir: str) -> tuple[list[tuple[_transcripts.Request, str, str | None]], dict]:
@@ -2173,6 +2259,7 @@ def read_clone(root: str, machines: Machines) -> None:
     if machines.own and os.path.isdir(os.path.join(root, sync_format.MACHINES, machines.own)):
         own = sync_format.read_machine(root, machines.own, machines.skipped)
         machines.requests += [{**row, '_machine': machines.own} for row in own.requests]
+        machines.add_side(machines.own, own)
 
 
 def _state(log_dir: str) -> _sync_core.State:
@@ -2664,6 +2751,12 @@ def main(argv: list[str] | None = None, now: float | None = None) -> int:
     names = None if machines is None else {ident: machines.names[key] for ident, key in data.machine.items()}
     report = build_report(stats, shown, coverage, settings['thresholds']['start_block_5h'], estimate, contexts, names,
                           notes)
+    side = side_report(machines, data, prices, start, end)
+    if side is not None:
+        report['side_calls'] = side
+        report['overview']['side_calls'] = {'cost_usd': side['cost_usd'],
+                                            'runs': sum(source['runs'] for source in side['sources']),
+                                            'requests_not_measured': side['requests_not_measured']}
     if args.json:
         print(json.dumps(report, indent=2))
     elif selecting:

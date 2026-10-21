@@ -367,6 +367,29 @@ the number of decisions by kind: `allow`, `warn`, `ask`, `deny` (`other` for a d
 `guard_reasons` has the same shape with one more level: for `warn`, `ask` and `deny` a map from reason to count.
 Decisions of days archived before reasons were kept are in `guards` but not in `guard_reasons`.
 
+### `side_calls`
+
+Only with the sync and side lines of a machine of Claude Code on the web in the period (see
+[the sync](sync.md#claude-code-on-the-web)); otherwise the key is missing, and so is `overview.side_calls`. None of it
+is in `total`, `clis` or the allocation.
+
+| Field | Meaning |
+|---|---|
+| `sources` | One entry per source of side calls, by name. |
+| `source` | The source as the debug log names it, e.g. `extract_memories`. |
+| `runs` | Runs of the source in the period, each `k` once. |
+| `calls` | Their requests to `/v1/messages`. |
+| `tokens` | `input`, `cache_write`, `cache_read`, `output` of those runs. |
+| `cost_usd` | At API prices, the cache write priced as 1 hour (an estimate): per source and in all. |
+| `unpriced_runs` | Runs without a model or with a model without a price: counted, not priced. |
+| `sessions` | Sessions with at least one window of an export. |
+| `sessions_without_log` | Of them, those whose exports never had a debug log. |
+| `requests_not_measured` | Requests of the period of those sessions outside every span of a debug log: their side calls are not measured. |
+| `unmeasured_calls` | Calls the newest window of each machine and session counted without token counts. |
+
+`overview.side_calls` holds `cost_usd`, `runs` and `requests_not_measured` for the line of the text overview
+(`Side calls outside the transcripts: ~0.62 USD (1 run), 2 requests not measured · not in the sums · --full`).
+
 ## The sync repository
 
 With the sync, every machine writes its usage data to a private git repository of the user, and the report of each
@@ -381,6 +404,8 @@ machines/<machine_id>/
   history/<YYYY-MM>.jsonl
   gates/<YYYY-MM>.jsonl
   days/<YYYY-MM>.jsonl
+  side/<YYYY-MM>.jsonl
+  side_windows/<YYYY-MM>.jsonl
 ```
 
 - `<machine_id>` is a UUID4, made at the first activation and kept in `<log_dir>/sync/machine_id` (mode 0600). A
@@ -450,6 +475,27 @@ the one it read last. So neither the sums nor the session of a request depend on
 | `mode` | `gates/`: the mode as the local log names it, `shadow` or `enforce`; `unknown` if the log holds no lower-case word. |
 | `reason` | `gates/`: the text of the local log line before its first colon, quoted parts as `…`, percentages as `N %`, other characters outside a small set as `?`, at most 60 characters. The question of the ask dialog, which names the agent, is written as `7-day window at N %`. Never more than the local log holds. |
 | `day`, `stats` | `days/`: the lines of the day archive `usage-days.jsonl`: `v`, `day` (the local day) and `stats` (the figures of that day, see *Mergeable figures and the archive* in `docs/architecture.md`). They are taken over as they are, with one exception: the project name of each session (`stats.clis[*].label`, the folder name) becomes its label after `sync.project_labels`, the same as `proj`. With `plain` the line is the archive line byte for byte; with `alias` or `hash` no folder name is left in it. A `clis` that is not an object of entries with a text `label` stops the export (category `internal`). `sync_format.py` checks only the envelope (`v`, `day`, `stats` an object); the report checks the figures in `stats` with the rules of its day archive before it uses them. |
+
+### Side calls (`side/<YYYY-MM>.jsonl`, `side_windows/<YYYY-MM>.jsonl`)
+
+Only a machine of Claude Code on the web writes them, through `tools/web_export.py` (the skill `/usage-export`, see
+[the sync](sync.md#claude-code-on-the-web)). Some calls of Claude Code never reach the transcript: the memory pass
+after each answer (`extract_memories`) reads the whole cached context once more. The debug log of the session names
+them, with their token counts; the export takes only those numbers from it. Both files are named after the month of
+`t` in UTC.
+
+| Field | Meaning |
+|---|---|
+| `t` | `side/`: when the run finished; `side_windows/`: when the export read the debug log. |
+| `k` | `side/`: the key of the run, the first 16 hex characters of SHA-256 of `sid`, `src` and `t`, each followed by a line break except the last. A run exported twice counts once. |
+| `sid` | The session id. |
+| `src` | `side/`: the source as the debug log names it (`extract_memories`), a lower-case word. |
+| `model` | `side/`: the model the debug log names for the calls of the run, `null` if it does not. |
+| `calls` | `side/`: the requests of the run to `/v1/messages`. |
+| `cw` | `side/`: tokens of the cache write, without the split into 5 minutes and 1 hour (the debug log does not give it; the report prices it as 1 hour, as an estimate). `in`, `cr` and `out` as in the request lines. |
+| `log` | `side_windows/`: `true` if the session had a debug log. `false` means nothing was measured, which is never the same as zero. |
+| `from`, `to` | `side_windows/`: the first and the last time in the debug log, `null` without a log. Requests of the session outside this span have no measurement of their side calls. |
+| `unmeasured` | `side_windows/`: requests to `/v1/messages` in the debug log outside the transcript whose source gives no token counts. |
 
 ### What is never written
 

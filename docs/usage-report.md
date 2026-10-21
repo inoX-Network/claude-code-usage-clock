@@ -256,6 +256,14 @@ python3 tools/usage_report.py --week --sync             # push this machine now,
   2 minutes are one: every machine measures the same subscription. Within a window (the same reset time) a value only
   rises, and a window that ended does not come back: a lower value of another machine, or one of a window that already
   ended, is a stale state and counts as the highest value of the newest window so far.
+- **Side calls of Claude Code on the web** ([the sync](sync.md#claude-code-on-the-web)): a machine of Claude Code on the
+  web also exports the calls that never reach the transcript (the memory pass `extract_memories`). The report shows
+  them in a section of their own, `Side calls outside the transcripts`, at the end of `--full`, and in one line of the
+  overview, but never in the sums, the shares or the allocation of points: the sums stay those of the transcripts.
+  The cost prices the cache write as 1 hour (the debug log does not split it), so it is an estimate (`~`). A run
+  without a model or with a model without a price is counted but not priced. `not measured` counts the requests of
+  the period that lie outside every span of a debug log of their session (a session without any log too, never as
+  zero), and the calls the debug log named without token counts.
 - **Sharing a rise:** a rise of the subscription is shared by the cost of the requests of all machines, so it is
   "unexplained" only if no machine made a request in between. "Only one CLI active" for the calibration means on all
   machines together.

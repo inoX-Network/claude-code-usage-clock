@@ -32,7 +32,9 @@ tools/
   log_summary.py          summarises the JSONL log (installed next to the hooks, with usage_report.py and prices.json: the report runs without the checkout)
   check_agents.py         lists which agent definitions the model rule would report or deny (read only)
   usage_report.py         what was used per day, week, month, project and CLI, from the transcripts: overview, --full, --project/--session, --json (read only; --archive writes the day archive)
+  web_export.py           Claude Code on the web: installs the sync into the VM (claude-web), the side calls of the debug log into side-calls.jsonl, one push (the skill /usage-export)
   prices.json             API prices per million tokens for usage_report.py, with source and date
+skills/usage-export/      the skill /usage-export for Claude Code on the web (runs tools/web_export.py)
 windows/                  everything Windows-specific, see windows/README.md
   cli/_win.py             file lock, replace retry, path normalisation, Git Bash commands (copied next to the hooks on Windows)
   cli/tests/              the Windows test track (collected on Windows only)

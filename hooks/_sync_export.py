@@ -11,6 +11,8 @@ and lets no other one pass):
 - the gate decisions of the log `log.jsonl` with its rotated `.1`, only with `sync.include_gates`:
   `gates/<YYYY-MM>.jsonl`
 - the day archive `usage-days.jsonl`: `days/<YYYY-MM>.jsonl`, the project names after `sync.project_labels`
+- the side calls `side-calls.jsonl` that only tools/web_export.py writes (Claude Code on the web): `side/<YYYY-MM>.jsonl`
+  and `side_windows/<YYYY-MM>.jsonl` by the `kind` of each line
 
 and machine.json (if it is missing or its name, platform or standard offset to UTC changed). status.json, commit and
 push are the job of the push (0034-SYNC-PUSH), which calls `export` under the sync lock; the clone is its argument.
@@ -49,8 +51,10 @@ RESERVE_S = 30              # of the deadline of the push, kept for commit and p
 HISTORY_FILE = _history.FILE_NAME
 LOG_FILE = 'log.jsonl'
 ARCHIVE_FILE = 'usage-days.jsonl'
+SIDE_FILE = 'side-calls.jsonl'       # written by tools/web_export.py only; no file, no side lines
+SIDE_KINDS = {'side': sync_format.side_path, 'side_window': sync_format.side_window_path}
 TRANSCRIPTS = 'projects/'   # the cursor key of a transcript: this and its path below the projects folder, with `/`
-KINDS = ('request', 'history', 'gate', 'day')
+KINDS = ('request', 'history', 'gate', 'day', 'side')
 # What a source line that does not fit raises on its way to a line of the format (OSError: a time Windows
 # cannot convert)
 BAD_LINE = (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError, OSError)
@@ -296,6 +300,15 @@ class _Export:
                                       self.sync['project_aliases'], self.sync['label_salt'])
         return sync_format.day_path(self.machine_id, json.loads(line)['day']), line
 
+    def side(self, raw: bytes) -> tuple[str, str]:
+        """A line of side-calls.jsonl: its `kind` (side or side_window) picks the format and the file."""
+        values = json.loads(raw)
+        kind = values.pop('kind')
+        if kind not in SIDE_KINDS:
+            raise ValueError('no kind of a side line')
+        line = sync_format.encode(kind, values)
+        return SIDE_KINDS[kind](self.machine_id, values['t']), line
+
 
 def _out_of_time(deadline: _sync_core.Deadline | None) -> bool:
     return deadline is not None and deadline.left() <= RESERVE_S
@@ -363,3 +376,8 @@ def _export_sources(run: _Export, log_dir: str, projects_dir: str, include_gates
         run.result.complete = False
         return
     run.line_file(ARCHIVE_FILE, os.path.join(log_dir, ARCHIVE_FILE), 'day', run.day)
+    save()
+    if _out_of_time(deadline):
+        run.result.complete = False
+        return
+    run.line_file(SIDE_FILE, os.path.join(log_dir, SIDE_FILE), 'side', run.side)
