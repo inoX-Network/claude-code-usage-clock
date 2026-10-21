@@ -8,7 +8,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { ReportSlot, ReportState, SettingsSlot, SettingsState } from '../types/index'
 import { DEFAULTS } from './config'
-import { PERIODS, PERIOD_ONLY, VIEWS, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
+import { PERIODS, PERIOD_ONLY, VIEWS, localTime, parsePeriod, parseReport, reportArgv, sessionDetail, sessionList, viewLines } from './report'
 import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
@@ -103,8 +103,11 @@ async function setSettings($: EngineInterface, change: Partial<SettingsState>): 
   await update($, report, state => ({ ...state, settings: { ...state.settings, ...change } }))
 }
 
+/** Reads show --json. Only the first read of an opened /report says loading: a later one leaves the tab as it is until
+ *  the answer is there, so that its buttons, and the focus on one of them, stay in place. */
 async function loadSettings($: EngineInterface): Promise<void> {
-  await setSettings($, { slot: { status: 'loading' } })
+  await update($, report, state => (state.settings.slot !== null ? state
+    : { ...state, settings: { ...state.settings, slot: { status: 'loading' } } }))
   const run = await runSettings($, ['show', '--json'])
   let slot: SettingsSlot
   if (run.status !== 'ok') {
@@ -420,9 +423,16 @@ export function registerReport(on: On): void {
         const infoButton = (id: string) => (
           <Button key={`info-${id}`} plain onPress={toggle(id)}><Text key={`label-info-${id}`} dimColor>i</Text></Button>
         )
+        // The terminal indents with a Box, never with spaces in the text: a wrapped line stays indented. The desktop
+        // card has its own padding
+        const indent = isDesktop ? {} : { paddingLeft: 2 }
+        // Below the sentence of its part and indented once more: a Text per line, without the spaces the assistant
+        // indents with, the link of `More:` on a line of its own
         const infoText = (id: string, info: string, tab: string) => (settings.info !== id ? [] : [
-          <Text key={`info-text-${id}`} mono dimColor>{info}</Text>,
-          <Text key={`info-tab-${id}`} mono dimColor>{`  ${tab}`}</Text>,
+          <Box key={`info-text-${id}`} flexDirection="column" {...indent}>
+            {[...info.split('\n').map(line => line.trim()).flatMap(line => (line.startsWith('More: ') ? ['More:', line.slice(6)] : [line])), tab]
+              .map((line, i) => <Text key={`info-${id}-${i}`} mono dimColor>{line}</Text>)}
+          </Box>,
         ])
         const choose = (key: string, value: string) => async () => {
           const run = await runSettings($, ['set', key, value])
@@ -433,38 +443,50 @@ export function registerReport(on: On): void {
           <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
             {choice === active
               ? <Text key={`label-set-${id}-${choice}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${choiceLabel(choice)}${suffix} `}</Text>
-              : <Text key={`label-set-${id}-${choice}`}>{` ${choiceLabel(choice)} `}</Text>}
+              : <Text key={`label-set-${id}-${choice}`}>{choiceLabel(choice)}</Text>}
+          </Button>
+        )
+        // Check and Save on the plate of the marked choice, so that they read as buttons
+        const actionButton = (key: string, label: string, onPress: () => Promise<void>) => (
+          <Button key={key} plain onPress={onPress}>
+            <Text key={`label-${key}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${label} `}</Text>
           </Button>
         )
         const container = (key: string, children: unknown[]) => (isDesktop
           ? <Box key={key} flexDirection="column" width="100%" padding="md" rowGap="sm" marginBottom="sm" backgroundColor={LOOK.card} borderStyle="round" borderColor={LOOK.border}>{children}</Box>
           : <Box key={key} flexDirection="column" marginBottom={1}>{children}</Box>)
-        const heading = (id: string, label: string, summary: string, isInstalled: boolean) => (
-          <Text key={`part-${id}`}>
-            <Text key="name" weight="bold" dimColor={!isInstalled}>{label}</Text>
-            <Text key="summary" dimColor>{`  ${summary}`}</Text>
-          </Text>
+        // A row: the name on a line of its own, below it one indented block with the sentence, the buttons and what
+        // they unfold. Every row has this shape, so its buttons start in the same column
+        const heading = (id: string, label: string, isInstalled: boolean) => (
+          <Text key={`part-${id}`} weight="bold" dimColor={!isInstalled}>{label}</Text>
         )
-        const controls = (id: string, children: unknown[]) => (
-          <Box key={`controls-${id}`} flexDirection="row" flexWrap="wrap" columnGap={1}>{children}</Box>
+        const block = (id: string, children: unknown[]) => (
+          <Box key={`body-${id}`} flexDirection="column" {...(isDesktop ? { rowGap: 'sm' as const } : indent)}>{children}</Box>
+        )
+        const sentence = (id: string, summary: string) => <Text key={`summary-${id}`} dimColor>{summary}</Text>
+        const controls = (id: string, children: unknown[], look: { alignItems?: 'center' } = {}) => (
+          <Box key={`controls-${id}`} flexDirection="row" flexWrap="wrap" columnGap={isDesktop ? 1 : 2} {...look}>{children}</Box>
         )
         const absent = (id: string, label: string, summary: string) => container(`row-${id}`, [
-          heading(id, label, summary, false),
-          <Text key={`absent-${id}`} dimColor>not installed: install.py</Text>,
+          heading(id, label, false),
+          block(id, [sentence(id, summary), <Text key={`absent-${id}`} dimColor>not installed: install.py</Text>]),
         ])
         const partRow = (part: Part) => {
           if (!part.installed) return absent(part.id, part.label, part.summary)
           const active = activeChoice(part)
           return container(`row-${part.id}`, [
-            heading(part.id, part.label, part.summary, true),
-            controls(part.id, [
-              ...(part.key === null
-                ? [<Text key={`fixed-${part.id}`} dimColor>{part.tab}</Text>]
-                : part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
-                    part.value === '' && choice === active ? ' (installed)' : ''))),
-              infoButton(part.id),
+            heading(part.id, part.label, true),
+            block(part.id, [
+              sentence(part.id, part.summary),
+              // The status line has no switch: the reason stands under its sentence, its buttons are only i
+              ...(part.key === null ? [<Text key={`fixed-${part.id}`} dimColor>{part.tab}</Text>] : []),
+              controls(part.id, [
+                ...(part.key === null ? [] : part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
+                  part.value === '' && choice === active ? ' (installed)' : ''))),
+                infoButton(part.id),
+              ]),
+              ...infoText(part.id, part.info, part.tab),
             ]),
-            ...infoText(part.id, part.info, part.tab),
           ])
         }
         const checkRepo = async (name: string) => {
@@ -483,30 +505,40 @@ export function registerReport(on: On): void {
           await setSettings($, { check: null, repo: null, note: text })
           await loadSettings($)
         }
-        const syncState = [sync.last_success === null ? null : `last success ${sync.last_success}`,
+        // last_success is a UTC time, shown as the report shows its times; last_error is the category of the error
+        const syncState = [sync.last_success === null ? null : `last success ${localTime(sync.last_success)}`,
           sync.last_error === null ? null : `last error ${sync.last_error}`].filter(part => part !== null).join(' · ')
+        const input = (
+          <Input key="repo" label="owner/name" value={repo} placeholder="owner/name" submitLabel="check"
+            onInput={(value: string) => setSettings($, { repo: value })} onSubmit={(value: string) => checkRepo(value)} />
+        )
         body = [
           ...shown.modules.map(partRow),
           ...(!sync.installed ? [absent('sync', 'Sync', sync.summary)] : [
             container('row-sync', [
-              heading('sync', 'Sync', sync.summary, true),
-              controls('sync', [...sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, '')), infoButton('sync')]),
-              ...(syncState === '' ? [] : [<Text key="sync-state" dimColor>{syncState}</Text>]),
-              ...infoText('sync', sync.info, sync.tab),
+              heading('sync', 'Sync', true),
+              block('sync', [
+                sentence('sync', sync.summary),
+                controls('sync', [...sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, '')), infoButton('sync')]),
+                ...(syncState === '' ? [] : [<Text key="sync-state" dimColor>{syncState}</Text>]),
+                ...infoText('sync', sync.info, sync.tab),
+              ]),
             ]),
             container('row-repo', [
-              <Text key="part-repo" weight="bold">Sync repository</Text>,
-              controls('repo', [
-                <Input key="repo" label="owner/name " value={repo} placeholder="owner/name" submitLabel="check"
-                  onInput={(value: string) => setSettings($, { repo: value })} onSubmit={(value: string) => checkRepo(value)} />,
-                <Button key="check" plain onPress={() => checkRepo(repo)}><Text key="label-check">Check</Text></Button>,
-                ...(canSave ? [<Button key="save" plain onPress={save}><Text key="label-save" color="claude" weight="bold">Save</Text></Button>] : []),
-                infoButton('repo'),
+              heading('repo', 'Sync repository', true),
+              block('repo', [
+                // The terminal draws the field in a frame of its own, so that it reads as a field
+                controls('repo', [
+                  isDesktop ? input : <Box key="repo-field" borderStyle="round" paddingX={1}>{input}</Box>,
+                  actionButton('check', 'Check', () => checkRepo(repo)),
+                  ...(canSave ? [actionButton('save', 'Save', save)] : []),
+                  infoButton('repo'),
+                ], { alignItems: 'center' }),
+                ...(settings.check === null ? [] : [
+                  <Text key="check-text" color={settings.check.result === 'private_ok' ? 'success' : 'warning'}>{settings.check.text}</Text>,
+                ]),
+                ...infoText('repo', sync.repo_info, sync.repo_tab),
               ]),
-              ...(settings.check === null ? [] : [
-                <Text key="check-text" color={settings.check.result === 'private_ok' ? 'success' : 'warning'}>{settings.check.text}</Text>,
-              ]),
-              ...infoText('repo', sync.repo_info, sync.repo_tab),
             ]),
           ]),
           ...shown.problems.map((problem, i) => <Text key={`problem-${i}`} color="warning">{`config.json: ${problem}`}</Text>),
