@@ -902,7 +902,7 @@ def test_sync_name_in_a_dry_run_writes_nothing(machine):
     assert code == 0 and "sync.machine_name '' -> 'laptop' would be written" in out and machine.files() == before
 
 
-@pytest.mark.parametrize('bad', ['a/b', 'x' * 65, 'tab\there', 'line\n', 'c:d'])
+@pytest.mark.parametrize('bad', ['a/b', 'x' * 65, 'tab\there', 'line\n', 'c:d', ' ', '   '])
 def test_an_invalid_sync_name_is_exit_2_without_a_change(machine, monkeypatch, bad):
     machine.install_sync_entries()
     before = machine.files()

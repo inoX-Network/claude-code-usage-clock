@@ -223,7 +223,7 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.sync_repo is not None and not _config.valid_sync_repo(args.sync_repo):
         raise UsageError('--sync-repo must be owner/name as on GitHub, for example anna/usage-sync.')
     if args.sync_name is not None and not _config._MACHINE_NAME.fullmatch(args.sync_name):
-        raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _.')
+        raise UsageError('--sync-name: at most 64 letters, digits, spaces and . + @ = - _, not only spaces.')
     if ((args.sync_repo is not None or args.sync_name is not None or args.sync_mode not in (None, 'off'))
             and 'sync' not in args.components):
         raise UsageError('--sync-repo, --sync-name and --sync-mode shadow|on need the component sync (for example '
