@@ -413,3 +413,56 @@ def test_lines_nested_too_deep_are_passed_over(web, monkeypatch, cloud, capsys):
     steps = Deep(web, cloud, outcome={'decision': 'success', 'action': 'push'})
     assert run_main(web, monkeypatch, steps, '--debug-log', str(cloud / 'x.log')) == 0
     assert 'push: done' in capsys.readouterr().out
+
+
+# --- Security review v1.7: times out of order, lines too long or not yet complete -------------------------------------
+
+def test_the_span_of_the_debug_log_is_its_earliest_and_latest_time_not_its_first_and_last_line(web, tmp_path):
+    """S-A2: a clock that jumps back (a VM after NTP, two writers) gave a window that runs backwards, which the export
+    then passed over: the requests of the session counted as neither inside nor outside a debug log."""
+    lines = [*DEBUG_LOG, log_line('2026-10-21T08:30:05.500Z', 'late'), log_line('2026-10-21T08:30:05Z', 'back'),
+             log_line('2026-10-21T07:00:00Z', 'Stream started')]
+    found = web.read_debug_log(str(write_log(tmp_path / 'claude-code.log', lines)))
+    assert (found.first, found.last) == ('2026-10-21T07:00:00Z', '2026-10-21T08:30:05.500Z')
+    window = web.side_lines(SESSION, found, NOW)[-1]
+    sync_format.encode('side_window', {key: value for key, value in window.items() if key != 'kind'})
+
+
+def test_a_line_too_long_is_passed_over_with_its_rest_and_the_next_line_counts(web, tmp_path):
+    """S-A3: the debug log holds what others write; a line is read in pieces of at most 64 KB, a longer one passed
+    over to its end, also where its rest looks like a line that counts."""
+    assert web.MAX_LINE_BYTES == 64 * 1024
+    long = finished('2026-10-21T07:00:00Z', 'extract_memories').replace('types=[', 'types=[' + 'x' * 70_000)
+    planted = 'x' * (64 * 1024 + 1) + finished('2026-10-21T07:00:01Z', 'extract_memories')     # its rest a line
+    exact = finished('2026-10-21T07:00:02Z', 'extract_memories')
+    exact = exact.replace('types=[', 'types=[' + 'x' * (64 * 1024 - len(exact)))      # 64 KB before its line feed
+    found = web.read_debug_log(str(write_log(tmp_path / 'claude-code.log', [long, planted, exact, *DEBUG_LOG])))
+    assert [run['t'] for run in found.runs] == ['2026-10-21T07:00:02Z', '2026-10-21T07:09:39.057Z',
+                                                '2026-10-21T08:04:49.531Z']
+
+
+def test_a_line_too_long_never_lies_in_memory_as_a_whole(web, tmp_path):
+    """S-A3: measured before, a line of 300 MB took 626 MB (the line and its copy without the line feed)."""
+    import tracemalloc
+    path = tmp_path / 'claude-code.log'
+    with open(path, 'wb') as f:
+        f.write(b'2026-10-21T07:00:00Z [DEBUG] ' + b'x' * (8 * 1024 * 1024) + b'\n')
+        f.write((DEBUG_LOG[1] + '\n').encode('utf-8'))
+    tracemalloc.start()
+    try:
+        found = web.read_debug_log(str(path))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1024 * 1024 and found.first == '2026-10-21T07:06:13.534Z'
+
+
+def test_a_last_line_without_its_line_feed_is_not_yet_a_line(web, tmp_path):
+    """S-A5: Claude Code may be writing the last line while the export reads it; `cacheCreate=12` of `12345` would
+    stay, as the key of the run blocks the whole line at the next export."""
+    path = tmp_path / 'claude-code.log'
+    path.write_text('\n'.join([*DEBUG_LOG, finished('2026-10-21T08:30:00Z', 'extract_memories', create=12)]),
+                    encoding='utf-8')
+    found = web.read_debug_log(str(path))
+    assert [run['t'] for run in found.runs] == ['2026-10-21T07:09:39.057Z', '2026-10-21T08:04:49.531Z']
+    assert found.last == '2026-10-21T08:26:37.479Z'

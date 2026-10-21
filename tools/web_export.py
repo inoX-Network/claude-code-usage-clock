@@ -29,7 +29,8 @@ import stat
 import subprocess
 import sys
 import time
-from typing import NamedTuple
+from collections.abc import Iterator
+from typing import BinaryIO, NamedTuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'hooks'))
@@ -46,6 +47,7 @@ DEBUG_LOG = '/tmp/claude-code.log'        # where Claude Code on the web writes 
 DEFAULT_TARGET = '~/.claude/hooks/usage-clock'
 SETTINGS_FILE = 'web-settings.json'      # in the log folder: the installer needs one, the session gets no hook
 MAX_SIDE_BYTES = 8 * 1024 * 1024         # side-calls.jsonl read for the keys already written
+MAX_LINE_BYTES = 64 * 1024               # a longer line of the debug log is passed over (others write into it)
 
 # The shapes of the debug log lines that count. Each line starts with its time and level; only digits, the model and
 # lower-case source names are taken from it.
@@ -60,7 +62,7 @@ MAIN_SOURCE = b'sdk'                     # the requests of the session itself: t
 
 
 class DebugLog(NamedTuple):
-    """What the debug log says: the finished runs, the first and last time in it, and the calls outside the
+    """What the debug log says: the finished runs, the earliest and the latest time in it, and the calls outside the
     transcript that no run with token counts took up."""
     runs: list[dict]
     first: str | None
@@ -68,9 +70,16 @@ class DebugLog(NamedTuple):
     unmeasured: int
 
 
-def _time(raw: bytes) -> str:
-    """A time of the log as the sync writes it (milliseconds at most)."""
-    return sync_format.iso_time(sync_format.parse_time(raw.decode('ascii')))
+def _lines(f: BinaryIO) -> Iterator[bytes]:
+    """The complete lines of `f`, each read in pieces of at most MAX_LINE_BYTES and its line feed: a longer line is
+    passed over to its end, piece by piece (never held as a whole), and a last line without its line feed too (Claude
+    Code may still be writing it, and a run cut short would keep its wrong numbers: its key blocks the whole line)."""
+    while raw := f.readline(MAX_LINE_BYTES + 1):
+        if raw.endswith(b'\n'):
+            yield raw
+        elif len(raw) > MAX_LINE_BYTES:
+            while (rest := f.readline(MAX_LINE_BYTES + 1)) and not rest.endswith(b'\n'):
+                pass
 
 
 def read_debug_log(path: str) -> DebugLog | None:
@@ -87,15 +96,17 @@ def read_debug_log(path: str) -> DebugLog | None:
     runs, pending, model = [], {}, None
     first = last = None
     with os.fdopen(descriptor, 'rb') as f:
-        for raw in f:
+        for raw in _lines(f):
             line = LINE.fullmatch(raw.rstrip(b'\r\n'))
             if line is None:
                 continue
             try:
-                t = _time(line['t'])
+                moment = sync_format.parse_time(line['t'].decode('ascii'))
             except ValueError:      # the shape of a time, but no such moment (2026-02-30): not a line that counts
                 continue
-            first, last = first or t, t
+            t = sync_format.iso_time(moment)            # as the sync writes it (milliseconds at most)
+            first = moment if first is None else min(first, moment)     # the clock may jump back: the span is the
+            last = moment if last is None else max(last, moment)        # earliest and the latest time, not the lines
             rest = line['rest']
             if (found := DISPATCH.fullmatch(rest)) is not None:
                 model = found['model'].decode('ascii')
@@ -107,7 +118,9 @@ def read_debug_log(path: str) -> DebugLog | None:
                 runs.append({'t': t, 'src': found['src'].decode('ascii'), 'model': of, 'calls': calls,
                              'in': int(found['in']), 'cw': int(found['cw']), 'cr': int(found['cr']),
                              'out': int(found['out'])})
-    return DebugLog(runs, first, last, sum(calls for calls, _model in pending.values()))
+    unmeasured = sum(calls for calls, _model in pending.values())
+    return DebugLog(runs, None if first is None else sync_format.iso_time(first),
+                    None if last is None else sync_format.iso_time(last), unmeasured)
 
 
 def side_lines(session: str, found: DebugLog | None, now: float) -> list[dict]:
