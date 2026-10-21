@@ -21,9 +21,11 @@ for example the mode of gates that are new in this run. Two gates in different m
 instead. The first line of the assistant explains both words. Each of the eight questions starts with its step,
 `Step 1/8` to `Step 8/8`; the number is fixed, so a question that is skipped leaves a gap (no status line: step 2 is
 followed by step 4), and a follow-up question (replace, repository, name) carries the number of its question. The
-answer `i` or `?` prints a few lines about the question, what it writes into `settings.json` or `config.json` and a
-link to its section here, then asks again; it does not count as a wrong answer. At the repository and the name only `?`
-works, as `i` is an answer there. Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
+answer `h`, `i`, `?`, `help` or `--help` (in any case) prints a few lines about the question, what it writes into
+`settings.json` or `config.json` and a link to its section here, then asks again; it does not count as a wrong answer,
+and a wrong answer says so: `Please answer y or n (i = more about this question).` At the repository and the name only
+`?`, `help` and `--help` work, as `h` and `i` are answers there; a wrong answer there ends with
+`(? = more about this question)`. `Install now?` has no such lines and says only `Please answer y or n.` Then it shows the parts in plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).
 

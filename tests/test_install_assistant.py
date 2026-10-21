@@ -42,7 +42,10 @@ SYNC_REPO = 'Name of your PRIVATE repository (owner/name)'
 SYNC_NAME = 'Name of this computer in the report?'
 PLATFORM = sync_format.platform_name()
 INSTALL_NOW = 'Install now? [Y/n]'
-QUESTIONS = (STATUSLINE, REPLACE, USAGE_CLOCK, CONTEXT, SPAWN_GATE, SOFT_STOP, ENFORCE, AUTO_CONTINUE, SYNC, SYNC_REPO,
+NOT_Y_OR_N = 'Please answer y or n (i = more about this question).'       # at a question with an info
+NO_REPO = 'That is no owner/name as on GitHub, for example anna/usage-sync (? = more about this question).'
+NO_NAME = 'At most 64 letters, digits, spaces and . + @ = - _ (? = more about this question).'
+QUESTIONS =(STATUSLINE, REPLACE, USAGE_CLOCK, CONTEXT, SPAWN_GATE, SOFT_STOP, ENFORCE, AUTO_CONTINUE, SYNC, SYNC_REPO,
              SYNC_NAME)
 
 
@@ -583,7 +586,7 @@ def test_yes_and_no_in_any_case(machine, yes, no):
 
 def test_an_answer_that_is_neither_asks_the_same_question_again(machine):
     code, out = machine.ask('maybe', 'ja', 'n', '', '', '', '', '', '', 'n')
-    assert out.count(STATUSLINE) == 3 and out.count('Please answer y or n.') == 2
+    assert out.count(STATUSLINE) == 3 and out.count(NOT_Y_OR_N) == 2
     assert runs(machine.module, out)[0][:2] == ['--components', 'usage-clock,spawn-gate,soft-stop']
 
 
@@ -1025,23 +1028,23 @@ def test_the_sub_questions_carry_the_step_of_their_main_question(machine):
     assert prompt_of(out, 'Install now?') == 'Install now? [Y/n] n'
 
 
-def test_the_head_line_names_i_once(machine):
+def test_the_head_line_names_h_and_i_once(machine):
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
     head = next(line for line in out.splitlines() if line.startswith('usage-clock installer'))
-    assert 'i = more about a question' in head and out.count('i = more about a question') == 1
+    assert '; h or i = more about a question.' in head and out.count('more about a question') == 1
 
 
 def test_three_times_i_then_an_answer_is_no_failed_attempt(machine):
     code, out = machine.ask('i', 'I', '?', 'n', '', '', '', '', '', 'n', 'n')
     assert code == 0, out
     first = info_lines(machine.module, 'statusline')[0]
-    assert out.count(first) == 3 and 'Please answer y or n.' not in out
+    assert out.count(first) == 3 and 'Please answer' not in out
     assert runs(machine.module, out)[0][:2] == ['--components', 'usage-clock,spawn-gate,soft-stop']
 
 
 def test_i_does_not_reset_the_count_of_failed_attempts(machine):
     code, out = machine.ask('x', 'i', 'x', '?', 'x', 'n')
-    assert code == 2 and machine.left == ['n'] and out.count('Please answer y or n.') == 3
+    assert code == 2 and machine.left == ['n'] and out.count(NOT_Y_OR_N) == 3
 
 
 @pytest.mark.parametrize('key,answers', [
@@ -1066,7 +1069,7 @@ def test_the_info_of_replace(machine):
 
 def test_i_is_no_info_at_the_repository_but_an_answer_that_is_no_owner_name(machine):
     code, out = machine.ask('', '', '', '', '', '', '', 'y', 'i', 'I', 'i', REPO)
-    assert code == 2 and out.count('That is no owner/name') == 3 and machine.left == [REPO]
+    assert code == 2 and out.count(NO_REPO) == 3 and machine.left == [REPO]
     assert info_lines(machine.module, 'repo')[0] not in out
 
 
@@ -1078,7 +1081,79 @@ def test_i_at_the_name_is_a_name(machine):
 
 def test_install_now_has_no_info(machine):
     code, out = machine.ask('', '', '', '', '', '', '', '', 'i', 'n')
-    assert code == 0 and 'Please answer y or n.' in out
+    assert code == 0 and 'Please answer y or n.' in out and 'more about this question' not in out
+
+
+@pytest.mark.parametrize('word', ['i', 'I', '?', 'h', 'H', ' h ', 'help', 'Help', 'HELP', '--help', '--HELP'])
+def test_every_info_word_prints_the_info_and_asks_again_without_a_failed_attempt(machine, word):
+    code, out = machine.ask(word, 'n', '', '', '', '', '', '', 'n')
+    assert code == 0 and machine.left == [], out
+    assert '\n'.join(info_lines(machine.module, 'statusline')) in out
+    assert out.count(f'Step 1/8 - {STATUSLINE}') == 2 and 'Please answer' not in out
+
+
+def test_three_times_h_help_and_help_option_then_an_answer_is_no_failed_attempt(machine):
+    code, out = machine.ask('h', 'help', '--help', 'n', '', '', '', '', '', '', 'n')
+    assert code == 0, out
+    assert out.count(info_lines(machine.module, 'statusline')[0]) == 3 and 'Please answer' not in out
+
+
+def test_a_wrong_answer_at_a_question_with_info_names_the_way_to_it(machine):
+    code, out = machine.ask('', '', '', '', '', '', 'x', '', '', 'n')
+    assert code == 0 and out.count(NOT_Y_OR_N) == 1 and 'Please answer y or n.' not in out
+
+
+@pytest.mark.parametrize('word', ['h', 'help', '--help', '?'])
+def test_an_info_word_at_install_now_is_a_wrong_answer_without_the_hint(machine, word):
+    code, out = machine.ask('', '', '', '', '', '', '', '', word, word, word, 'y')
+    assert code == 2 and out.count('Please answer y or n.') == 3 and 'more about this question' not in out
+    assert machine.left == ['y'] and not machine.settings.exists()
+
+
+@pytest.mark.parametrize('word', ['?', 'help', 'HELP', '--help', '--Help'])
+def test_question_mark_help_and_help_option_print_the_info_at_the_repository(machine, word):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', word, REPO, '', 'n')
+    assert code == 0 and machine.left == [], out
+    assert '\n'.join(info_lines(machine.module, 'repo')) in out and 'That is no owner/name' not in out
+    assert ['--sync-repo', REPO] == runs(machine.module, out)[0][-4:-2]
+
+
+def test_h_is_no_info_at_the_repository_but_an_answer_that_is_no_owner_name(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', 'h', 'H', 'i', REPO)
+    assert code == 2 and out.count(NO_REPO) == 3 and machine.left == [REPO]
+    assert info_lines(machine.module, 'repo')[0] not in out
+
+
+@pytest.mark.parametrize('word', ['?', 'help', 'HELP', '--help', '--HELP'])
+def test_question_mark_help_and_help_option_print_the_info_at_the_name(machine, word):
+    # a name, not Enter, after the info word: taken as a name, it would leave Enter to Install now
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, word, 'laptop', 'n')
+    assert code == 0 and machine.left == [], out
+    assert '\n'.join(info_lines(machine.module, 'name')) in out and '\nAt most 64' not in out
+    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'laptop']
+
+
+@pytest.mark.parametrize('word', ['h', 'H'])
+def test_h_at_the_name_is_a_name(machine, word):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, word, 'n')
+    assert runs(machine.module, out)[0][-2:] == ['--sync-name', word]
+    assert info_lines(machine.module, 'name')[0] not in out
+
+
+def test_a_name_that_is_not_allowed_names_the_way_to_the_info(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, 'a/b', 'laptop', 'n')
+    assert code == 0 and out.count(NO_NAME) == 1
+    assert runs(machine.module, out)[0][-2:] == ['--sync-name', 'laptop']
+
+
+def test_enter_keeps_a_current_name_that_is_an_info_word(machine):
+    machine.install_sync_entries()
+    cfg = machine.config_data()
+    cfg['sync']['machine_name'] = 'help'
+    machine.config.write_text(json.dumps(cfg), encoding='utf-8')
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
+    assert code == 0 and runs(machine.module, out) == [['--components', 'sync']]
+    assert info_lines(machine.module, 'name')[0] not in out
 
 
 def test_every_info_has_at_most_5_lines_names_what_it_writes_and_links_its_section(machine):
