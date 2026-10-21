@@ -358,17 +358,22 @@ def prepare_clone(plan: SyncPlan) -> bool:
         if not held:
             print(LOCK_HELD)
             return False
-        result = _sync_git.check_visibility(plan.repo, directory)
+        result, reason = _sync_git.probe_visibility(plan.repo, directory)
         if result == _sync_git.PUBLIC:
             print(f'Error: {plan.repo} can be read without logging in, it is public: nothing was installed. The sync '
                   'writes only to a private repository; make it private, then run again.')
             return False
         if result != _sync_git.PRIVATE:
-            print(f'Error: whether {plan.repo} is public could not be told (no network, or an answer this tool does '
-                  'not know): nothing was installed. Run again when GitHub can be reached.')
+            why = f' (GitHub API: {reason})' if reason else ' (no network, or an answer this tool does not know)'
+            print(f'Error: whether {plan.repo} is public could not be told{why}: nothing was installed. Run again when '
+                  'GitHub can be reached.')
             return False
-        _sync_git.remember_private(directory, plan.repo, time.time())
-        print(f'Sync: {plan.repo} is not public (reading it without logging in is refused).')
+        _sync_git.remember_private(directory, plan.repo, time.time(), reason)
+        if reason == _sync_git.CREDENTIALS_INJECTED:
+            _sync_git.note_injected(plan.log_dir)
+            print(f'Sync: {plan.repo} is not public ({_sync_git.INJECTED_NOTE}).')
+        else:
+            print(f'Sync: {plan.repo} is not public (reading it without logging in is refused).')
         try:
             if os.path.lexists(plan.clone):
                 if clone_points_to(plan):

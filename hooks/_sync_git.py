@@ -27,7 +27,11 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    .netrc), GIT_DIR on the null device (no repository put into the sync folder is read), messages in C, 15 s.
    VISIBILITY_TABLE tells exit code and error text apart: readable is public (`visibility`: the core blocks every
    push until the installer runs again), a request for a user name is private (cached), anything else is unclear
-   (`network`, no push).
+   (`network`, no push). Readable asks once more, anonymously, the REST API (`ask_api`, no redirect, at most 64 KB,
+   within the same 15 s): behind a proxy that adds credentials to every request (a Claude cloud container) the
+   ls-remote reads a private repository too. `private: true` of this very repository makes it private (noted with
+   the reason `credentials_injected`, one log line); only an explicit `private: false` or `visibility` public or
+   internal makes it public; any other answer, or none, is unclear, and its log line names why.
 4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
    went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
    onto it if the work tree is clean, else after the commit (step 7b). Before every fast-forward or rebase (also those
@@ -68,6 +72,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import _config
 import _context_state
@@ -88,6 +93,12 @@ TOOL_VERSION = '1.6.0'          # `tool_version` of status.json: the release tha
 REMOTE = 'origin'
 URLS = {'https': 'https://github.com/{}.git', 'ssh': 'git@github.com:{}.git'}
 PROBE_URL = 'https://github.com/{}.git'
+API_URL = 'https://api.github.com/repos/{}'      # the second stage of the visibility probe (0034-SYNC-PROXY-SICHT)
+API_MAX_BYTES = 64 * 1024                        # a longer answer is no answer
+API_PIECE = 16 * 1024                            # read in pieces: the clock is checked between them
+CREDENTIALS_INJECTED = 'credentials_injected'    # the reason of a private result the API proved, in visibility.json
+REASONS = (CREDENTIALS_INJECTED,)
+INJECTED_NOTE = 'a proxy adds credentials to every request, the GitHub API says private'   # installer, --check
 NULL_CONFIG = '/dev/null'       # no global config; Git for Windows reads this name as NUL
 REGULAR = '100644'              # the only mode of a file the sync commits
 MEGABYTE = 1024 * 1024          # of sync.max_clone_mb
@@ -458,19 +469,119 @@ def judge(returncode: int, errors: str) -> str:
     return UNCLEAR
 
 
-def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | None = None,
-                     execute: Execute | None = None) -> str:
-    """Whether `owner/name` can be read on GitHub without logging in: PUBLIC, PRIVATE or UNCLEAR. One anonymous
-    `git ls-remote` in `directory` (the sync folder) of at most VISIBILITY_TIMEOUT_S, less if `deadline` has less
-    left; a timeout or a git that cannot be started is UNCLEAR. `execute` replaces _sync_core.run_command (tests). The
-    installer runs it too."""
-    seconds = VISIBILITY_TIMEOUT_S if deadline is None else min(VISIBILITY_TIMEOUT_S, deadline.left())
+class Visibility(NamedTuple):
+    """The result of the visibility probe and why: `reason` is CREDENTIALS_INJECTED for a private result the API
+    proved behind a proxy that adds credentials, why the API gave no answer for an UNCLEAR one it was asked for
+    (`timeout`, `http_301`, `name_mismatch` ...), else empty."""
+    result: str
+    reason: str = ''
+
+
+def api_opener():
+    """The opener of the API request: the proxy of the environment (HTTPS_PROXY), no handler that sends credentials
+    or cookies, and no redirect followed (a 3xx ends as HTTPError). urllib is loaded only here: the hooks that import
+    this module never need it."""
+    import urllib.request
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    return urllib.request.build_opener(NoRedirect)
+
+
+def ask_api(repo: str, seconds: float, opener=None,
+            clock: Callable[[], float] = time.monotonic) -> tuple[bytes | None, str]:
+    """(body, '') of one anonymous `GET API_URL` (no Authorization header, no redirect) if GitHub answered 200 with at
+    most API_MAX_BYTES within `seconds` in all; else (None, why): `timeout`, `network`, `http_<status>` (also every
+    3xx: no redirect is followed), `status_<status>` (another 2xx) or `too_large`. urllib's timeout holds for each read
+    of the socket, so the body is read in pieces against the clock. `opener` replaces api_opener() (tests)."""
+    import http.client
+    import socket
+    import urllib.error
+    import urllib.request
+    end = clock() + seconds
+    request = urllib.request.Request(API_URL.format(repo), headers={
+        'Accept': 'application/vnd.github+json', 'User-Agent': f'claude-code-usage-clock/{TOOL_VERSION}'})
+    try:
+        with (opener or api_opener()).open(request, timeout=seconds) as response:
+            if response.status != 200:
+                return None, f'status_{response.status}'
+            body = b''
+            while len(body) <= API_MAX_BYTES:
+                piece = response.read(min(API_PIECE, API_MAX_BYTES + 1 - len(body)))
+                if not piece:
+                    break
+                body += piece
+                if clock() > end:
+                    return None, 'timeout'
+    except urllib.error.HTTPError as error:
+        return None, f'http_{error.code}'
+    except urllib.error.URLError as error:
+        return None, 'timeout' if isinstance(error.reason, (socket.timeout, TimeoutError)) else 'network'
+    except (TimeoutError, socket.timeout):
+        return None, 'timeout'
+    except (OSError, ValueError, http.client.HTTPException):
+        return None, 'network'
+    return (body, '') if len(body) <= API_MAX_BYTES else (None, 'too_large')
+
+
+def judge_api(repo: str, body: bytes) -> Visibility:
+    """The answer of the API about `repo` (0034-SYNC-PROXY-SICHT v2): PUBLIC only if it says so (`private` the JSON
+    false, or `visibility` public or internal); PRIVATE with CREDENTIALS_INJECTED for `private` the JSON true with
+    `visibility` missing or "private"; both only for `full_name` this repository (in any case). Anything else is
+    UNCLEAR with the reason: `no_json`, `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`."""
+    try:
+        data = json.loads(body)
+    except (ValueError, RecursionError):        # no JSON, no UTF-8, nested too deep
+        return Visibility(UNCLEAR, 'no_json')
+    if not isinstance(data, dict):
+        return Visibility(UNCLEAR, 'not_an_object')
+    name = data.get('full_name')
+    if not isinstance(name, str) or name.lower() != repo.lower():
+        return Visibility(UNCLEAR, 'name_mismatch')
+    private, visibility = data.get('private'), data.get('visibility', 'private')
+    if private is False or visibility in ('public', 'internal'):
+        return Visibility(PUBLIC)
+    if private is not True:
+        return Visibility(UNCLEAR, 'no_private')
+    if visibility != 'private':
+        return Visibility(UNCLEAR, 'visibility_other')
+    return Visibility(PRIVATE, CREDENTIALS_INJECTED)
+
+
+def probe_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | None = None,
+                     execute: Execute | None = None,
+                     api: Callable[[str, float], tuple[bytes | None, str]] | None = None) -> Visibility:
+    """Whether `owner/name` can be read on GitHub without logging in: PUBLIC, PRIVATE or UNCLEAR, with the reason.
+    One anonymous `git ls-remote` in `directory` (the sync folder); a timeout or a git that cannot be started is
+    UNCLEAR. Only if it could read the repository, one anonymous request to the API (`api`, default ask_api): behind
+    a proxy that adds credentials to every request (a Claude cloud container) the ls-remote reads a private repository
+    too, and only the API tells them apart (judge_api). PUBLIC blocks every push until the installer runs again, so
+    only an explicit answer gives it; no answer, one that cannot be read or no time left is UNCLEAR, which pushes
+    nothing either but asks again next time. Both together take at most VISIBILITY_TIMEOUT_S, less if `deadline` has
+    less left. `execute` replaces _sync_core.run_command (tests). The installer runs it too."""
+    budget = _sync_core.Deadline(VISIBILITY_TIMEOUT_S if deadline is None
+                                 else min(VISIBILITY_TIMEOUT_S, deadline.left()))
     argv = [_sync_core.GIT, '-c', 'credential.helper=', 'ls-remote', '--heads', PROBE_URL.format(repo)]
     try:
-        done = (execute or _sync_core.run_command)(argv, _sync_core.Deadline(seconds), probe_env(directory), directory)
+        done = (execute or _sync_core.run_command)(argv, budget, probe_env(directory), directory)
     except _sync_core.SyncError:
-        return UNCLEAR
-    return judge(done.returncode, done.stderr)
+        return Visibility(UNCLEAR)
+    result = judge(done.returncode, done.stderr)
+    if result != PUBLIC:
+        return Visibility(result)
+    left = budget.left()
+    if left <= 0:
+        return Visibility(UNCLEAR, 'no_time')
+    body, why = (api or ask_api)(repo, left)
+    return Visibility(UNCLEAR, why) if body is None else judge_api(repo, body)
+
+
+def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | None = None,
+                     execute: Execute | None = None,
+                     api: Callable[[str, float], tuple[bytes | None, str]] | None = None) -> str:
+    """The result of probe_visibility alone (the Settings tab)."""
+    return probe_visibility(repo, directory, deadline, execute, api).result
 
 
 def check_access(repo: str, transport: str, directory: str, deadline: _sync_core.Deadline | None = None,
@@ -498,12 +609,21 @@ def check_access(repo: str, transport: str, directory: str, deadline: _sync_core
 def private_checked(directory: str, repo: str) -> float | None:
     """When `<directory>/visibility.json` says `repo` was found private (Unix seconds); None for a file that is
     missing, broken or of another repository. `--check` of the installer shows its age."""
+    note = _private_note(directory, repo)
+    return note[0] if note else None
+
+
+def _private_note(directory: str, repo: str) -> tuple[float, object] | None:
+    """(when, reason as written) of `<directory>/visibility.json` if it says `repo` was found private; None for a file
+    that is missing, broken or of another repository."""
     try:
         data = json.loads(_sync_core._read_small(os.path.join(directory, VISIBILITY_FILE)))
         checked = _sync_core._moment(data['checked'], 'checked') if isinstance(data, dict) else None
     except (OSError, ValueError, RecursionError, KeyError):
         return None
-    return checked if checked is not None and data.get('repo') == repo and data.get('result') == PRIVATE else None
+    if checked is None or data.get('repo') != repo or data.get('result') != PRIVATE:
+        return None
+    return checked, data.get('reason')
 
 
 def cached_private(directory: str, repo: str, now: float) -> bool:
@@ -513,10 +633,21 @@ def cached_private(directory: str, repo: str, now: float) -> bool:
     return checked is not None and 0 <= now - checked < VISIBILITY_MAX_AGE_S
 
 
-def remember_private(directory: str, repo: str, now: float) -> None:
-    """Notes that `repo` was found private at `now` (0600, atomic). A note that cannot be written is left out: the
-    next run checks again."""
-    text = json.dumps({'repo': repo, 'result': PRIVATE, 'checked': sync_format.iso_time(int(now))})
+def private_reason(directory: str, repo: str) -> str:
+    """The reason of a valid private note of `repo` in `<directory>/visibility.json` if it is one of REASONS, else
+    empty. `--check` of the installer shows it."""
+    note = _private_note(directory, repo)
+    reason = note[1] if note else None
+    return reason if isinstance(reason, str) and reason in REASONS else ''
+
+
+def remember_private(directory: str, repo: str, now: float, reason: str = '') -> None:
+    """Notes that `repo` was found private at `now` (0600, atomic), with `reason` if it is one of REASONS. A note that
+    cannot be written is left out: the next run checks again."""
+    note = {'repo': repo, 'result': PRIVATE, 'checked': sync_format.iso_time(int(now))}
+    if reason in REASONS:
+        note['reason'] = reason
+    text = json.dumps(note)
     try:
         _context_state.write_private(directory, VISIBILITY_FILE, text)
     except OSError:
@@ -527,13 +658,22 @@ def _ensure_private(run: _sync_core.Run, repo: str, execute: Execute | None) -> 
     """Step 3."""
     if cached_private(run.directory, repo, run.started):
         return
-    result = check_visibility(repo, run.directory, run.deadline, execute)
+    result, reason = probe_visibility(repo, run.directory, run.deadline, execute)
     if result == PUBLIC:
         raise _fail('visibility', 'the sync repo can be read without logging in: it is public, nothing is pushed '
                                   'until the installer runs again with --sync-repo')
     if result == UNCLEAR:
-        raise _fail('network', 'whether the sync repo is public could not be told: nothing is pushed')
-    remember_private(run.directory, repo, run.started)
+        why = f' (GitHub API: {reason})' if reason else ''
+        raise _fail('network', f'whether the sync repo is public could not be told{why}: nothing is pushed')
+    if reason == CREDENTIALS_INJECTED:
+        note_injected(run.log_dir)
+    remember_private(run.directory, repo, run.started, reason)
+
+
+def note_injected(log_dir: str) -> None:
+    """The one log line of a visibility probe that found credentials added by a proxy."""
+    _sync_core.log(log_dir, CREDENTIALS_INJECTED, 'the anonymous probe could read the sync repo because a proxy adds '
+                                                  'credentials; the GitHub API says it is private')
 
 
 # --- Fetch, fast-forward, rebase --------------------------------------------------------------------------------------

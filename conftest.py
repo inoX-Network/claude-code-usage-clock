@@ -9,6 +9,8 @@ import io
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -123,3 +125,9 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv('CCUC_USAGE_FILE', str(tmp_path / 'usage.json'))
     monkeypatch.setenv('CCUC_LOG_DIR', str(tmp_path / 'log'))
     monkeypatch.setenv('CCUC_CONFIG', str(tmp_path / 'no-config.json'))
+    # No test reaches the network through urllib (the second stage of the visibility probe asks the GitHub API)
+    monkeypatch.setattr(urllib.request.OpenerDirector, 'open', _no_network)
+
+
+def _no_network(self, *args, **kwargs):
+    raise urllib.error.URLError('a test may not reach the network')

@@ -64,6 +64,24 @@ the block. `--dry-run` shows all of this without checking or cloning. `install.p
 [Install](install.md)): repository, clone, remote, visibility with the age of its last check, last success, backoff
 and the last error, and the size of the clone (a `NOTE` from 500 MB on).
 
+**Behind a proxy that adds credentials (for example a Claude cloud container).** Some environments send every request
+to GitHub through a proxy that adds the credentials of the session, also to requests that are meant to be anonymous.
+There the anonymous `git ls-remote` reads a private repository as well, and on its own the check would call it
+public. So when the anonymous read works, the check asks the GitHub API once more, also anonymously (no
+`Authorization` header, no redirect followed, at most 64 KB, within the same 15 seconds). A truly anonymous request
+gets `404` for a private repository; an answer `200` with `"private": true` for this very repository can only come
+through such a proxy, so the repository counts as private, with the reason `credentials_injected`: the installer says
+`a proxy adds credentials to every request, the GitHub API says private`, `--check` adds it to the visibility line,
+and the log has one line `credentials_injected` per check. Only an explicit answer makes it public (`"private":
+false`, or `visibility` `public` or `internal`), which blocks the sync until the installer runs again. Any other
+answer, or none (an error, a redirect, the limit of 60 anonymous requests an hour, no answer in time, a name that
+does not fit, anything it cannot read), leaves it unclear: nothing is pushed, the next run asks again, and the log
+line of the failure names why (`GitHub API: http_429`, `timeout`, `name_mismatch` ...), so that a lasting cause such
+as a renamed repository (a redirect on every run) shows. On a computer without such a proxy the
+anonymous read is refused and the API is never asked. Be aware what this means there: the promise above, access to
+**this repository only** (a deploy key or a fine-grained token), does not hold behind such a proxy. The sync then
+writes with the credentials of the session, and those reach whatever the session may reach.
+
 Every push and pull runs in the background and never blocks Claude Code: at the end of a session, when the status line
 finds it due (every `sync.interval_min`, default 30 minutes, longer after errors), and as a pull when a session starts.
 `python3 tools/usage_report.py --sync` pushes and pulls at once.
