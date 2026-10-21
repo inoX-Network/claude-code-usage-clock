@@ -493,9 +493,33 @@ def ask_api(repo: str, seconds: float, opener=None,
             clock: Callable[[], float] = time.monotonic) -> tuple[bytes | None, str]:
     """(body, '') of one anonymous `GET API_URL` (no Authorization header, no redirect) if GitHub answered 200 with at
     most API_MAX_BYTES within `seconds` in all; else (None, why): `timeout`, `network`, `http_<status>` (also every
-    3xx: no redirect is followed), `status_<status>` (another 2xx) or `too_large`. urllib's timeout holds for each read
-    of the socket, and read(n) waits for all n bytes: the body is read with read1 (what has arrived) and the clock is
-    checked after each piece. `opener` replaces api_opener() (tests)."""
+    3xx: no redirect is followed), `status_<status>` (another 2xx) or `too_large`. urllib's timeout holds for each
+    operation of the socket, so a proxy or server that trickles its answer to CONNECT, the TLS handshake or the head
+    stretches it without end: the request runs in a daemon thread, and after `seconds` the answer is `timeout`,
+    whatever that thread still waits for. It holds no lock and writes nothing; it ends with its socket, at the latest
+    with the process (every caller is a short command: a hook, the installer, sync.py, the Settings tab). An error the
+    request does not know reaches the caller as before. `opener` replaces api_opener() (tests)."""
+    import threading
+    outcome: list = []
+
+    def request() -> None:
+        try:
+            outcome.append(_request_api(repo, seconds, opener, clock))
+        except Exception as error:      # handed on to the caller below
+            outcome.append(error)
+    worker = threading.Thread(target=request, name='usage-clock-api', daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if not outcome:
+        return None, 'timeout'
+    if isinstance(outcome[0], Exception):
+        raise outcome[0]
+    return outcome[0]
+
+
+def _request_api(repo: str, seconds: float, opener, clock: Callable[[], float]) -> tuple[bytes | None, str]:
+    """The request of ask_api. read(n) waits for all n bytes: the body is read with read1 (what has arrived) and the
+    clock is checked after each piece."""
     import http.client
     import socket
     import urllib.error
