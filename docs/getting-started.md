@@ -182,8 +182,8 @@ error instead, look at [Common problems](#common-problems). The installer change
 Code, and kept a copy of the old one (*Backup*; there is none if you had no settings yet). The *Undo* line is the
 command that puts the old file back, should you ever want that. The last line says where the finer settings are.
 
-Run the installer again later and it asks the same questions, with what is installed as the answers in brackets:
-Enter at every question changes nothing. Want to see what would change without any question? Add `--dry-run`.
+Run the installer again later and it asks the same questions, with what is installed as the answers in brackets,
+marked `(installed now)`: Enter at every question changes nothing. Want to see what would change without any question? Add `--dry-run`.
 
 **Step 5: restart Claude Code.** Close every Claude Code window and start it again. The tool is only loaded when
 Claude Code starts.

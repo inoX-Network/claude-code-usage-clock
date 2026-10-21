@@ -499,7 +499,7 @@ def test_an_installed_sync_is_offered_with_its_repository_and_kept_without_a_new
     machine.install_sync_entries(mode='on', repo='anna/usage-sync')
     monkeypatch.setattr(_sync_git, 'check_visibility', lambda *a, **k: pytest.fail('no visibility check on Enter'))
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
-    assert f'{SYNC} [Y/n]' in out and f'{SYNC_REPO} [anna/usage-sync]:' in out
+    assert f'{SYNC} [Y/n]' in out and f'{SYNC_REPO} [anna/usage-sync] (installed now):' in out
     assert f'{SYNC_NAME} [empty, shown as machine-<id>]' in out
     assert runs(machine.module, out) == [['--components', 'sync']]
 
@@ -516,7 +516,7 @@ def test_a_sync_that_is_not_installed_gets_its_repository_checked_even_if_config
     cfg['sync'].update(repo='anna/usage-sync')
     machine.config.write_text(json.dumps(cfg), encoding='utf-8')
     code, out = machine.ask('', '', '', '', '', 'y', '', '', 'n')
-    assert f'{SYNC_REPO} [anna/usage-sync]:' in out
+    assert f'{SYNC_REPO} [anna/usage-sync] (installed now):' in out
     assert runs(machine.module, out)[0][-4:] == ['--sync-repo', 'anna/usage-sync', '--sync-name', PLATFORM]
 
 
@@ -876,3 +876,72 @@ def test_sync_name_needs_the_component_and_no_uninstall_or_check(machine, monkey
     with pytest.raises(SystemExit) as stop:
         machine.module.main(argv)
     assert stop.value.code == 2 and text in screen.getvalue()
+
+
+
+# --- v3: where a default comes from -------------------------------------------------------------------------------
+
+INSTALLED = ' (installed now)'
+
+
+def prompt_of(out, question):
+    """The line of the question as the terminal shows it, with the echoed answer."""
+    return next(line for line in out.splitlines() if question in line)
+
+
+def test_a_first_install_marks_no_default_as_installed(machine):
+    machine.foreign_statusline()
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'y', REPO, '', 'n')
+    assert asked(out) == list(QUESTIONS)
+    assert 'installed now' not in out
+
+
+def test_a_second_run_marks_every_default_that_comes_from_the_installation(machine):
+    assert machine.cli('--components', ALL, '--mode', 'enforce', '--auto-continue')[0] == 0
+    machine.install_sync_entries(repo='anna/usage-sync')
+    cfg = machine.config_data()
+    cfg['sync']['machine_name'] = 'laptop'
+    machine.config.write_text(json.dumps(cfg), encoding='utf-8')
+    code, out = machine.ask('', '', '', '', '', '', '', '', '', '', 'n')
+    for question, bracket in ((STATUSLINE, '[Y/n]'), (USAGE_CLOCK, '[Y/n]'), (CONTEXT, '[Y/n]'), (SPAWN_GATE, '[Y/n]'),
+                              (SOFT_STOP, '[Y/n]'), (ENFORCE, '[Y/n]'), (AUTO_CONTINUE, '[Y/n]'), (SYNC, '[Y/n]'),
+                              (SYNC_REPO, '[anna/usage-sync]'), (SYNC_NAME, '[laptop]')):
+        assert f'{question} {bracket}{INSTALLED}' in prompt_of(out, question), question
+    assert INSTALLED not in prompt_of(out, 'Install now?')
+
+
+def test_a_part_that_is_not_installed_is_marked_too_as_its_no_comes_from_the_installation(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', '', '', '', '', 'n')
+    assert f'{STATUSLINE} [y/N]{INSTALLED}' in out and f'{SPAWN_GATE} [y/N]{INSTALLED}' in out
+    assert f'{AUTO_CONTINUE} [y/N]{INSTALLED}' in out and f'{SYNC} [y/N]{INSTALLED}' in out
+
+
+def test_the_mode_of_newly_chosen_gates_is_the_recommendation_and_not_marked(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', 'y', '', '', '', '', 'n')
+    assert f'{ENFORCE} [y/N] ' in out and INSTALLED not in prompt_of(out, ENFORCE)
+
+
+def test_gates_in_two_modes_keep_their_text(machine):
+    assert machine.cli('--components', 'spawn-gate', '--mode', 'enforce')[0] == 0
+    assert machine.cli('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    code, out = machine.ask('', '', '', '', '', '', '', 'n')
+    assert f'{ENFORCE} [y/n, Enter keeps] ' in out and INSTALLED not in prompt_of(out, ENFORCE)
+
+
+def test_replacing_a_foreign_status_line_is_never_marked(machine):
+    machine.foreign_statusline()
+    data = machine.data()
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    data = dict(machine.data(), statusLine=data['statusLine'])
+    machine.settings.write_text(json.dumps(data), encoding='utf-8')
+    code, out = machine.ask('y', '', '', '', '', '', '', '', '', 'n')
+    assert f'{REPLACE} [y/N] ' in out and INSTALLED not in prompt_of(out, REPLACE)
+
+
+def test_a_new_sync_on_a_second_run_offers_the_platform_unmarked(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', '', '', '', 'y', REPO, '', 'n')
+    assert f'{SYNC_REPO}:' in out and f'{SYNC_NAME} [{PLATFORM}] ' in out
+    assert INSTALLED not in prompt_of(out, SYNC_REPO) and INSTALLED not in prompt_of(out, SYNC_NAME)
