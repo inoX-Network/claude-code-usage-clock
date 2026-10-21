@@ -17,9 +17,11 @@ import type { Part, Shown } from './settings'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
-// The settings script: Check asks GitHub twice (each at most 15 s), Save also clones (at most 300 s)
+// The settings script: Check asks GitHub twice (VISIBILITY_TIMEOUT_S of hooks/_sync_git.py, 15 s each). Save checks
+// again, then probes once more (15 s) and clones (CLONE_TIMEOUT_S of hooks/_setup.py, 300 s): 345 s at most. 15 s
+// more each for starting Python and writing; tests/test_settings_cli.py checks both against the constants
 const SETTINGS_TIMEOUT_MS = 45_000
-const SAVE_TIMEOUT_MS = 330_000
+const SAVE_TIMEOUT_MS = 360_000
 
 const CLOSED: SettingsState = { isOpen: false, slot: null, info: null, repo: null, check: null, note: null }
 const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, own: null, slots: {}, settings: CLOSED }

@@ -521,3 +521,21 @@ def test_set_repo_whose_clone_git_cannot_check_leaves_the_reason_to_the_installe
     code, done = machine.cli('set-repo', OTHER)
     assert code == 1 and done['result'] == 'failed' and 'git did not finish in time' in done['text']
     assert machine.config_data()['sync']['repo'] == REPO
+
+
+def tab_timeout(name):
+    """A time limit of desktop/hooks/pane.tsx, in seconds."""
+    with open(os.path.join(ROOT, 'desktop', 'hooks', 'pane.tsx'), encoding='utf-8') as f:
+        return int(re.search(rf'const {name} = ([\d_]+)\n', f.read()).group(1).replace('_', '')) / 1000
+
+
+def test_the_time_limits_of_the_tab_cover_the_budgets_of_the_script():
+    """Check: the visibility probe and the check with the login. Save: both again, then with a clone there its remote
+    twice (set_repo, prepare_clone) and the probe, or without one the probe and the clone. 15 s more each for starting
+    Python and writing the answer."""
+    visibility, git, clone = _sync_git.VISIBILITY_TIMEOUT_S, settings_cli._setup.CHECK_GIT_TIMEOUT_S, \
+        settings_cli._setup.CLONE_TIMEOUT_S
+    check = 2 * visibility
+    save = check + max(git + visibility + git, visibility + clone)
+    assert (check, save) == (30, 345)
+    assert tab_timeout('SETTINGS_TIMEOUT_MS') >= check + 15 and tab_timeout('SAVE_TIMEOUT_MS') >= save + 15
