@@ -120,3 +120,15 @@ def test_config_json_is_read_changed_and_written_under_its_lock(tmp_path, monkey
     switch(path, 1)
     assert held == [True, True] and not lock_is_held(lock)
     assert json.loads(path.read_text(encoding='utf-8')) == {'log_dir': '~/x', 'modules': {'usage_clock': False}}
+
+
+def test_backups_of_one_microsecond_go_by_their_number_and_a_folder_that_cannot_be_read_removes_nothing(tmp_path):
+    path = tmp_path / 'config.json'
+    stamp = '20260101-000000-000000'
+    names = [f'{path.name}{_setup.BACKUP_INFIX}{stamp}' + (f'-{n}' if n else '') for n in range(12)]
+    for name in names:
+        (tmp_path / name).write_text('x', encoding='utf-8')
+    _setup.prune_backups(str(tmp_path / 'missing' / 'config.json'), 1)
+    assert len(backups(path)) == 12
+    _setup.prune_backups(str(path), 3)
+    assert backups(path) == sorted(names[-3:])

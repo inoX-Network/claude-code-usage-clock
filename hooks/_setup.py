@@ -38,7 +38,7 @@ TOUCHED_EVENTS = tuple(dict.fromkeys(event for entries in HOOKS.values() for eve
 TEMP_SUFFIX = '.tmp-usage-clock'
 LOCK_SUFFIX = '.lock-usage-clock'       # next to config.json: one reader-changer-writer at a time (write_keys)
 BACKUP_INFIX = '.bak-usage-clock-'
-BACKUP_STAMP = re.compile(r'\d{8}-\d{6}-\d{6}(-\d{1,3})?')        # what make_backup puts after BACKUP_INFIX
+BACKUP_STAMP = re.compile(r'(\d{8}-\d{6}-\d{6})(?:-(\d{1,3}))?')        # what make_backup puts after BACKUP_INFIX
 BACKUPS_KEPT = 10       # of config.json, which the Settings tab writes on every change; settings.json keeps all
 CLONE_TIMEOUT_S = 300           # the clone of --sync-repo, under the sync lock (no push runs meanwhile)
 CHECK_GIT_TIMEOUT_S = 15        # each git call of --check in the clone
@@ -255,9 +255,11 @@ def prune_backups(path: str, keep: int) -> None:
     folder, name = os.path.split(path)
     prefix = name + BACKUP_INFIX
     try:
-        names = sorted(n for n in os.listdir(folder) if n.startswith(prefix) and BACKUP_STAMP.fullmatch(n[len(prefix):]))
+        found = {n: BACKUP_STAMP.fullmatch(n[len(prefix):]) for n in os.listdir(folder) if n.startswith(prefix)}
     except OSError:
         return
+    # By the time, then by the -n of the same microsecond as a number (-10 after -9)
+    names = sorted((n for n, stamp in found.items() if stamp), key=lambda n: (found[n][1], int(found[n][2] or 0)))
     for old in names[:-keep]:
         try:
             if stat.S_ISREG(os.lstat(os.path.join(folder, old)).st_mode):
