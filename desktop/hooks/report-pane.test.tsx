@@ -126,7 +126,7 @@ for (const [args, flag] of [
 }
 
 for (const surface of SURFACES) {
-  test(`${surface}: the tabs are buttons with the hotkeys 1-4, a-f and r`, async ($, on) => {
+  test(`${surface}: the tabs are buttons with the hotkeys 1-4, a-h and r`, async ($, on) => {
     world(on)
     await start($)
     await report($)
@@ -137,7 +137,7 @@ for (const surface of SURFACES) {
     expect(Object.fromEntries(buttons.map(button => [button.key, button.props.hotkey]))).toEqual({
       'period-day': '1', 'period-week': open && '2', 'period-month': '3', 'period-year': '4',
       'view-overview': open && 'a', 'view-agents': 'b', 'view-models': 'c', 'view-cache': 'd', 'view-tokens': 'e', 'view-projects': 'f',
-      'view-sessions': 'g',
+      'view-sessions': 'g', 'view-settings': 'h',
       refresh: 'r',
     })
     await ui.unmount()

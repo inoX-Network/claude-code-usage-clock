@@ -469,7 +469,8 @@ export function registerReport(on: On): void {
         }
         const checkRepo = async (name: string) => {
           await setSettings($, { repo: name, check: null, note: null })
-          const run = await runSettings($, ['check-repo', name])
+          // `--`: a name that starts with a dash is a name, not an option of the script
+          const run = await runSettings($, ['check-repo', '--', name])
           if (run.status === 'ok' && typeof run.answer.result === 'string') {
             await setSettings($, { check: { result: run.answer.result, repo: name, text: String(run.answer.text ?? '') } })
           } else {
@@ -477,7 +478,7 @@ export function registerReport(on: On): void {
           }
         }
         const save = async () => {
-          const run = await runSettings($, ['set-repo', repo], SAVE_TIMEOUT_MS)
+          const run = await runSettings($, ['set-repo', '--', repo], SAVE_TIMEOUT_MS)
           const text = run.status === 'ok' && typeof run.answer.text === 'string' ? run.answer.text : noteOf(run)
           await setSettings($, { check: null, repo: null, note: text })
           await loadSettings($)

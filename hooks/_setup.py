@@ -335,6 +335,14 @@ def git_folder(path: str) -> bool:
         return False
 
 
+def clone_points_to(plan: SyncPlan) -> bool:
+    """The folder of the clone (which exists) is a git folder whose remote is the URL of plan.repo, as the push
+    requires. Raises SyncError if git cannot tell in time."""
+    url = _sync_git.remote_url(plan.repo, plan.transport)
+    return git_folder(plan.clone) and _sync_git.remote_matches(
+        _sync_git.clone_at(plan.clone, _sync_core.Deadline(CHECK_GIT_TIMEOUT_S), plan.max_mb), url)
+
+
 def prepare_clone(plan: SyncPlan) -> bool:
     """--sync-repo, before anything is written and under the sync lock (a push or pull that started meanwhile would
     find a half-made clone, and its clean-up of left-over git locks would break the clone): the visibility probe of the
@@ -359,8 +367,7 @@ def prepare_clone(plan: SyncPlan) -> bool:
         print(f'Sync: {plan.repo} is not public (reading it without logging in is refused).')
         try:
             if os.path.lexists(plan.clone):
-                if git_folder(plan.clone) and _sync_git.remote_matches(
-                        _sync_git.clone_at(plan.clone, _sync_core.Deadline(CHECK_GIT_TIMEOUT_S), plan.max_mb), url):
+                if clone_points_to(plan):
                     print(f'Sync: the clone {plan.clone} is there and points to {plan.repo} - unchanged.')
                     return True
                 print(f'Sync: {plan.clone} exists but is no clone of {url}. Move it away (it may hold commits that '

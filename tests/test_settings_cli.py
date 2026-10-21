@@ -305,6 +305,7 @@ def test_set_repo_with_an_invalid_name_changes_nothing(machine):
 
 def test_set_repo_whose_clone_fails_reports_it_and_writes_no_repo(machine):
     machine.install('--components', 'sync', '--sync-repo', REPO)
+    os.replace(machine.tmp / 'log' / 'sync' / 'repo', machine.tmp / 'old-clone')
     code, done = machine.cli('set-repo', 'nobody/missing')       # no bare repository of that name: the clone fails
     assert code == 1 and done['result'] == 'failed' and 'Nothing was installed.' in done['text']
     assert machine.config_data()['sync']['repo'] == REPO
@@ -394,3 +395,45 @@ def test_the_script_of_the_checkout_runs_as_a_program(machine):
                            'false'], capture_output=True, text=True, encoding='utf-8', timeout=30)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)['changed'] and machine.config_data()['modules']['usage_clock'] is False
+
+
+# --- A name that looks like an option, and a clone of another repository ---------------------------------------------
+
+@pytest.mark.parametrize('command', ['check-repo', 'set-repo'])
+@pytest.mark.parametrize('name', ['--help', '-x/y'])
+def test_a_name_after_double_dash_is_a_name_and_answers_json(machine, command, name):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    before = machine.tree()
+    code, done = machine.cli(command, '--', name)
+    assert code == 1 and done == dict(done, result='invalid', repo=name) and machine.tree() == before
+
+
+def test_set_repo_with_a_clone_of_another_repository_changes_nothing_and_says_how_to_go_on(machine):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    before = machine.tree()
+    code, done = machine.cli('set-repo', OTHER)
+    clone = str(machine.tmp / 'log' / 'sync' / 'repo')
+    assert code == 1 and done['result'] == 'other_clone', done
+    assert clone in done['text'] and 'Move that folder away' in done['text'] and 'never pushed' in done['text']
+    assert machine.tree() == before and machine.config_data()['sync']['repo'] == REPO
+
+
+def test_set_repo_with_a_folder_that_is_no_clone_changes_nothing(machine):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    os.replace(machine.tmp / 'log' / 'sync' / 'repo', machine.tmp / 'old-clone')
+    (machine.tmp / 'log' / 'sync' / 'repo').mkdir()
+    before = machine.tree()
+    code, done = machine.cli('set-repo', REPO)
+    assert code == 1 and done['result'] == 'other_clone' and machine.tree() == before
+
+
+def test_set_repo_whose_clone_git_cannot_check_leaves_the_reason_to_the_installer_code(machine, monkeypatch):
+    machine.install('--components', 'sync', '--sync-repo', REPO)
+    import _setup
+
+    def slow(plan):
+        raise _sync_core.SyncError('timeout', 'git did not finish in time')
+    monkeypatch.setattr(_setup, 'clone_points_to', slow)
+    code, done = machine.cli('set-repo', OTHER)
+    assert code == 1 and done['result'] == 'failed' and 'git did not finish in time' in done['text']
+    assert machine.config_data()['sync']['repo'] == REPO

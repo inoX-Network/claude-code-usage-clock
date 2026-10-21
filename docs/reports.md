@@ -113,6 +113,8 @@ and sets the sync repository, without a restart and without changing `settings.j
   --sync-repo` (`owner/name`, not readable without logging in, reachable with the login of git), which writes nothing.
   Only after it found that very name private and reachable, **Save** appears: it sets `sync.repo` and clones the
   repository, as the installer does.
+  While `<log_dir>/sync/repo` holds a clone of another repository, Save changes nothing and says so: move that folder
+  away (do not delete it, it may hold commits that were never pushed), then save again.
 - `i` on a row unfolds a few lines about the part, the same text the installer's assistant prints on `i`, and what the
   switch here does differently.
 

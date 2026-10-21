@@ -54,6 +54,9 @@ RESULTS = {
     'not_found_or_no_access': '{repo} does not exist, or this login cannot reach it: check the name, and that git is '
                               'signed in to GitHub.',
     'invalid': '{repo} is no owner/name as on GitHub, for example anna/usage-sync.',
+    'other_clone': 'The tab does not change the repository while {clone} holds a clone of another one (or something '
+                   'else). Move that folder away, do not delete it: it may hold commits that were never pushed. Then '
+                   'save again.',
 }
 
 
@@ -141,6 +144,12 @@ def set_repo(repo: str, cfg: dict, path: str) -> int:
     plan = _setup.SyncPlan(path, True, {'repo': repo} if old != repo else {},
                            [f'sync.repo {old!r} -> {repo!r}'] if old != repo else [], cfg['sync']['mode'], 'config.json',
                            repo, cfg['sync']['transport'], cfg['sync']['max_clone_mb'], _setup.log_dir_of(cfg))
+    try:
+        other = os.path.lexists(plan.clone) and not _setup.clone_points_to(plan)
+    except _sync_core.SyncError:      # git could not tell: prepare_clone asks again and names the reason
+        other = False
+    if other:      # before anything is written: prepare_clone would stop there too, with the cache of the probe written
+        return answer({'result': 'other_clone', 'repo': repo, 'text': RESULTS['other_clone'].format(clone=plan.clone)}, 1)
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):      # the lines of the installer become the text of the answer
         blocked = _setup.sync_blocked(plan)
