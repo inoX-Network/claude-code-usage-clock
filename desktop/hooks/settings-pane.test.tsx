@@ -41,13 +41,17 @@ function shown(values: Record<string, unknown> = {}) {
 }
 
 function world(on: On, options: { hasCli?: boolean; check?: string; save?: string } = {}) {
-  const seen = { runs: [] as (readonly string[])[], values: {} as Record<string, unknown> }
+  const seen = { runs: [] as (readonly string[])[], values: {} as Record<string, unknown>, asked: [] as string[] }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }))
   on('session.start', ($, e) => e)
   on('fs.read', () => ({ deny: 'ENOENT' }))
-  on('fs.exists', ($, e) => ({ value: e.path === CLI ? (options.hasCli ?? true) : true }))
+  // By the file name: the engine may hand the hook the path resolved, not as the plugin wrote it
+  on('fs.exists', ($, e) => {
+    seen.asked.push(e.path)
+    return { value: /[\\/]settings_cli\.py$/.test(e.path) ? (options.hasCli ?? true) : true }
+  })
   on('settings.read', () => ({ value: { statusLine: { type: 'command', command: COMMAND } } }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.focus', () => ({}))
@@ -227,6 +231,9 @@ for (const surface of SURFACES) {
   test(`${surface}: without settings_cli.py the tab is the one update line`, async ($, on) => {
     const seen = world(on, { hasCli: false })
     const ui = await open($, surface)
+    // The tab asked for the script next to the status line, was told there is none, and ran nothing
+    expect(seen.asked.filter(path => /[\\/]settings_cli\.py$/.test(path)).length).toBeGreaterThan(0)
+    expect(await ui.find({ type: 'Text', text: /needs a newer installation/ })).toBeDefined()
     expect(await hasText(ui, UPDATE_LINE)).toBe(true)
     expect(await ui.find({ key: 'row-usage_clock' })).toBeUndefined()
     expect(await ui.find({ key: 'repo' })).toBeUndefined()
