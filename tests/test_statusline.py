@@ -12,7 +12,7 @@ import pytest
 
 import _config
 import statusline
-from conftest import HOOKS
+from conftest import HOOKS, ROOT
 
 SCRIPT = os.path.join(HOOKS, 'statusline.py')
 GRAY, YELLOW, RED, RESET = statusline.GRAY, statusline.YELLOW, statusline.RED, statusline.RESET
@@ -706,9 +706,9 @@ def test_a_failing_sync_check_changes_neither_the_line_nor_the_exit_code(tmp_pat
 # --- A gate that modules of config.json takes the teeth from ---------------------------------------------------------
 
 def gate_settings(tmp_path, *entries, folder=HOOKS):
-    """settings.json with an entry per (script, mode) that runs the script in `folder`."""
-    hooks = [{'type': 'command', 'command': f'python3 {shlex.quote(os.path.join(folder, script))} --mode={mode} || true'}
-             for script, mode in entries]
+    """settings.json with an entry per (script, options) that runs the script in `folder`."""
+    hooks = [{'type': 'command', 'command': f'python3 {shlex.quote(os.path.join(folder, script))} {options} || true'}
+             for script, options in entries]
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps({'hooks': {'PreToolUse': [{'matcher': '*', 'hooks': hooks}]}}), encoding='utf-8')
     return str(path)
@@ -720,24 +720,21 @@ def modules(**values):
     return cfg
 
 
-@pytest.mark.parametrize('value,mode,expected', [('off', 'enforce', ['spawn gate off']),
-                                                 ('off', 'shadow', ['spawn gate off']),
-                                                 ('shadow', 'enforce', ['spawn gate shadow']),
-                                                 ('shadow', 'shadow', []), ('', 'enforce', []), ('', 'shadow', []),
-                                                 ('enforce', 'shadow', []), ('enforce', 'enforce', [])])
-def test_a_marker_names_an_installed_gate_that_modules_switches_off_or_down_to_shadow(tmp_path, value, mode, expected):
-    settings = gate_settings(tmp_path, ('spawn_gate.py', mode))
-    assert statusline.gate_markers(modules(spawn_gate=value), settings, HOOKS) == expected
+def marker_cases():
+    """The cases of desktop/hooks/gate-markers-fixture.ts, which the plugin's line.test.ts runs against gateMarkers:
+    everything after the `=` is JSON."""
+    with open(os.path.join(ROOT, 'desktop', 'hooks', 'gate-markers-fixture.ts'), encoding='utf-8') as f:
+        return json.loads(f.read().split(' = ', 1)[1])
 
 
-def test_both_gates_get_a_marker_each_in_a_fixed_order(tmp_path):
-    settings = gate_settings(tmp_path, ('soft_stop.py', 'enforce'), ('spawn_gate.py', 'enforce'))
-    assert statusline.gate_markers(modules(spawn_gate='shadow', soft_stop='off'), settings, HOOKS) == [
-        'spawn gate shadow', 'soft stop off']
+@pytest.mark.parametrize('case', marker_cases(), ids=lambda case: json.dumps(case))
+def test_each_case_of_the_shared_fixture_gives_its_markers_word_for_word(tmp_path, case):
+    settings = gate_settings(tmp_path, *[tuple(entry) for entry in case['entries']])
+    assert statusline.gate_markers(modules(**case['modules']), settings, HOOKS) == case['markers']
 
 
 def test_a_gate_that_is_not_installed_here_gets_no_marker(tmp_path):
-    elsewhere = gate_settings(tmp_path, ('spawn_gate.py', 'enforce'), folder=str(tmp_path / 'other'))
+    elsewhere = gate_settings(tmp_path, ('spawn_gate.py', '--mode=enforce'), folder=str(tmp_path / 'other'))
     assert statusline.gate_markers(modules(spawn_gate='off'), elsewhere, HOOKS) == []
     assert statusline.gate_markers(modules(spawn_gate='off'), str(tmp_path / 'missing.json'), HOOKS) == []
 
@@ -750,7 +747,7 @@ def test_a_settings_json_that_cannot_be_read_gives_no_marker_and_no_error(tmp_pa
 
 
 def test_without_a_gate_set_by_modules_settings_json_is_not_read(tmp_path, monkeypatch):
-    settings, opened, real = gate_settings(tmp_path, ('spawn_gate.py', 'enforce')), [], open
+    settings, opened, real = gate_settings(tmp_path, ('spawn_gate.py', '--mode=enforce')), [], open
 
     def recording(path, *args, **kwargs):
         opened.append(path)
@@ -769,7 +766,7 @@ def test_the_markers_follow_the_week_in_red_before_the_context():
 
 def test_the_installed_status_line_shows_the_marker_of_a_gate_switched_off(tmp_path):
     (tmp_path / 'home' / '.claude').mkdir(parents=True, exist_ok=True)
-    gate_settings(tmp_path / 'home' / '.claude', ('spawn_gate.py', 'enforce'))
+    gate_settings(tmp_path / 'home' / '.claude', ('spawn_gate.py', '--mode=enforce'))
     (tmp_path / 'no-config.json').write_text(json.dumps({'modules': {'spawn_gate': 'off'}}), encoding='utf-8')
     done = run({'model': {'display_name': 'M'}}, tmp_path)
     assert done.returncode == 0 and 'spawn gate off' in plain(done.stdout), done.stdout + done.stderr

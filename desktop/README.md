@@ -194,7 +194,9 @@ claude plugin test desktop
 ```
 
 The tests of the pane run on the terminal and on the desktop surface, against a fixed example of
-`usage_report.py --json` (`hooks/report-fixture.ts`) and with no process started.
+`usage_report.py --json` (`hooks/report-fixture.ts`) and with no process started. The cases of the gate markers
+(`hooks/gate-markers-fixture.ts`) are one list for both sides: `line.test.ts` runs them against the plugin, and
+`tests/test_statusline.py` against `hooks/statusline.py`, so that the two lines cannot drift apart.
 
 The CI runs both on Linux and Windows (job `plugin` in `.github/workflows/tests.yml`), with the Claude Code version
 pinned there: the plugin API and its test engine come with it, so raise it there when the plugin needs a newer one.
