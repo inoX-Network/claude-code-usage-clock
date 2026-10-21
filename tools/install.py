@@ -968,6 +968,8 @@ SUFFIXES = {True: '[Y/n]', False: '[y/N]', None: '[y/n, Enter keeps]'}       # b
 # default: there is nothing installed for it, the safe start applies)
 LEGEND = '(current) = Enter keeps what you have now \u00b7 (default) = the safe start for something new'
 STEPS = 8               # the main questions; a sub-question carries the number of its main question
+INFO_WORDS = ('i', '?', 'h', 'help', '--help')      # answers in any case that print the info of a question
+TEXT_INFO_WORDS = ('?', 'help', '--help')           # at the repository and the name, where h and i are answers
 
 
 class Abort(Exception):
@@ -1040,7 +1042,8 @@ def _step(step: int | None) -> str:
 def ask(explanation: str | None, question: str, default: bool | None, origin: str | None = None,
         step: int | None = None, info: str | None = None) -> bool | None:
     """y, yes, n or no in any case; Enter takes `default` (None: keep, for two gates in different modes). `origin`
-    (current or default) is shown after the brackets. i or ? prints INFO[info] and asks again, no failed attempt."""
+    (current or default) is shown after the brackets. An info word prints INFO[info] and asks again, no failed
+    attempt."""
     print()
     if explanation:
         print(explanation)
@@ -1054,11 +1057,11 @@ def ask(explanation: str | None, question: str, default: bool | None, origin: st
             return True
         if answer in ('n', 'no'):
             return False
-        if info and answer in ('i', '?'):
+        if info and answer in INFO_WORDS:
             print('\n'.join(INFO[info]))
             continue
         failed += 1
-        print('Please answer y or n.')
+        print('Please answer y or n (i = more about this question).' if info else 'Please answer y or n.')
     raise Abort(2, f'{ATTEMPTS} answers that were not y or n')
 
 
@@ -1070,14 +1073,15 @@ def ask_repo(default: str) -> str:
               + (f' [{default}] (current)' if default else '') + ': ')
     failed = 0
     while failed < ATTEMPTS:
-        answer = _read(prompt) or default
-        if _config.valid_sync_repo(answer):
-            return answer
-        if answer == '?':       # only ?: i is an answer here (no owner/name, so a failed attempt)
+        typed = _read(prompt)
+        if typed.lower() in TEXT_INFO_WORDS:        # h and i are answers here (no owner/name, so a failed attempt)
             print('\n'.join(INFO['repo']))
             continue
+        answer = typed or default
+        if _config.valid_sync_repo(answer):
+            return answer
         failed += 1
-        print('That is no owner/name as on GitHub, for example anna/usage-sync.')
+        print('That is no owner/name as on GitHub, for example anna/usage-sync (? = more about this question).')
     raise Abort(2, f'{ATTEMPTS} answers that were no owner/name')
 
 
@@ -1088,14 +1092,16 @@ def ask_name(default: str, origin: str) -> str:
               f'{_label(origin)} ')
     failed = 0
     while failed < ATTEMPTS:
-        answer = _read(prompt) or default
-        if answer == '?':       # only ?: i is a valid name
+        typed = _read(prompt)
+        # h and i are valid names; only what is typed, so Enter keeps a name that is an info word
+        if typed.lower() in TEXT_INFO_WORDS:
             print('\n'.join(INFO['name']))
             continue
+        answer = typed or default
         if _config._MACHINE_NAME.fullmatch(answer):
             return answer
         failed += 1
-        print('At most 64 letters, digits, spaces and . + @ = - _.')
+        print('At most 64 letters, digits, spaces and . + @ = - _ (? = more about this question).')
     raise Abort(2, f'{ATTEMPTS} names that were not allowed')
 
 
@@ -1214,8 +1220,8 @@ def assistant() -> int:
         print(f'Error: {error}')
         return 2
     state = installed_state(data, target)
-    print(f'usage-clock installer: a few questions, Enter takes the answer in [brackets]: {LEGEND}; i = more about a '
-          'question. Nothing is written before you confirm. Options for scripts: --help.')
+    print(f'usage-clock installer: a few questions, Enter takes the answer in [brackets]: {LEGEND}; h or i = more '
+          'about a question. Nothing is written before you confirm. Options for scripts: --help.')
     print(f'Settings: {settings_path}')
     print(f'Target:   {target}')
     try:
