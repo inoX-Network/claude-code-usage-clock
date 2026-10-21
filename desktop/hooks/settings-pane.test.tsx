@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { localTime } from './report'
 import { REPORT } from './report-fixture'
 import { INVALID_REPO, UPDATE_LINE, parseAnswer, validRepo } from './settings'
+import { LOOK } from './tiles'
 
 const COMMAND = '"C:/Python314/python.exe" -X utf8 "C:/Users/you/.claude/hooks/usage-clock/statusline.py"'
 const CLI = 'C:/Users/you/.claude/hooks/usage-clock/settings_cli.py'
@@ -22,18 +23,18 @@ const part = (id: string, label: string, installed: boolean, key: string | null,
 })
 
 /** What `settings_cli.py show --json` answers: the usage clock and the spawn gate installed, the soft stop not. */
-function shown(values: Record<string, unknown> = {}, sync: Record<string, unknown> = {}) {
+function shown(values: Record<string, unknown> = {}, sync: Record<string, unknown> = {}, info?: string) {
   return {
     modules: [
       part('statusline', 'Status line', true, null, null, []),
       part('usage_clock', 'Usage clock', true, 'modules.usage_clock', values.usage_clock ?? true, ['true', 'false']),
       part('context_reporter', 'Context reporter', true, 'modules.context_reporter', true, ['true', 'false']),
       part('spawn_gate', 'Spawn gate', true, 'modules.spawn_gate', values.spawn_gate ?? '', ['off', 'shadow', 'enforce'],
-        { installed_mode: 'shadow' }),
+        { installed_mode: 'shadow', ...(info === undefined ? {} : { info }) }),
       part('soft_stop', 'Soft stop', false, 'modules.soft_stop', '', ['off', 'shadow', 'enforce'], { installed_mode: null }),
     ],
     sync: {
-      installed: true, repo: 'anna/usage-sync', mode: 'shadow', choices: ['off', 'shadow', 'on'], summary: 'What the sync does.',
+      installed: true, repo: 'anna/usage-sync', mode: values.mode ?? 'shadow', choices: ['off', 'shadow', 'on'], summary: 'What the sync does.',
       last_success: null, last_error: null, info: '  About the sync.', tab: 'Sync in the tab.', repo_info: '  About the repo.',
       repo_tab: 'Check and Save.', ...sync,
     },
@@ -44,7 +45,7 @@ function shown(values: Record<string, unknown> = {}, sync: Record<string, unknow
 /** Holds every show --json from the `from`-th on: `asked` is called when one comes, it answers once `until` settles. */
 type Hold = { from: number; asked: () => void; until: Promise<void> }
 
-function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; hold?: Hold } = {}) {
+function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; info?: string; hold?: Hold } = {}) {
   const seen = { runs: [] as (readonly string[])[], values: {} as Record<string, unknown>, asked: [] as string[], shows: 0 }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
@@ -71,7 +72,7 @@ function world(on: On, options: { hasCli?: boolean; check?: string; save?: strin
         options.hold.asked()
         await options.hold.until
       }
-      outcome = { exitCode: 0, stdout: JSON.stringify(shown(seen.values, options.sync)), stderr: '' }
+      outcome = { exitCode: 0, stdout: JSON.stringify(shown(seen.values, options.sync, options.info)), stderr: '' }
     } else if (e.argv[4] === 'set') {
       const key = String(e.argv[5]).split('.')[1] as string
       seen.values[key] = e.argv[6] === 'true' ? true : e.argv[6] === 'false' ? false : e.argv[6]
@@ -89,16 +90,20 @@ function world(on: On, options: { hasCli?: boolean; check?: string; save?: strin
   return seen
 }
 
-async function open($: Engine, surface: Surface) {
+async function mount($: Engine, surface: Surface, bodyColumns = 100) {
   await $.session.start({ cwd: 'C:/proj', surface: 'terminal', isInteractive: true })
   await $.command.run({ command: 'report', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } })
-  const ui = await $.ui.mount({
+  return $.ui.mount({
     plugin: 'usage-clock-display',
     surface,
     component: 'Pane',
     requestId: 'usage-report',
-    props: { title: 'Usage report', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    props: { title: 'Usage report', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
   })
+}
+
+async function open($: Engine, surface: Surface, bodyColumns = 100) {
+  const ui = await mount($, surface, bodyColumns)
   await ui.press({ key: 'view-settings' })
   return ui
 }
@@ -127,6 +132,41 @@ async function exact(ui: Pane, text: string) {
 async function hasText(ui: Pane, text: string): Promise<boolean> {
   return (await ui.find({ type: 'Text', text })) !== undefined
 }
+
+/** Check as the surface offers it: the terminal's own button, the desktop's button of the field, which submits it. */
+async function check(ui: Pane, surface: Surface) {
+  if (surface === 'terminal') {
+    await ui.press({ key: 'check' })
+  } else {
+    await ui.input({ key: 'repo', text: String((await ui.find({ key: 'repo' }))?.props.value) })
+  }
+}
+
+/** The keys of the Buttons anywhere below an element as drawn. */
+function buttonsIn(node: unknown): string[] {
+  if (typeof node !== 'object' || node === null) return []
+  const element = node as { type?: unknown; props?: Record<string, unknown>; children?: unknown[] }
+  return [...(element.type === 'Button' ? [String(element.props?.key)] : []), ...(element.children ?? []).flatMap(buttonsIn)]
+}
+
+type Drawn = { type: string; props: Record<string, unknown>; children: unknown[] }
+
+/** The elements an element holds as drawn, strings left out. */
+function elementsIn(node: { children: unknown[] } | undefined): Drawn[] {
+  return (node?.children ?? []).filter((child): child is Drawn => typeof child === 'object' && child !== null)
+}
+
+/** The plates of the accent colour: what the desktop shows of a marked button, as its own label colours do not show. */
+async function plates(ui: Pane) {
+  return (await ui.findAll({ type: 'Box' })).filter(box => box.props.backgroundColor === LOOK.accent)
+}
+
+/** The Buttons that stand on such a plate. */
+async function onPlate(ui: Pane): Promise<string[]> {
+  return [...new Set((await plates(ui)).flatMap(buttonsIn))]
+}
+
+const choices = (keys: (string | undefined)[]) => keys.filter((key): key is string => key?.startsWith('set-') === true)
 
 for (const surface of SURFACES) {
   test(`${surface}: Settings is a tab with the key h and reads show --json next to the status line`, async ($, on) => {
@@ -220,14 +260,14 @@ for (const surface of SURFACES) {
     const seen = world(on)
     const ui = await open($, surface)
     expect(await ui.find({ key: 'save' })).toBeUndefined()
-    await ui.press({ key: 'check' })
+    await check(ui, surface)
     expect(settingsRuns(seen).at(-1)).toEqual([...PREFIX, 'check-repo', '--', 'anna/usage-sync'])
     expect(await rowText(ui, 'repo')).toContain('Result private_ok.')
     expect(await ui.find({ key: 'save' })).toBeDefined()
     // Another name typed: its Check has not run, so there is no Save for it
     await ui.input({ key: 'repo', text: 'anna/other', kind: 'change' })
     expect(await ui.find({ key: 'save' })).toBeUndefined()
-    await ui.press({ key: 'check' })
+    await check(ui, surface)
     await ui.press({ key: 'save' })
     expect(settingsRuns(seen).slice(-2)).toEqual([[...PREFIX, 'set-repo', '--', 'anna/other'], [...PREFIX, 'show', '--json']])
     expect(await hasText(ui, 'Sync: cloned.')).toBe(true)
@@ -237,7 +277,7 @@ for (const surface of SURFACES) {
   test(`${surface}: a save that finds a clone of another repository shows its text and changes nothing`, async ($, on) => {
     const seen = world(on, { save: 'other_clone' })
     const ui = await open($, surface)
-    await ui.press({ key: 'check' })
+    await check(ui, surface)
     await ui.press({ key: 'save' })
     expect(settingsRuns(seen).at(-2)).toEqual([...PREFIX, 'set-repo', '--', 'anna/usage-sync'])
     expect(await hasText(ui, 'Move that folder away, do not delete it.')).toBe(true)
@@ -248,7 +288,7 @@ for (const surface of SURFACES) {
   test(`${surface}: a check that is not private_ok shows its result and no Save`, async ($, on) => {
     world(on, { check: 'not_found_or_no_access' })
     const ui = await open($, surface)
-    await ui.press({ key: 'check' })
+    await check(ui, surface)
     expect(await rowText(ui, 'repo')).toContain('Result not_found_or_no_access.')
     expect(await ui.find({ key: 'save' })).toBeUndefined()
     await ui.unmount()
@@ -296,7 +336,7 @@ for (const surface of SURFACES) {
     const until = new Promise<void>(resolve => { release = resolve })
     world(on, { hold: { from: 2, asked: () => asked(), until } })
     const ui = await open($, surface)
-    await ui.press({ key: 'check' })
+    await check(ui, surface)
     const keys = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
     const before = await keys()
     expect(before).toContain('save')
@@ -434,6 +474,176 @@ test('terminal: the tab as text, top to bottom', async ($, on) => {
     expect([line, found >= 0]).toEqual([line, true])
     at = found + line.length
   }
+  await ui.unmount()
+})
+
+// The info of the spawn gate as _setup.INFO holds it: lines broken for a terminal, mid-sentence
+const GATE_INFO = '  Checks every start of an agent, workflow or skill: no new block from 75 % of the 5-hour usage, a warning or\n'
+  + '  a stop near the weekly limit, and model and effort in the agent definitions (thresholds in config.json).\n'
+  + '  Writes: a PreToolUse hook (spawn_gate.py, matcher Agent|Workflow|Skill) in\n'
+  + '  settings.json.\n'
+  + '  More: https://x/blob/main/docs/gates.md#the-two-gates'
+
+for (const surface of SURFACES) {
+  test(`${surface}: the info is a paragraph; a line starts only before Writes: and More:, the tab sentence apart`, async ($, on) => {
+    world(on, { info: GATE_INFO })
+    const ui = await open($, surface)
+    await ui.press({ key: 'info-spawn_gate' })
+    expect(await exact(ui, 'Checks every start of an agent, workflow or skill: no new block from 75 % of the 5-hour usage, a warning or '
+      + 'a stop near the weekly limit, and model and effort in the agent definitions (thresholds in config.json).')).toBeDefined()
+    expect(await exact(ui, 'Writes: a PreToolUse hook (spawn_gate.py, matcher Agent|Workflow|Skill) in settings.json.')).toBeDefined()
+    expect(await exact(ui, 'In the tab Spawn gate works so.')).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /a warning or$/ })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('terminal: the link of the info stays a line of its own after More:', async ($, on) => {
+  world(on, { info: GATE_INFO })
+  const ui = await open($, 'terminal')
+  await ui.press({ key: 'info-spawn_gate' })
+  expect(await exact(ui, 'More:')).toBeDefined()
+  expect(await exact(ui, 'https://x/blob/main/docs/gates.md#the-two-gates')).toBeDefined()
+  expect(await ui.find({ type: 'Link' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('desktop: the active choice of every group stands on the plate of the open tab, no other choice', async ($, on) => {
+  world(on)
+  const ui = await open($, 'desktop')
+  const buttons = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
+  expect(choices(await onPlate(ui))).toEqual(['set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
+  expect(choices(await buttons())).toHaveLength(10)
+  // The plate of a choice is the plate of the open tab
+  const looks = (await plates(ui)).map(({ props }) => ({ ...props, key: undefined, children: undefined }))
+  expect(looks.length).toBeGreaterThan(4)
+  for (const look of looks) expect(look).toEqual(looks[0])
+  await ui.press({ key: 'set-spawn_gate-enforce' })
+  await ui.press({ key: 'set-usage_clock-false' })
+  await ui.press({ key: 'set-sync-on' })
+  expect(choices(await onPlate(ui))).toEqual(['set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
+  await ui.unmount()
+})
+
+test('desktop: the choices of a part stand in a framed group, i outside it on the right', async ($, on) => {
+  world(on)
+  const ui = await open($, 'desktop')
+  for (const [id, keys] of [['usage_clock', ['true', 'false']], ['context_reporter', ['true', 'false']],
+    ['spawn_gate', ['off', 'shadow', 'enforce']], ['sync', ['off', 'shadow', 'on']]] as const) {
+    const group = await ui.find({ key: `group-${id}` })
+    expect([id, group?.props.borderStyle, group?.props.borderColor]).toEqual([id, 'round', LOOK.border])
+    expect([id, buttonsIn(group)]).toEqual([id, keys.map(choice => `set-${id}-${choice}`)])
+    expect([id, buttonsIn(await ui.find({ key: `controls-${id}` })).at(-1)]).toEqual([id, `info-${id}`])
+  }
+  expect(await ui.find({ key: 'group-statusline' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('desktop: the head of a card is the name and its state as a small label in capitals', async ($, on) => {
+  world(on)
+  const ui = await open($, 'desktop')
+  // The engine finds a Text by its text only: the name and the label are the Texts of the head
+  const head = async (id: string) => elementsIn(await ui.find({ key: `head-${id}` }))
+  const state = async (id: string) => {
+    const label = (await head(id))[1]
+    return label === undefined ? undefined : [label.children.join(''), label.props.color, label.props.size]
+  }
+  for (const [id, name] of [['statusline', 'Status line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'], ['sync', 'Sync']]) {
+    const [text] = await head(id)
+    expect([id, text?.type, text?.children.join(''), text?.props.weight, text?.props.color]).toEqual([id, 'Text', name, 'semibold', LOOK.text])
+  }
+  expect(await state('statusline')).toBeUndefined()
+  expect(await state('usage_clock')).toEqual(['ON', LOOK.accent, 'caption'])
+  expect(await state('context_reporter')).toEqual(['ON', LOOK.accent, 'caption'])
+  expect(await state('spawn_gate')).toEqual(['SHADOW', LOOK.warning, 'caption'])
+  expect(await state('soft_stop')).toEqual(['NOT INSTALLED', LOOK.muted, 'caption'])
+  expect(await state('sync')).toEqual(['SHADOW', LOOK.warning, 'caption'])
+  // The name and the label share a row
+  expect((await ui.find({ key: 'head-spawn_gate' }))?.props.flexDirection).toBe('row')
+  expect((await ui.find({ key: 'head-spawn_gate' }))?.text).toContain('SHADOW')
+  await ui.press({ key: 'set-usage_clock-false' })
+  await ui.press({ key: 'set-spawn_gate-enforce' })
+  await ui.press({ key: 'set-sync-on' })
+  expect(await state('usage_clock')).toEqual(['OFF', LOOK.muted, 'caption'])
+  expect(await state('spawn_gate')).toEqual(['ENFORCE', LOOK.accent, 'caption'])
+  expect(await state('sync')).toEqual(['ON', LOOK.accent, 'caption'])
+  await ui.press({ key: 'set-spawn_gate-off' })
+  await ui.press({ key: 'set-sync-off' })
+  expect(await state('spawn_gate')).toEqual(['OFF', LOOK.muted, 'caption'])
+  expect(await state('sync')).toEqual(['OFF', LOOK.muted, 'caption'])
+  await ui.unmount()
+})
+
+test('desktop: the sentence and the texts beside it are muted, as the footnotes of the tiles', async ($, on) => {
+  world(on, { sync: { last_success: '2026-10-21T12:33:45Z', last_error: null } })
+  const ui = await open($, 'desktop')
+  for (const text of ['What Usage clock does.', 'What Soft stop does.', 'What the sync does.', 'In the tab Status line works so.',
+    'not installed: install.py', `last success ${localTime('2026-10-21T12:33:45Z')}`]) {
+    const found = await exact(ui, text)
+    expect([text, found?.props.color, found?.props.size]).toEqual([text, LOOK.muted, 'footnote'])
+  }
+  await ui.unmount()
+})
+
+test('desktop: the cards of the parts stand side by side, at most two; Sync and its repository span the width', async ($, on) => {
+  world(on)
+  for (const [columns, width] of [[100, '49%'], [140, '49%'], [40, '100%']] as const) {
+    const ui = await open($, 'desktop', columns)
+    for (const id of ['statusline', 'usage_clock', 'context_reporter', 'spawn_gate', 'soft_stop']) {
+      expect([columns, id, (await ui.find({ key: `row-${id}` }))?.props.width]).toEqual([columns, id, width])
+    }
+    expect((await ui.find({ key: 'row-sync' }))?.props.width).toBe('100%')
+    expect((await ui.find({ key: 'row-repo' }))?.props.width).toBe('100%')
+    await ui.unmount()
+  }
+})
+
+test('desktop: a card of the tab is a card of the other views', async ($, on) => {
+  world(on)
+  const ui = await mount($, 'desktop')
+  const look = (props: Record<string, unknown> | undefined) => ({ ...props, key: undefined, width: undefined, children: undefined })
+  const tile = (await ui.find({ key: 'kpi-week' }))?.props
+  expect(tile?.backgroundColor).toBe(LOOK.card)
+  await ui.press({ key: 'view-settings' })
+  for (const id of ['usage_clock', 'soft_stop', 'sync', 'repo']) {
+    expect([id, look((await ui.find({ key: `row-${id}` }))?.props)]).toEqual([id, look(tile)])
+  }
+  await ui.unmount()
+})
+
+test('desktop: one Check, the button of the field; Save stands on the plate', async ($, on) => {
+  const seen = world(on)
+  const ui = await open($, 'desktop')
+  expect((await ui.find({ key: 'repo' }))?.props.submitLabel).toBe('Check')
+  expect(await ui.find({ key: 'check' })).toBeUndefined()
+  expect(await ui.findAll({ type: 'Button', text: /check/i })).toEqual([])
+  await ui.input({ key: 'repo', text: 'anna/usage-sync' })
+  expect(settingsRuns(seen).at(-1)).toEqual([...PREFIX, 'check-repo', '--', 'anna/usage-sync'])
+  expect(await onPlate(ui)).toContain('save')
+  await ui.unmount()
+})
+
+test('terminal: the field keeps its word and the Check beside it', async ($, on) => {
+  world(on)
+  const ui = await open($, 'terminal')
+  expect((await ui.find({ key: 'repo' }))?.props.submitLabel).toBe('check')
+  expect(await ui.find({ key: 'check' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desktop: the info is muted small type inside the card, not mono; the docs are a link', async ($, on) => {
+  world(on, { info: GATE_INFO })
+  const ui = await open($, 'desktop')
+  await ui.press({ key: 'info-spawn_gate' })
+  const info = await ui.find({ key: 'info-text-spawn_gate' })
+  const texts = elementsIn(info)
+  expect(texts.length).toBe(4)
+  for (const text of texts) expect([text.type, text.props.mono, text.props.color, text.props.size]).toEqual(['Text', undefined, LOOK.muted, 'footnote'])
+  expect(await rowText(ui, 'spawn_gate')).toContain('a warning or a stop near')
+  const link = await ui.find({ type: 'Link' })
+  expect([link?.props.href, link?.children]).toEqual(['https://x/blob/main/docs/gates.md#the-two-gates', ['Docs: gates.md#the-two-gates']])
+  expect(await exact(ui, 'https://x/blob/main/docs/gates.md#the-two-gates')).toBeUndefined()
+  expect(await exact(ui, 'More:')).toBeUndefined()
   await ui.unmount()
 })
 

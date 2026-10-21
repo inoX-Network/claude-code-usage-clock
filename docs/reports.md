@@ -108,16 +108,22 @@ and sets the sync repository, without a restart and without changing `settings.j
   `(installed)`. These are the keys [`modules`](configuration.md#modules-switch-parts-off) and `sync.mode` of
   `config.json`; every hook reads them on its next run. The sync also shows its last success in local time and the
   category of its last error. After a button the tab stays as it is while it reads the settings again.
+  In the desktop app each part is a card like the tiles of the other views, two side by side where the pane is wide
+  enough; the sync and its repository span the width. The head of a card names the state in effect (`ON`, `OFF`,
+  `SHADOW`, `ENFORCE`, or `NOT INSTALLED`), the choices stand in a frame with `i` beside it, and the active one stands
+  on the plate of the open tab.
 - The status line has no switch (the other parts read its measurement): its row says so instead. A part that is not
   installed stands grey with `not installed: install.py` and no button: the tab never adds or removes a hook.
 - Sync repository (with the sync installed): a field with `sync.repo` and **Check**, the test of `install.py
   --sync-repo` (`owner/name`, not readable without logging in, reachable with the login of git), which writes nothing.
   Only after it found that very name private and reachable, **Save** appears: it sets `sync.repo` and clones the
-  repository, as the installer does.
+  repository, as the installer does. In the desktop app Check is the button of the field itself.
   While `<log_dir>/sync/repo` holds a clone of another repository, Save changes nothing and says so: move that folder
   away (do not delete it, it may hold commits that were never pushed), then save again.
-- `i` on a row unfolds a few lines about the part, the same text the installer's assistant prints on `i`, and what the
-  switch here does differently. The sentence of the sync leaves out what a first install does: the tab installs
+- `i` on a row unfolds a short paragraph about the part, the same text the installer's assistant prints on `i`, and
+  what the switch here does differently. The lines the assistant breaks for a terminal are joined again: a new line
+  starts only at `Writes:` and `More:`. In the desktop app `More:` is a link named by the file of the documentation
+  (`Docs: sync.md#what-it-does`). The sentence of the sync leaves out what a first install does: the tab installs
   nothing.
 
 The tab writes only through `settings_cli.py`, which the installer puts next to the hooks: it checks every value, keeps
