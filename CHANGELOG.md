@@ -36,6 +36,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Fixed
 
+- The Settings tab in the terminal (plugin 0.9.1): each part's name stands on a line of its own, with its sentence, its
+  buttons and its info in one indented block below it, so that wrapped lines stay indented and every row of buttons
+  starts in the same column; the link of the info has a line of its own. The status line has its reason under its
+  sentence. The last success of the sync is a local time, as the report writes its times. The repository field has a
+  frame, and Check and Save stand on a plate like the marked choice. The sentence of the sync leaves out what a first
+  install does (the installer's assistant still says it). After a button the tab stays as it is while it reads the
+  settings again, so that the focus stays on the button; only the first read says loading.
 - A sync repository that does not exist, or that the login cannot reach, was reported as missing credentials, and
   the installer told you to sign in. The error now says `the repository does not exist or this login cannot reach it
   (check sync.repo)`, and the installer tells you to check the name or create the repository

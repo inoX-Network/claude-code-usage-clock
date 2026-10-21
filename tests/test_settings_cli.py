@@ -119,6 +119,14 @@ def test_show_carries_the_texts_of_the_assistant_byte_for_byte_and_a_sentence_fo
     assert shown['sync']['tab'] and shown['sync']['repo_tab']
 
 
+def test_show_gives_the_sentence_of_the_sync_without_what_a_first_install_does(machine):
+    # The tab installs nothing: the half of the assistant's sentence about the first install is left out
+    sync = machine.cli('show', '--json')[1]['sync']
+    assert sync['summary'] == ('Puts the usage of each computer into a private GitHub repository of yours, so that the '
+                               'report shows all of them.')
+    assert machine.install_module.SUMMARY['sync'].startswith(sync['summary'][:-1] + '; ')
+
+
 def test_the_assistant_prints_exactly_the_text_show_carries(machine, monkeypatch):
     machine.install('--components', 'spawn-gate')
     text = modules(machine.cli('show', '--json')[1])['spawn_gate']['info']

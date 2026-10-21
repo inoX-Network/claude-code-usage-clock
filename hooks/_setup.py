@@ -36,7 +36,9 @@ TEMP_SUFFIX = '.tmp-usage-clock'
 CLONE_TIMEOUT_S = 300           # the clone of --sync-repo, under the sync lock (no push runs meanwhile)
 CHECK_GIT_TIMEOUT_S = 15        # each git call of --check in the clone
 DOCS = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/'
-# One sentence per part: the line above each question of the assistant, and the line of each part in the tab
+SYNC_SUMMARY = ('Puts the usage of each computer into a private GitHub repository of yours, so that the report shows all '
+                'of them')
+# One sentence per part: the line above each question of the assistant (the tab shows TAB_SUMMARY)
 SUMMARY = {
     'statusline': 'Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the '
                   'usage the other parts read.',
@@ -45,9 +47,11 @@ SUMMARY = {
     'spawn-gate': 'Checks every start of an agent, workflow or skill against the usage and the model rules.',
     'soft-stop': 'Makes subagents save a checkpoint and finish when the five-hour usage gets high.',
     'auto-continue': 'Claude Code then waits for the reset of a usage limit and goes on by itself.',
-    'sync': 'Puts the usage of each computer into a private GitHub repository of yours, so that the report shows all '
-            'of them; a first install starts in shadow mode and pushes nothing.',
+    'sync': f'{SYNC_SUMMARY}; a first install starts in shadow mode and pushes nothing.',
 }
+# The sentence of each part in the Settings tab: that of the assistant, without what a first install does (the tab
+# installs nothing)
+TAB_SUMMARY = {**SUMMARY, 'sync': f'{SYNC_SUMMARY}.'}
 # What the answer i or ? prints for a question: what the part does, what it writes, where the documentation is
 INFO = {
     'statusline': (
