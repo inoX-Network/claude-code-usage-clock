@@ -499,7 +499,7 @@ def test_an_installed_sync_is_offered_with_its_repository_and_kept_without_a_new
     machine.install_sync_entries(mode='on', repo='anna/usage-sync')
     monkeypatch.setattr(_sync_git, 'check_visibility', lambda *a, **k: pytest.fail('no visibility check on Enter'))
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
-    assert f'{SYNC} [Y/n]' in out and f'{SYNC_REPO} [anna/usage-sync]:' in out
+    assert f'{SYNC} [Y/n]' in out and f'{SYNC_REPO} [anna/usage-sync] (current):' in out
     assert f'{SYNC_NAME} [empty, shown as machine-<id>]' in out
     assert runs(machine.module, out) == [['--components', 'sync']]
 
@@ -516,7 +516,7 @@ def test_a_sync_that_is_not_installed_gets_its_repository_checked_even_if_config
     cfg['sync'].update(repo='anna/usage-sync')
     machine.config.write_text(json.dumps(cfg), encoding='utf-8')
     code, out = machine.ask('', '', '', '', '', 'y', '', '', 'n')
-    assert f'{SYNC_REPO} [anna/usage-sync]:' in out
+    assert f'{SYNC_REPO} [anna/usage-sync] (current):' in out
     assert runs(machine.module, out)[0][-4:] == ['--sync-repo', 'anna/usage-sync', '--sync-name', PLATFORM]
 
 
@@ -876,3 +876,100 @@ def test_sync_name_needs_the_component_and_no_uninstall_or_check(machine, monkey
     with pytest.raises(SystemExit) as stop:
         machine.module.main(argv)
     assert stop.value.code == 2 and text in screen.getvalue()
+
+
+
+# --- v5: where the default of each question comes from -----------------------------------------------------------
+
+CURRENT, DEFAULT = ' (current)', ' (default)'
+LEGEND = '(current) = Enter keeps what you have now \u00b7 (default) = the safe start for something new'
+
+
+def prompt_of(out, question):
+    """The line of the question as the terminal shows it, with the echoed answer."""
+    return next(line for line in out.splitlines() if question in line)
+
+
+def labels(out, *pairs):
+    for question, shown in pairs:
+        assert f'{question} {shown} ' in prompt_of(out, question) + ' ', (question, prompt_of(out, question))
+
+
+def test_the_head_line_explains_both_labels(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
+    head = next(line for line in out.splitlines() if line.startswith('usage-clock installer'))
+    assert LEGEND in head
+
+
+def test_a_first_install_offers_the_default_everywhere(machine):
+    code, out = machine.ask('', '', '', '', '', '', '', 'y', REPO, '', 'n')
+    labels(out, (STATUSLINE, '[Y/n]' + DEFAULT), (USAGE_CLOCK, '[Y/n]' + DEFAULT), (CONTEXT, '[Y/n]' + DEFAULT),
+           (SPAWN_GATE, '[Y/n]' + DEFAULT), (SOFT_STOP, '[Y/n]' + DEFAULT), (ENFORCE, '[y/N]' + DEFAULT),
+           (AUTO_CONTINUE, '[y/N]' + DEFAULT), (SYNC, '[y/N]' + DEFAULT), (SYNC_NAME, f'[{PLATFORM}]' + DEFAULT))
+    assert f'{SYNC_REPO}:' in out and 'current' not in out.replace(LEGEND, '')
+
+
+@pytest.mark.parametrize('mode,bracket', [('shadow', '[y/N]'), ('enforce', '[Y/n]')])
+def test_an_update_with_a_gate_offers_its_mode_as_current(machine, mode, bracket):
+    assert machine.cli('--components', 'usage-clock,spawn-gate', '--mode', mode)[0] == 0
+    code, out = machine.ask('', '', '', '', '', '', 'n')
+    labels(out, (ENFORCE, bracket + CURRENT))
+
+
+def test_a_gate_new_in_an_update_offers_the_default_mode(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', 'y', '', '', '', '', 'n')
+    labels(out, (SPAWN_GATE, '[y/N]' + CURRENT), (ENFORCE, '[y/N]' + DEFAULT))
+
+
+def test_gates_in_two_modes_keep_their_own_text(machine):
+    assert machine.cli('--components', 'spawn-gate', '--mode', 'enforce')[0] == 0
+    assert machine.cli('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    code, out = machine.ask('', '', '', '', '', '', '', 'n')
+    assert prompt_of(out, ENFORCE).endswith(f'{ENFORCE} [y/n, Enter keeps] ')
+
+
+def test_parts_that_are_not_installed_are_current_in_an_update(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', '', '', '', '', 'n')
+    labels(out, (STATUSLINE, '[y/N]' + CURRENT), (USAGE_CLOCK, '[Y/n]' + CURRENT), (SPAWN_GATE, '[y/N]' + CURRENT),
+           (SOFT_STOP, '[y/N]' + CURRENT), (AUTO_CONTINUE, '[y/N]' + CURRENT), (SYNC, '[y/N]' + CURRENT))
+
+
+def test_an_update_with_everything_offers_the_current_values(machine):
+    assert machine.cli('--components', ALL, '--mode', 'enforce', '--auto-continue')[0] == 0
+    machine.install_sync_entries(repo='anna/usage-sync')
+    cfg = machine.config_data()
+    cfg['sync']['machine_name'] = 'laptop'
+    machine.config.write_text(json.dumps(cfg), encoding='utf-8')
+    code, out = machine.ask('', '', '', '', '', '', '', '', '', '', 'n')
+    labels(out, (CONTEXT, '[Y/n]' + CURRENT), (ENFORCE, '[Y/n]' + CURRENT), (AUTO_CONTINUE, '[Y/n]' + CURRENT),
+           (SYNC, '[Y/n]' + CURRENT), (SYNC_NAME, '[laptop]' + CURRENT))
+    assert f'{SYNC_REPO} [anna/usage-sync]{CURRENT}:' in out
+    assert prompt_of(out, 'Install now?') == 'Install now? [Y/n] n'      # with the echo of the answer
+
+
+def test_a_new_sync_in_an_update_offers_the_platform_as_default(machine):
+    assert machine.cli('--components', 'usage-clock')[0] == 0
+    code, out = machine.ask('', '', '', '', '', 'y', REPO, '', 'n')
+    assert f'{SYNC_REPO}:' in out
+    labels(out, (SYNC_NAME, f'[{PLATFORM}]' + DEFAULT))
+
+
+def test_keeping_a_foreign_status_line_is_current(machine):
+    machine.foreign_statusline()
+    code, out = machine.ask('', '', '', '', '', '', '', '', '', 'n')
+    labels(out, (REPLACE, '[y/N]' + CURRENT))
+
+
+def test_a_first_install_on_settings_with_auto_continue_offers_it_as_current(machine):
+    machine.settings.write_text('{"autoContinueAtUsageLimit": true}', encoding='utf-8')
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
+    labels(out, (STATUSLINE, '[Y/n]' + DEFAULT), (AUTO_CONTINUE, '[Y/n]' + CURRENT))
+
+
+def test_a_sync_switched_off_before_is_current_on_a_first_install(machine):
+    machine.target.mkdir(parents=True)
+    machine.config.write_text('{"sync": {"mode": "off"}}', encoding='utf-8')
+    code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
+    labels(out, (STATUSLINE, '[Y/n]' + DEFAULT), (SYNC, '[y/N]' + CURRENT))

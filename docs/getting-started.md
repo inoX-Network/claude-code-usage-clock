@@ -136,10 +136,11 @@ It asks one question per part of the tool, each with a line above it that says w
 
 ```
 Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the usage the other parts read.
-Status line: model, 5h/week usage and context below the prompt? [Y/n]
+Status line: model, 5h/week usage and context below the prompt? [Y/n] (default)
 ```
 
-Press Enter to take the answer in brackets (the capital letter), or type `y` or `n` and press Enter. For a start,
+Press Enter to take the answer in brackets (the capital letter), or type `y` or `n` and press Enter. After the
+brackets stands `(default)`: on a first install every answer in brackets is the safe start. For a start,
 Enter at every question is a good choice: all five parts, the gates only watch (*shadow mode*, see below), no
 automatic continue and no sync. If you already have a status line of your own, the installer also asks whether to
 replace it; with *no*, yours stays (see [The status line shows nothing](#the-status-line-shows-nothing)). To stop
@@ -182,8 +183,8 @@ error instead, look at [Common problems](#common-problems). The installer change
 Code, and kept a copy of the old one (*Backup*; there is none if you had no settings yet). The *Undo* line is the
 command that puts the old file back, should you ever want that. The last line says where the finer settings are.
 
-Run the installer again later and it asks the same questions, with what is installed as the answers in brackets:
-Enter at every question changes nothing. Want to see what would change without any question? Add `--dry-run`.
+Run the installer again later and it asks the same questions, with what you have now as the answers in brackets,
+marked `(current)`: Enter at every question changes nothing. Want to see what would change without any question? Add `--dry-run`.
 
 **Step 5: restart Claude Code.** Close every Claude Code window and start it again. The tool is only loaded when
 Claude Code starts.

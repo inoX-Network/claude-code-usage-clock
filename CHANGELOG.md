@@ -10,9 +10,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 - The installer asks: run in a terminal without any option, `tools/install.py` asks y/n for each part (status line,
   usage clock, context reporter, the two gates and their mode, auto-continue, the sync with its repository and the
-  name of this computer), with the
-  installed state as the defaults, shows a summary with the equivalent command line and runs exactly that on your
-  yes. Any option, or a stdin or stdout that is no terminal, and it asks nothing, as before. See
+  name of this computer). Each question says where its default comes from: `(current)` for what you have now,
+  `(default)` for the safe start of something new. It shows a summary with the equivalent command line and runs
+  exactly that on your yes. Any option, or a stdin or stdout that is no terminal, and it asks nothing, as before. See
   [docs/install.md](docs/install.md#install).
 - `--sync-name NAME` sets `sync.machine_name`, the name of this machine in the report (checked as `config.json`
   checks it; the host name is never used). It is the third key the installer writes into `config.json`.
