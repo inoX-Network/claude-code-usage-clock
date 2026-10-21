@@ -5,7 +5,7 @@
 export const GATE_MARKER_CASES = [
   {"modules": {"spawn_gate": "off"}, "entries": [["spawn_gate.py", "--mode=enforce"]], "markers": ["spawn gate off"]},
   {"modules": {"spawn_gate": "off"}, "entries": [["spawn_gate.py", "--mode=shadow"]], "markers": ["spawn gate off"]},
-  {"modules": {"spawn_gate": "shadow"}, "entries": [["spawn_gate.py", "--mode=enforce"]], "markers": ["spawn gate Shadow"]},
+  {"modules": {"spawn_gate": "shadow"}, "entries": [["spawn_gate.py", "--mode=enforce"]], "markers": ["spawn gate shadow"]},
   {"modules": {"spawn_gate": "shadow"}, "entries": [["spawn_gate.py", "--mode=shadow"]], "markers": []},
   {"modules": {"spawn_gate": "shadow"}, "entries": [["spawn_gate.py", ""]], "markers": []},
   {"modules": {"spawn_gate": ""}, "entries": [["spawn_gate.py", "--mode=enforce"]], "markers": []},
