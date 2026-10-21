@@ -242,6 +242,9 @@ def main() -> int:
         hook_input = _hookio.read_input()
         # No logging of config problems: this runs after every tool call, a broken config would fill the log.
         cfg = _config.load(log_problems=False)
+        if not cfg['modules']['context_reporter']:      # switched off in config.json: the hook stays and says nothing
+            _hookio.log_disabled('context_reporter', 'context_reporter', hook_input)
+            return 0
         result = build_context(hook_input, cfg, os.path.join(_hookio.log_dir(), 'context'),
                                datetime.now(timezone.utc))
         if result:

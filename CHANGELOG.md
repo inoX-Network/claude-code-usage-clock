@@ -17,6 +17,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   [docs/install.md](docs/install.md#install).
 - `--sync-name NAME` sets `sync.machine_name`, the name of this machine in the report (checked as `config.json`
   checks it; the host name is never used). It is the third key the installer writes into `config.json`.
+- `modules` in `config.json`: `modules.usage_clock` and `modules.context_reporter` (`true`/`false`) switch those hooks
+  off, `modules.spawn_gate` and `modules.soft_stop` (`off`/`shadow`/`enforce`) set the mode of the gates before the
+  `--mode` of their hook entry; empty, as by default, the entry decides. Every hook reads it on its next run, no
+  restart, `settings.json` untouched. `install.py --mode` writes it for the gates of the run, `--check` says where
+  the mode comes from. See [docs/configuration.md](docs/configuration.md#modules-switch-parts-off).
+- The Settings tab of `/report` (key `h`, plugin 0.9.0): switch the parts on and off, set the mode of the gates and of
+  the sync, and check and save the sync repository (Save only after the check found it private and reachable). It
+  writes through the new `hooks/settings_cli.py`, which the installer installs next to the hooks, with the check and
+  backup of the installer. See [docs/reports.md](docs/reports.md#the-settings-tab).
 
 ### Changed
 

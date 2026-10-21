@@ -209,9 +209,14 @@ def main() -> int:
         return 0
     args = _hookio.parse_args(sys.argv[1:])
     hook_input = _hookio.read_input()
+    mode = args['mode']
     try:
-        decision, reason = decide(hook_input, _config.load(log_problems=True),
-                                  _hookio.parse_date(args['week-ok-until']))
+        cfg = _config.load(log_problems=True)
+        mode = _config.gate_mode(cfg, 'spawn_gate', mode)      # modules.spawn_gate before --mode of the entry
+        if mode == 'off':      # switched off in config.json: the start goes through as without the hook
+            _hookio.log_disabled('spawn_gate', 'spawn_gate', hook_input)
+            return 0
+        decision, reason = decide(hook_input, cfg, _hookio.parse_date(args['week-ok-until']))
     except Exception as exc:  # fail closed: every unexpected error, including an import, denies; except for skills
         if hook_input.get('tool_name') == 'Skill':
             decision, reason = 'warn', f'Skill check failed internally ({type(exc).__name__}); only warned.'
@@ -219,8 +224,8 @@ def main() -> int:
             decision, reason = 'deny', f'Spawn gate failed internally ({type(exc).__name__}); denied to be safe.'
     if decision == 'not_responsible':
         return 0
-    _hookio.log_decision('spawn_gate', args['mode'], hook_input, decision, reason)
-    if args['mode'] != 'enforce':
+    _hookio.log_decision('spawn_gate', mode, hook_input, decision, reason)
+    if mode != 'enforce':
         if decision in _hookio.SHADOW_PHRASES:
             _hookio.emit_context(EVENT, _hookio.shadow_note('Spawn gate', 'this start', decision, reason,
                                                             'Tell the user in one sentence.'))

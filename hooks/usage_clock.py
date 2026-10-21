@@ -85,8 +85,12 @@ def main() -> int:
     try:
         import _config
         import _hookio
-        _hookio.read_input()
-        line = build_line(_config.load(log_problems=True))
+        hook_input = _hookio.read_input()
+        cfg = _config.load(log_problems=True)
+        if not cfg['modules']['usage_clock']:      # switched off in config.json: the hook stays and adds nothing
+            _hookio.log_disabled('usage_clock', 'usage_clock', hook_input)
+            return 0
+        line = build_line(cfg)
         if line:
             # Claude Code reads UTF-8; a machine with another locale must not swallow the line.
             sys.stdout.reconfigure(encoding='utf-8')

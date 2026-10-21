@@ -65,8 +65,9 @@ when you leave them out:
 - `--sync-mode`: the mode of an installed sync is kept (`shadow` on a first install of the sync). The output line
   `Sync mode:` says which mode applies and where it comes from. Unlike the gates, the sync keeps its mode, its
   repository and the name of the machine in `config.json` (`sync.mode`, `sync.repo`, `sync.machine_name`, see
-  `--sync-name`): these three keys are the only ones the installer writes there, with a backup, and only when they
-  change.
+  `--sync-name`). With `--mode` the installer also writes `modules.<gate>` for each gate of the run
+  ([modules](configuration.md#modules-switch-parts-off)): these are the only keys it writes there, with one backup,
+  and only when they change.
 
 The sync is not part of the default selection: it is installed only with `--components ...,sync`. Without
 `--components`, `--uninstall` removes its entries too and sets `sync.mode` to `off` (the status line pushes from the
@@ -79,7 +80,7 @@ Options:
 | Option | Meaning |
 |---|---|
 | `--components statusline,usage-clock,context-reporter,spawn-gate,soft-stop,sync` | Install only some parts. Without it: all but `sync`, which is opt-in (for `--uninstall`: all). The context reporter adds two entries (`UserPromptSubmit` and `PostToolUse`) and says nothing without the status line; the sync adds two (`SessionStart` and `SessionEnd`). |
-| `--mode shadow\|enforce` | Mode of the two gates. Without it an existing installation keeps its mode; a first install starts in `shadow`. |
+| `--mode shadow\|enforce` | Mode of the two gates. Without it an existing installation keeps its mode; a first install starts in `shadow`. Also written to `modules.spawn_gate` / `modules.soft_stop` in `config.json` for the gates of the run, which come before the hook entry. A `config.json` that is a link or cannot be read is not written: a note says so. |
 | `--week-ok-until YYYY-MM-DD` | Allow new blocks above the weekly threshold up to and including that day. Not kept: a run without it removes an earlier value (and says so). Needs the component `spawn-gate`. |
 | `--replace-statusline` | Replace an existing status line of your own. Without it, yours is left alone, but then nothing writes the shared usage file and every hook sees the usage as `unknown`. Needs the component `statusline`. |
 | `--auto-continue` | Also set `autoContinueAtUsageLimit: true` (Claude Code waits and continues after a reset). |
@@ -89,7 +90,7 @@ Options:
 | `--settings PATH`, `--target DIR` | Other locations. |
 | `--dry-run` | Show what would change and write nothing. |
 | `--uninstall` | Remove the entries again; files stay. See [Uninstall completely](#uninstall-completely). |
-| `--check` | Check an existing installation and change nothing: the entries in `settings.json`, the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
+| `--check` | Check an existing installation and change nothing: the entries in `settings.json` (for the gates with the mode and where it comes from: `from config` or `from settings.json`), the installed files against this checkout, `config.json`, the smoke test, the age of the usage numbers and the log folder; with the sync its repository, clone (there and clean), remote, visibility (from the cache of the push, with its age), last success, backoff and last error, and the size of the clone (`NOTE` from 500 MB). Every line says `OK`, `FIX` (exit code 1) or `NOTE`. Takes only `--settings`, `--target` and `--components`. |
 
 Restart Claude Code (or open `/hooks`) after installing.
 

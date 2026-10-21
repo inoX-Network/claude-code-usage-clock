@@ -186,6 +186,33 @@ def write_log_line(record: dict, directory: str | None = None) -> None:
         pass
 
 
+DISABLED_SESSIONS = 50      # sessions per hook whose line `disabled` is remembered (<log_dir>/disabled/<hook>.json)
+DISABLED_MAX_BYTES = 64 * 1024
+
+
+def log_disabled(hook: str, key: str, hook_input: dict) -> None:
+    """One log line `disabled` for a hook switched off with `modules.<key>`, at most once per session: the sessions it
+    was logged for are kept in <log_dir>/disabled/<hook>.json, the last DISABLED_SESSIONS of them. Never raises."""
+    session = str(hook_input.get('session_id') or '')
+    folder = os.path.join(log_dir(), 'disabled')
+    path = os.path.join(folder, f'{hook}.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            seen = json.loads(f.read(DISABLED_MAX_BYTES))
+        seen = [str(item) for item in seen] if isinstance(seen, list) else []
+    except (OSError, ValueError):
+        seen = []
+    if session in seen:
+        return
+    write_log_line({'time': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'hook': hook, 'mode': 'off',
+                    'decision': 'disabled', 'reason': f'modules.{key} is off in config.json'})
+    try:
+        import _context_state      # here: only a hook that is switched off needs it
+        _context_state.write_private(folder, f'{hook}.json', json.dumps((seen + [session])[-DISABLED_SESSIONS:]))
+    except Exception:      # the line is written; a list that cannot be kept only means a second line later
+        pass
+
+
 # Quoted parts of a reason carry values from the input: script parts, model literals, paths
 _QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')
 _QUOTE_CHAR = re.compile('["\'„“”`]')

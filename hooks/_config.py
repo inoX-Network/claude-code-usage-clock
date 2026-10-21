@@ -67,6 +67,12 @@ DEFAULTS: dict = {
         'skill_fork_missing_agent': 'warn',
         'model_override_in_call': 'warn',
     },
+    'modules': {
+        'usage_clock': True,
+        'context_reporter': True,
+        'spawn_gate': '',
+        'soft_stop': '',
+    },
     'sync': {
         'mode': 'off',
         'repo': '',
@@ -105,6 +111,8 @@ _CHOICES = {
     ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
+    ('modules', 'spawn_gate'): ('', 'off', 'shadow', 'enforce'),
+    ('modules', 'soft_stop'): ('', 'off', 'shadow', 'enforce'),
     ('sync', 'mode'): ('off', 'shadow', 'on'),
     ('sync', 'transport'): ('https', 'ssh'),
     ('sync', 'project_labels'): ('plain', 'alias', 'hash'),
@@ -114,6 +122,12 @@ _CHOICES = {
 def valid_sync_repo(value: str) -> bool:
     """`owner/name` as `sync.repo` takes it (_SYNC_REPO, no `..`, not the name `.`)."""
     return bool(_SYNC_REPO.fullmatch(value)) and '..' not in value and not value.endswith('/.')
+
+
+def gate_mode(cfg: dict, key: str, argument: str) -> str:
+    """The mode a gate runs in: `modules.<key>` (off, shadow or enforce) before the --mode of its hook entry
+    (`argument`); an empty value leaves it to the entry."""
+    return cfg['modules'][key] or argument
 
 
 def config_path() -> str:
@@ -167,14 +181,14 @@ def _report(problems: list[str], log_dir: str) -> None:
                             'reason': '; '.join(problems)[:300]}, log_dir)
 
 
-def load(log_problems: bool = True, path: str | None = None) -> dict:
+def load(log_problems: bool = True, path: str | None = None, problems: list[str] | None = None) -> dict:
     """The effective configuration: defaults, overridden by every valid key of config.json (`path`, else
-    config_path()).
+    config_path()). `problems`, if given, receives what was replaced by a default (the Settings tab shows it).
 
     log_problems=False is for the status line, which runs every few seconds: a broken config would
     otherwise fill the log. The hooks report it.
     """
-    problems: list[str] = []
+    problems = [] if problems is None else problems
     given = _MISSING
     try:
         with open(path or config_path(), encoding='utf-8') as f:

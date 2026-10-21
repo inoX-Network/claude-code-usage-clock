@@ -54,6 +54,12 @@
     "skill_fork_missing_agent": "warn",
     "model_override_in_call": "warn"
   },
+  "modules": {
+    "usage_clock": true,
+    "context_reporter": true,
+    "spawn_gate": "",
+    "soft_stop": ""
+  },
   "sync": {
     "mode": "off",
     "repo": "",

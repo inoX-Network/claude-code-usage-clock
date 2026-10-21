@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import pytest
 
 import _plat
+import _setup
 from conftest import HOOKS, ROOT
 
 TOOLS = os.path.join(ROOT, 'tools')
@@ -737,7 +738,7 @@ def test_backup_never_overwrites_an_existing_one(tmp_path, monkeypatch):
         def now(cls, tz=None):
             return datetime(2026, 1, 14, 9, 8, 7, 123456, tzinfo=tz)
 
-    monkeypatch.setattr(module, 'datetime', Fixed)
+    monkeypatch.setattr(_setup, 'datetime', Fixed)      # make_backup lives there, the installer imports it
     settings = tmp_path / 'settings.json'
     settings.write_text('{"new": 1}', encoding='utf-8')
     first = tmp_path / 'settings.json.bak-usage-clock-20260114-090807-123456'
@@ -757,7 +758,7 @@ def test_backup_gives_up_when_all_names_are_taken(tmp_path, monkeypatch):
         def now(cls, tz=None):
             return datetime(2026, 1, 14, 9, 8, 7, 123456, tzinfo=tz)
 
-    monkeypatch.setattr(module, 'datetime', Fixed)
+    monkeypatch.setattr(_setup, 'datetime', Fixed)      # make_backup lives there, the installer imports it
     settings = tmp_path / 'settings.json'
     settings.write_text('{}', encoding='utf-8')
     for n in range(1000):
@@ -1565,7 +1566,7 @@ def test_check_passes_a_fresh_installation_and_changes_nothing(tmp_path):
     assert r.returncode == 0, r.stdout
     assert 'FIX' not in r.stdout and r.stdout.rstrip().splitlines()[-1].startswith('Check: no problems')
     for needle in ('OK   UserPromptSubmit: usage_clock.py', 'OK   PreToolUse: spawn_gate.py (matcher Agent|Workflow|Skill, '
-                   'mode shadow)', 'OK   statusLine', 'match this checkout', 'OK   config.json', 'OK   Smoke test',
+                   'mode shadow from settings.json)', 'OK   statusLine', 'match this checkout', 'OK   config.json', 'OK   Smoke test',
                    'OK   Usage: measured 1 min ago'):
         assert needle in r.stdout, needle
     assert settings.read_text(encoding='utf-8') == before and sorted(p.name for p in tmp_path.iterdir()) == files
