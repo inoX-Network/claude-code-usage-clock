@@ -14,9 +14,11 @@ In a terminal and without any option the installer asks first, one question per 
 it. Enter takes the answer in brackets: on a first install the safe recommendation, the five parts with the gates in
 shadow mode, no auto-continue and no sync; on a second run what is installed now (the components in `settings.json`,
 the mode of the gates, `sync.mode`, `sync.repo` and `sync.machine_name` in `config.json`), so that Enter alone changes
-nothing. Such a default says where it comes from: `Spawn gate: stops new agent blocks above a usage threshold? [Y/n]
-(installed now)`. A first install shows no such mark, nor does the mode of gates that are new in this run (shadow is
-the recommendation there) or of two gates in different modes (`[y/n, Enter keeps]`). Then it shows the parts in
+nothing. After the brackets each question says where its default comes from: `(current)` is what you have now, a part
+that is not installed included (`Sync across computers through a private GitHub repository? [y/N] (current)`),
+`(default)` is the safe start for something that has no state yet: everything on a first install, and on a second run
+for example the mode of gates that are new in this run. Two gates in different modes say `[y/n, Enter keeps]`
+instead. The first line of the assistant explains both words. Then it shows the parts in
 plain words and the equivalent command line (`Same as: python3 tools/install.py --components ... --mode shadow ...`),
 asks `Install now? [Y/n]` and runs exactly that command line. The answers are y, yes, n or no in any case; anything
 else asks again, three times, then it stops without a change (exit code 2, as on the end of the input; Ctrl+C: 130).

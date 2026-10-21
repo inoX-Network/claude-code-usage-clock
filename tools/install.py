@@ -1168,7 +1168,9 @@ PROGRAM = 'python tools\\install.py' if os.name == 'nt' else 'python3 tools/inst
 CONFIGURATION_DOC = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/configuration.md'
 ATTEMPTS = 3            # answers to one question before the assistant gives up
 SUFFIXES = {True: '[Y/n]', False: '[y/N]', None: '[y/n, Enter keeps]'}       # by the answer that Enter gives
-INSTALLED_NOW = ' (installed now)'     # after a default that is what is installed, not the recommendation
+# After the brackets: where the default of the question comes from (current: what is installed, also "not installed";
+# default: there is nothing installed for it, the safe start applies)
+LEGEND = '(current) = Enter keeps what you have now \u00b7 (default) = the safe start for something new'
 
 
 class Abort(Exception):
@@ -1228,13 +1230,17 @@ def _read(prompt: str) -> str:
         raise Abort(130, 'Ctrl+C') from None
 
 
-def ask(explanation: str | None, question: str, default: bool | None, installed: bool = False) -> bool | None:
-    """y, yes, n or no in any case; Enter takes `default` (None: keep, for two gates in different modes), which is
-    marked as what is installed when `installed`."""
+def _label(origin: str | None) -> str:
+    return f' ({origin})' if origin else ''
+
+
+def ask(explanation: str | None, question: str, default: bool | None, origin: str | None = None) -> bool | None:
+    """y, yes, n or no in any case; Enter takes `default` (None: keep, for two gates in different modes). `origin`
+    (current or default) is shown after the brackets."""
     print()
     if explanation:
         print(explanation)
-    prompt = f'{question} {SUFFIXES[default]}{INSTALLED_NOW if installed else ""} '
+    prompt = f'{question} {SUFFIXES[default]}{_label(origin)} '
     for _ in range(ATTEMPTS):
         answer = _read(prompt).lower()
         if not answer:
@@ -1247,11 +1253,11 @@ def ask(explanation: str | None, question: str, default: bool | None, installed:
     raise Abort(2, f'{ATTEMPTS} answers that were not y or n')
 
 
-def ask_repo(default: str, installed: bool) -> str:
+def ask_repo(default: str) -> str:
     """owner/name, checked as --sync-repo checks it."""
     print('Create one first with `gh repo create NAME --private` or at https://github.com/new')
-    prompt = ('Name of your PRIVATE repository (owner/name)' + (f' [{default}]' if default else '')
-              + (INSTALLED_NOW if installed else '') + ': ')
+    # a repository in brackets always comes from config.json
+    prompt = 'Name of your PRIVATE repository (owner/name)' + (f' [{default}] (current)' if default else '') + ': '
     for _ in range(ATTEMPTS):
         answer = _read(prompt) or default
         if _config.valid_sync_repo(answer):
@@ -1260,11 +1266,10 @@ def ask_repo(default: str, installed: bool) -> str:
     raise Abort(2, f'{ATTEMPTS} answers that were no owner/name')
 
 
-def ask_name(default: str, installed: bool) -> str:
+def ask_name(default: str, origin: str) -> str:
     """sync.machine_name, checked as --sync-name checks it. Enter takes `default`, which is never the host name."""
     print('Shown in the report of every computer; the host name of this one is never sent.')
-    prompt = (f'Name of this computer in the report? [{default or "empty, shown as machine-<id>"}]'
-              f'{INSTALLED_NOW if installed else ""} ')
+    prompt = f'Name of this computer in the report? [{default or "empty, shown as machine-<id>"}]{_label(origin)} '
     for _ in range(ATTEMPTS):
         answer = _read(prompt) or default
         if _config._MACHINE_NAME.fullmatch(answer):
@@ -1275,8 +1280,8 @@ def ask_name(default: str, installed: bool) -> str:
 
 def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
     """The questions in their order. Returns the runs (argv lists for main) and the summary lines."""
-    first = not state.components        # the defaults are the recommendation; on a second run what is installed
-    installed = not first
+    first = not state.components        # the defaults are the safe start; on a second run what is installed
+    origin = 'default' if first else 'current'
 
     def default(component: str) -> bool:
         return first or component in state.components
@@ -1284,34 +1289,34 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
     chosen, summary, replace = [], [], False
     if ask('Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the usage the '
            'other parts read.', 'Status line: model, 5h/week usage and context below the prompt?',
-           default('statusline'), installed):
+           default('statusline'), origin):
         chosen.append('statusline')
         if state.foreign_statusline:
             replace = bool(ask('Your settings.json runs another status line. Without ours nothing measures the usage, '
-                               'and the hooks see it as unknown.', 'Replace it?', False))
+                               'and the hooks see it as unknown.', 'Replace it?', False, 'current'))
         summary.append('  Status line: yes' + (', replaces the status line that is there' if replace else
                                                ', but the status line that is there stays' if state.foreign_statusline
                                                else ''))
     else:
         summary.append('  Status line: no')
     if ask('Gives the model the usage and the local time with every prompt you send.',
-           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock'), installed):
+           'Usage clock: one line with usage, reset times and local time in every prompt?', default('usage-clock'), origin):
         chosen.append('usage-clock')
     summary.append(f'  Usage clock: {"yes" if "usage-clock" in chosen else "no"}')
     if 'statusline' in chosen:
         if ask('Says how full the context window is, as the status line measured it.',
                'Context reporter: tells the model how full its context is (needs the status line)?',
-               default('context-reporter'), installed):
+               default('context-reporter'), origin):
             chosen.append('context-reporter')
         summary.append(f'  Context reporter: {"yes" if "context-reporter" in chosen else "no"}')
     else:
         summary.append('  Context reporter: no (needs the status line)')
     if ask('Checks every start of an agent, workflow or skill against the usage and the model rules.',
-           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate'), installed):
+           'Spawn gate: stops new agent blocks above a usage threshold?', default('spawn-gate'), origin):
         chosen.append('spawn-gate')
     summary.append(f'  Spawn gate: {"yes" if "spawn-gate" in chosen else "no"}')
     if ask('Makes subagents save a checkpoint and finish when the five-hour usage gets high.',
-           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop'), installed):
+           'Soft stop: slows subagents down near the five-hour limit?', default('soft-stop'), origin):
         chosen.append('soft-stop')
     summary.append(f'  Soft stop: {"yes" if "soft-stop" in chosen else "no"}')
     mode = None
@@ -1322,12 +1327,14 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
                if len(kept) == 2 else '')
         enforce = ask('Shadow only writes to the log what the gates would do; enforce blocks and warns for real.' + now,
                       'Let the gates block for real (enforce)? No = only log (shadow).',
-                      None if len(kept) == 2 else kept == {'enforce'}, len(kept) == 1)
+                      None if len(kept) == 2 else kept == {'enforce'},
+                      {0: 'default', 1: 'current'}.get(len(kept)))
         mode = None if enforce is None else ('enforce' if enforce else 'shadow')
         summary.append('  Gates: ' + {None: 'each keeps its mode', 'enforce': 'enforce, they block for real',
                                       'shadow': 'shadow, they only log'}[mode])
     auto = bool(ask('Claude Code then waits for the reset of a usage limit and goes on by itself.',
-                    'Continue automatically after a usage limit resets?', state.auto_continue, installed))
+                    'Continue automatically after a usage limit resets?', state.auto_continue,
+                    'current' if state.auto_continue else origin))
     summary.append('  Auto-continue: ' + ('yes' if auto else
                                           'autoContinueAtUsageLimit stays true (the installer does not switch it off; '
                                           'remove it from settings.json by hand)' if state.auto_continue else 'no'))
@@ -1336,11 +1343,12 @@ def interview(state: Installed) -> tuple[list[list[str]], list[str]]:
     if ask('Puts the usage of each computer into a private GitHub repository of yours, so that the report shows all of '
            'them; a first install starts in shadow mode and pushes nothing.'
            + (' Now: off (your choice).' if state.sync_off else ''),
-           'Sync across computers through a private GitHub repository?', installed_sync, installed):
-        repo = ask_repo(state.sync_repo, installed and bool(state.sync_repo))
+           'Sync across computers through a private GitHub repository?', installed_sync,
+           'current' if state.sync_off else origin):
+        repo = ask_repo(state.sync_repo)
         # the name in config.json; on a first install the platform (an installed sync keeps an empty one on Enter)
         name = ask_name(state.machine_name if installed_sync else state.machine_name or sync_format.platform_name(),
-                        installed and (installed_sync or bool(state.machine_name)))
+                        'current' if installed_sync or state.machine_name else 'default')
         chosen.append('sync')
         summary.append(f'  Sync: yes, {repo}' + (f', this computer as "{name}"' if name else '')
                        + ('' if installed_sync else ' (starts in shadow mode)'))
@@ -1384,9 +1392,8 @@ def assistant() -> int:
         print(f'Error: {error}')
         return 2
     state = installed_state(data, target)
-    print('usage-clock installer: a few questions, Enter takes the answer in [brackets]'
-          + (', which is what is installed now.' if state.components else '.')
-          + ' Nothing is written before you confirm. Options for scripts: --help.')
+    print(f'usage-clock installer: a few questions, Enter takes the answer in [brackets]: {LEGEND}. Nothing is written '
+          'before you confirm. Options for scripts: --help.')
     print(f'Settings: {settings_path}')
     print(f'Target:   {target}')
     try:
