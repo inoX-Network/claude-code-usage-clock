@@ -642,7 +642,8 @@ run the installer with --sync-repo`).
   cache, the next run asks again) with its reason in the failure line (`GitHub API: <why>`): from `ask_api`
   `timeout`, `network`, `http_<status>` (every 3xx too), `status_<status>`, `too_large`; from `judge_api` `no_json`,
   `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`; `no_time` if nothing of the 15 s is left. The
-  body is read in pieces of 16 KB against the clock, as urllib's timeout holds for each read only. Without such a
+  body is read with `read1` in pieces of at most 16 KB, the clock checked after each, as urllib's timeout holds for
+  each read only and `read(n)` waits for all n bytes. Without such a
   proxy the ls-remote is refused and the API is
   never asked. The note holds for 24 h (the node asks for it): a
   repository made public within that time is still pushed to until the note is older. Whoever can write

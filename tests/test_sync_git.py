@@ -869,18 +869,26 @@ def test_with_no_time_left_for_the_api_the_visibility_is_unclear(tmp_path):
 
 
 class Response:
-    """What urlopen hands back: a status and a body, read in pieces; `tick` is called on every read."""
+    """What urlopen hands back: a status and a body. `read(n)` waits for all n bytes (as http.client does), `read1(n)`
+    returns what has arrived, at most `burst` bytes; each byte takes `per_byte` seconds on `clock`."""
 
-    def __init__(self, status, data, tick=None):
-        self.status, self.data, self.asked, self.tick, self.offset = status, data, [], tick, 0
+    def __init__(self, status, data, clock=None, per_byte=0.0, burst=None):
+        self.status, self.data, self.asked, self.offset = status, data, [], 0
+        self.clock, self.per_byte, self.burst = clock, per_byte, burst
 
-    def read(self, n=-1):
+    def _take(self, n):
         self.asked.append(n)
-        if self.tick:
-            self.tick()
         piece = self.data[self.offset:] if n < 0 else self.data[self.offset:self.offset + n]
         self.offset += len(piece)
+        if self.clock is not None:
+            self.clock[0] += self.per_byte * len(piece)
         return piece
+
+    def read(self, n=-1):
+        return self._take(n)
+
+    def read1(self, n=-1):
+        return self._take(n if self.burst is None else min(n, self.burst))
 
     def __enter__(self):
         return self
@@ -951,15 +959,17 @@ def test_an_answer_over_64_kb_is_no_answer_and_more_is_never_read():
     assert sum(n for n in over.asked if n > 0) == limit + 1 and all(0 < n <= limit + 1 for n in over.asked)
 
 
-def test_an_answer_that_trickles_in_past_its_time_is_a_timeout():
-    """urllib's timeout holds for each read of the socket; the whole answer must come within the time given."""
+def test_an_answer_that_trickles_in_past_its_time_is_a_timeout_in_time():
+    """urllib's timeout holds for each read of the socket, and read(n) waits for all n bytes: measured by the
+    Gegenprüfung, 40 bytes at 0.25 s each with 1.0 s left ended after 10 s. read1 takes what has arrived, so the clock
+    is checked after each piece: the timeout comes after the 1.0 s."""
     clock = [100.0]
-
-    def tick():
-        clock[0] += 2
-    slow = Response(200, b' ' * 40000 + INJECTED, tick)
-    assert REAL_ASK_API(REPO, 5, Opener(slow), clock=lambda: clock[0]) == (None, 'timeout')
-    assert REAL_ASK_API(REPO, 5, Opener(Response(200, INJECTED, tick)), clock=lambda: clock[0]) == (INJECTED, '')
+    slow = Response(200, b'{' + b' ' * 39, clock, per_byte=0.25, burst=1)
+    assert REAL_ASK_API(REPO, 1.0, Opener(slow), clock=lambda: clock[0]) == (None, 'timeout')
+    assert clock[0] - 100.0 <= 1.25
+    clock[0] = 100.0
+    quick = Response(200, INJECTED, clock, per_byte=0.001, burst=8)
+    assert REAL_ASK_API(REPO, 1.0, Opener(quick), clock=lambda: clock[0]) == (INJECTED, '')
 
 
 def test_the_api_without_an_opener_builds_its_own(monkeypatch):
