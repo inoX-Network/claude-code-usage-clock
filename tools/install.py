@@ -93,6 +93,7 @@ WINDOWS_MODULE = os.path.join(ROOT, 'windows', 'cli', '_win.py')
 sys.path.append(SOURCE_HOOKS)
 import _plat  # noqa: E402  the platform switch of the hooks: commands, file operations, the hook shell
 import _config  # noqa: E402  --check reads config.json and the usage file as the hooks do
+import _hookio  # noqa: E402  the date of --week-ok-until as the spawn gate reads it
 import _usage  # noqa: E402
 import _sync_core  # noqa: E402  the sync: lock and state; the clone, visibility probe and size check of the push
 import _sync_git  # noqa: E402
@@ -1230,6 +1231,10 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
     if 'statusline' in state.components and 'statusline' not in chosen:
         summary.append('  Stays installed: statusline. This assistant removes nothing; to remove it: '
                        f'{PROGRAM} --uninstall --components statusline')
+    # The weekly approval of the installed spawn gate, read from settings.json: kept only if it is a date
+    approval = _hookio.parse_date(state.week_ok_until) is not None
+    if 'spawn-gate' in chosen and state.week_ok_until and not approval:
+        summary.append('  Weekly approval: --week-ok-until in settings.json is no date YYYY-MM-DD; this run leaves it out')
     components = chosen + (['sync'] if sync_off else [])     # --sync-mode off with the component keeps its hooks
     if not (components or on or off):
         return None, summary
@@ -1238,8 +1243,8 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
         argv.append('--replace-statusline')
     if mode:
         argv += ['--mode', mode]
-    if 'spawn-gate' in chosen and state.week_ok_until:
-        argv += ['--week-ok-until', state.week_ok_until]
+    if 'spawn-gate' in chosen and approval:
+        argv.append(f'--week-ok-until={state.week_ok_until}')      # one word: a value never reads as an option
     if auto:
         argv.append('--auto-continue')
     if on:
@@ -1249,7 +1254,7 @@ def interview(state: Installed) -> tuple[list[str] | None, list[str]]:
     if repo and not (installed_sync and repo == state.sync_repo):     # a known one: no new check over the network
         argv += ['--sync-repo', repo]
     if repo and name != state.machine_name:
-        argv += ['--sync-name', name]
+        argv.append(f'--sync-name={name}')      # one word: a name may start with a dash
     if sync_off or not repo and not installed_sync:
         argv += ['--sync-mode', 'off']
     elif repo and installed_sync and state.sync_off:

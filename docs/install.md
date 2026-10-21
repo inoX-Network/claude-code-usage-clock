@@ -34,10 +34,10 @@ else asks again, three times, then it stops without a change (exit code 2, as on
 | Status line | the component `statusline`; with a status line of another tool there, a second question: replace it (`--replace-statusline`, default no) |
 | Usage clock | `usage-clock` |
 | Context reporter (asked only with the status line) | `context-reporter` |
-| Spawn gate, soft stop | `spawn-gate`, `soft-stop` |
+| Spawn gate, soft stop | `spawn-gate`, `soft-stop`; an installed spawn gate keeps its `--week-ok-until` if it is a date YYYY-MM-DD, any other value is left out, with a line in the summary |
 | Let the gates block for real (asked only with a gate) | `--mode enforce`, no: `--mode shadow`; two gates in different modes keep theirs on Enter |
 | Continue automatically after a usage limit resets | `--auto-continue` |
-| Sync, then the name of your private repository and the name of this computer in the report | `sync` with `--sync-repo owner/name` (checked as the option checks it) and `--sync-name NAME` (default: the platform, `linux`, `darwin` or `windows`; on a second run the name in `config.json`; never the host name). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed `sync` with `--sync-mode off`, so that its hooks, `sync.repo` and `sync.machine_name` stay. Yes to an installed sync that is off: `--sync-mode shadow`, the safe start |
+| Sync, then the name of your private repository and the name of this computer in the report | `sync` with `--sync-repo owner/name` (checked as the option checks it) and `--sync-name=NAME`, one word, so that a name that starts with a dash stays a name (default: the platform, `linux`, `darwin` or `windows`; on a second run the name in `config.json`; never the host name). No: `--sync-mode off`, so that the next run offers no as `off (your choice)`; with the sync installed `sync` with `--sync-mode off`, so that its hooks, `sync.repo` and `sync.machine_name` stay. Yes to an installed sync that is off: `--sync-mode shadow`, the safe start |
 
 The assistant removes nothing. No to a part that is installed switches it off and leaves it installed: `--off` for the
 usage clock, the context reporter and the gates (`modules` in `config.json`, the hook stays in `settings.json`), and
