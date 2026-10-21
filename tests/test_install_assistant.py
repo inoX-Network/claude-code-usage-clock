@@ -236,6 +236,15 @@ def test_every_question_has_one_line_of_explanation_above_it(machine):
     assert 'gh repo create NAME --private' in out and 'https://github.com/new' in out
 
 
+def test_the_sentence_above_the_sync_question_names_the_first_install(machine):
+    # The Settings tab shows the sentence without its second half (_setup.TAB_SUMMARY); the assistant keeps all of it
+    out = machine.ask('', '', '', '', '', '', '', 'n', 'n')[1]
+    lines = out.splitlines()
+    above = lines[next(i for i, line in enumerate(lines) if SYNC in line) - 1]
+    assert above == ('Puts the usage of each computer into a private GitHub repository of yours, so that the report '
+                     'shows all of them; a first install starts in shadow mode and pushes nothing.')
+
+
 def test_the_default_is_shown_in_brackets_and_taken_with_enter(machine):
     code, out = machine.ask('', '', '', '', '', '', '', '', 'n')
     assert f'{STATUSLINE} [Y/n]' in out and f'{ENFORCE} [y/N]' in out and f'{AUTO_CONTINUE} [y/N]' in out

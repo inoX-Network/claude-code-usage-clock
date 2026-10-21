@@ -75,7 +75,7 @@ def show(data: dict, parts: set[str], target: str, path: str) -> int:
     cfg = _config.load(log_problems=False, path=path, problems=problems)
     modules = []
     for part_id, component, key, label in PARTS:
-        entry = {'id': part_id, 'label': label, 'installed': component in parts, 'summary': _setup.SUMMARY[component],
+        entry = {'id': part_id, 'label': label, 'installed': component in parts, 'summary': _setup.TAB_SUMMARY[component],
                  'info': '\n'.join(_setup.INFO[component]), 'tab': _setup.TAB[component]}
         if key is None:
             entry.update(key=None, value=None, choices=[])
@@ -92,7 +92,7 @@ def show(data: dict, parts: set[str], target: str, path: str) -> int:
     except _sync_core.BrokenState:
         state = _sync_core.State()
     sync = {'installed': 'sync' in parts, 'repo': cfg['sync']['repo'], 'mode': cfg['sync']['mode'],
-            'choices': list(SYNC_MODES), 'summary': _setup.SUMMARY['sync'], 'last_success': _sync_core._text(state.last_success),
+            'choices': list(SYNC_MODES), 'summary': _setup.TAB_SUMMARY['sync'], 'last_success': _sync_core._text(state.last_success),
             'last_error': state.last_error, 'info': '\n'.join(_setup.INFO['sync']), 'tab': _setup.TAB['sync'],
             'repo_info': '\n'.join(_setup.INFO['repo']), 'repo_tab': _setup.TAB['repo']}
     return answer({'modules': modules, 'sync': sync, 'problems': problems})
