@@ -100,3 +100,24 @@ export function activeChoice(part: Part): string {
 export function choiceLabel(choice: string): string {
   return choice === 'true' ? 'on' : choice === 'false' ? 'off' : choice
 }
+
+/** The info of a part as paragraphs. Its lines are broken for the terminal of the assistant, often mid-sentence: they
+ *  are joined again, and a new paragraph starts only where the assistant starts `Writes:` or `More:`. */
+export function infoParagraphs(info: string): string[] {
+  const paragraphs: string[] = []
+  for (const line of info.split('\n').map(line => line.trim()).filter(line => line !== '')) {
+    if (paragraphs.length === 0 || line.startsWith('Writes:') || line.startsWith('More:')) {
+      paragraphs.push(line)
+    } else {
+      paragraphs[paragraphs.length - 1] += ` ${line}`
+    }
+  }
+  return paragraphs
+}
+
+/** What a link to the documentation says: `Docs: ` and its file with the anchor, the whole URL being the link. */
+export function docsLabel(url: string): string {
+  const at = url.indexOf('#')
+  const path = at < 0 ? url : url.slice(0, at)
+  return `Docs: ${path.split('/').pop() ?? ''}${at < 0 ? '' : url.slice(at)}`
+}

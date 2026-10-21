@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Changed
+
+- The Settings tab in the desktop app (plugin 0.9.3) draws its parts as the cards of the other views, two side by side
+  where the pane is wide enough, the sync and its repository across the width. The app draws its own buttons and
+  ignored the colour of the marked choice, so nothing showed which one was active: now the active choice of every
+  group stands on the plate of the open tab, the choices in a frame with `i` beside it, and the head of each card
+  names the state in effect (`ON`, `OFF`, `SHADOW`, `ENFORCE`, `NOT INSTALLED`). The sync repository has one Check,
+  the button of the field (the app drew its own beside ours); the info is in normal type with `Docs: <file>#<anchor>`
+  as a link. The terminal keeps its look.
+
+### Fixed
+
+- The info that `i` unfolds in the Settings tab broke mid-sentence, as it took the lines the installer's assistant
+  breaks for a terminal: it is joined into paragraphs again, a new line only at `Writes:` and `More:` (terminal and
+  desktop app; the assistant prints it as before).
+
 ## [1.7.0] — 2026-10-21 — installer assistant, Settings tab, Claude Code on the web
 
 ### Added

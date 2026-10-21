@@ -79,7 +79,8 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 
 **Settings** (key `h`) is a tab of its own beside the views: a switch per part of usage-clock (`on`/`off`, or
 `off`/`shadow`/`enforce` for the gates), the mode of the sync, and the sync repository with **Check** and, only after a
-check found that name private and reachable, **Save**. `i` on a row unfolds its text from the installer. The tab writes
+check found that name private and reachable, **Save**. `i` on a row unfolds its text from the installer. In the desktop
+app the parts are cards like the tiles of the other views, the active choice on the plate of the open tab. The tab writes
 `config.json` only, through `settings_cli.py` next to the hooks, which the plugin runs with a fixed list of arguments
 (never a shell); without that script (an older installation) it shows one line with the update command. A repository
 name that is no owner/name as `sync.repo` takes it starts no process at all, and every text of the script's answers

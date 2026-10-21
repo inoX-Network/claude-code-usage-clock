@@ -12,7 +12,7 @@ import { PERIODS, PERIOD_ONLY, VIEWS, localTime, parsePeriod, parseReport, repor
 import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
-import { INVALID_REPO, UPDATE_LINE, activeChoice, choiceLabel, parseAnswer, parseShown, printable, settingsArgv, validRepo } from './settings'
+import { INVALID_REPO, UPDATE_LINE, activeChoice, choiceLabel, docsLabel, infoParagraphs, parseAnswer, parseShown, printable, settingsArgv, validRepo } from './settings'
 import type { Part, Shown } from './settings'
 
 const PANE = 'usage-report'
@@ -174,7 +174,7 @@ export function registerReport(on: On): void {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Link } = $.ui.resolve(e)
     const state = await read($, report)
     const limits = await read($, lineConfig)
     const slot = state.slots[state.period]
@@ -288,17 +288,21 @@ export function registerReport(on: On): void {
     }
 
     // The desktop draws tiles in place of the text: key figures, bars, and the sessions as cards. They carry a dark
-    // ground of their own, and as many stand side by side as the width of the pane allows, which the person can drag
+    // ground of their own, and as many stand side by side as the width of the pane allows, which the person can drag.
+    // Every view draws its cards with `card`, Settings too, so that all tabs look alike
+    const perRow = tilesPerRow(e.props.bodyColumns)
+    const width = (n: 1 | 2 | 4) => (n === 1 ? '100%' : n === 2 ? '49%' : '24%')
+    const card = (key: string, children: unknown[], look: { width?: string; isOwn?: boolean } = {}) => (
+      <Box key={key} flexDirection="column" width={look.width ?? '100%'} padding="md" rowGap="sm" marginBottom="sm"
+        backgroundColor={look.isOwn ? LOOK.ownCard : LOOK.card} borderStyle="round" borderColor={look.isOwn ? LOOK.accent : LOOK.border}>
+        {children}
+      </Box>
+    )
+    const grid = (key: string, tiles: unknown[]) => (
+      <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" width="100%">{tiles}</Box>
+    )
     if (e.surface === 'desktop' && slot?.status === 'ok' && !state.settings.isOpen) {
       const { Svg } = $.ui.resolve(e)
-      const perRow = tilesPerRow(e.props.bodyColumns)
-      const width = (n: 1 | 2 | 4) => (n === 1 ? '100%' : n === 2 ? '49%' : '24%')
-      const card = (key: string, children: unknown[], look: { width?: string; isOwn?: boolean } = {}) => (
-        <Box key={key} flexDirection="column" width={look.width ?? '100%'} padding="md" rowGap="sm" marginBottom="sm"
-          backgroundColor={look.isOwn ? LOOK.ownCard : LOOK.card} borderStyle="round" borderColor={look.isOwn ? LOOK.accent : LOOK.border}>
-          {children}
-        </Box>
-      )
       const caption = (key: string, text: string) => <Text key={key} size="caption" color={LOOK.muted}>{text.toUpperCase()}</Text>
       const bar = (key: string, length: number, color: string) => (
         <Box key={key} flexDirection="row" width="100%" backgroundColor={LOOK.border}>
@@ -333,9 +337,6 @@ export function registerReport(on: On): void {
         ]),
         ...k.lines.map((line, i) => <Text key={`kpi-${k.id}-line-${i}`} size="footnote" color={LOOK.muted}>{line}</Text>),
       ], { width: width(perRow) })
-      const grid = (key: string, tiles: unknown[]) => (
-        <Box key={key} flexDirection="row" flexWrap="wrap" justifyContent="space-between" width="100%">{tiles}</Box>
-      )
       const muted = (key: string, text: string) => <Text key={key} size="footnote" color={LOOK.muted}>{text}</Text>
       const drawTile = (t: Tile) =>
         t.kind === 'kpis' ? grid(t.key, t.kpis.map(kpi))
@@ -428,12 +429,23 @@ export function registerReport(on: On): void {
         // The terminal indents with a Box, never with spaces in the text: a wrapped line stays indented. The desktop
         // card has its own padding
         const indent = isDesktop ? {} : { paddingLeft: 2 }
-        // Below the sentence of its part and indented once more: a Text per line, without the spaces the assistant
-        // indents with, the link of `More:` on a line of its own
+        // What stands beside the name of a part: dim in the terminal; on the desktop muted and as small as the
+        // footnotes of the tiles
+        const quiet = isDesktop ? { size: 'footnote' as const, color: LOOK.muted } : { dimColor: true }
+        // Below the sentence of its part and indented once more: the info as paragraphs, then the sentence of the tab.
+        // The terminal shows the link of `More:` on a line of its own, the desktop as a link named by its file
+        const infoLine = (id: string, line: string, i: number) => {
+          if (!line.startsWith('More: ')) {
+            return [<Text key={`info-${id}-${i}`} {...(isDesktop ? quiet : { mono: true, dimColor: true })}>{line}</Text>]
+          }
+          const url = line.slice('More: '.length)
+          return isDesktop
+            ? [<Text key={`info-${id}-${i}`} {...quiet}><Link href={url}>{docsLabel(url)}</Link></Text>]
+            : [<Text key={`info-${id}-${i}`} mono dimColor>More:</Text>, <Text key={`info-${id}-${i}-url`} mono dimColor>{url}</Text>]
+        }
         const infoText = (id: string, info: string, tab: string) => (settings.info !== id ? [] : [
           <Box key={`info-text-${id}`} flexDirection="column" {...indent}>
-            {[...info.split('\n').map(line => line.trim()).flatMap(line => (line.startsWith('More: ') ? ['More:', line.slice(6)] : [line])), tab]
-              .map((line, i) => <Text key={`info-${id}-${i}`} mono dimColor>{line}</Text>)}
+            {[...infoParagraphs(info), tab].flatMap((line, i) => infoLine(id, line, i))}
           </Box>,
         ])
         const choose = (key: string, value: string) => async () => {
@@ -441,55 +453,73 @@ export function registerReport(on: On): void {
           await setSettings($, { note: noteOf(run) })
           await loadSettings($)
         }
-        const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => (
+        // The active choice is marked as the open tab is: the desktop shows it on the same plate
+        const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => marked(`set-${id}-${choice}`, choice === active,
           <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
             {choice === active
               ? <Text key={`label-set-${id}-${choice}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${choiceLabel(choice)}${suffix} `}</Text>
               : <Text key={`label-set-${id}-${choice}`}>{choiceLabel(choice)}</Text>}
-          </Button>
+          </Button>,
         )
-        // Check and Save on the plate of the marked choice, so that they read as buttons
+        // Check and Save on the plate of the marked choice, so that they read as buttons. The desktop does not draw the
+        // colours of a label: there Save stands on the plate of the open tab
         const actionButton = (key: string, label: string, onPress: () => Promise<void>) => (
           <Button key={key} plain onPress={onPress}>
             <Text key={`label-${key}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${label} `}</Text>
           </Button>
         )
-        const container = (key: string, children: unknown[]) => (isDesktop
-          ? <Box key={key} flexDirection="column" width="100%" padding="md" rowGap="sm" marginBottom="sm" backgroundColor={LOOK.card} borderStyle="round" borderColor={LOOK.border}>{children}</Box>
+        // The desktop draws each part as a card of the other views, the parts side by side, two at most
+        const partWidth = perRow === 1 ? '100%' : '49%'
+        const container = (key: string, children: unknown[], cardWidth = '100%') => (isDesktop
+          ? card(key, children, { width: cardWidth })
           : <Box key={key} flexDirection="column" marginBottom={1}>{children}</Box>)
+        // The state in effect as a small label in capitals, at the right of the name on the desktop: the accent where
+        // a part acts, the warning colour where it only watches, muted where it is off
+        const badgeOf = (choice: string) => ({
+          text: choiceLabel(choice).toUpperCase(),
+          color: choice === 'shadow' ? LOOK.warning : choice === 'true' || choice === 'on' || choice === 'enforce' ? LOOK.accent : LOOK.muted,
+        })
         // A row: the name on a line of its own, below it one indented block with the sentence, the buttons and what
         // they unfold. Every row has this shape, so its buttons start in the same column
-        const heading = (id: string, label: string, isInstalled: boolean) => (
-          <Text key={`part-${id}`} weight="bold" dimColor={!isInstalled}>{label}</Text>
-        )
+        const heading = (id: string, label: string, isInstalled: boolean, badge?: { text: string; color: string }) => (isDesktop
+          ? <Box key={`head-${id}`} flexDirection="row" justifyContent="space-between" alignItems="center" columnGap="sm">
+              <Text key={`part-${id}`} weight="semibold" color={isInstalled ? LOOK.text : LOOK.muted}>{label}</Text>
+              {badge === undefined ? null : <Text key={`state-${id}`} size="caption" weight="bold" color={badge.color}>{badge.text}</Text>}
+            </Box>
+          : <Text key={`part-${id}`} weight="bold" dimColor={!isInstalled}>{label}</Text>)
         const block = (id: string, children: unknown[]) => (
           <Box key={`body-${id}`} flexDirection="column" {...(isDesktop ? { rowGap: 'sm' as const } : indent)}>{children}</Box>
         )
-        const sentence = (id: string, summary: string) => <Text key={`summary-${id}`} dimColor>{summary}</Text>
+        const sentence = (id: string, summary: string) => <Text key={`summary-${id}`} {...quiet}>{summary}</Text>
         const controls = (id: string, children: unknown[], look: { alignItems?: 'center' } = {}) => (
           <Box key={`controls-${id}`} flexDirection="row" flexWrap="wrap" columnGap={isDesktop ? 1 : 2} {...look}>{children}</Box>
         )
-        const absent = (id: string, label: string, summary: string) => container(`row-${id}`, [
-          heading(id, label, false),
-          block(id, [sentence(id, summary), <Text key={`absent-${id}`} dimColor>not installed: install.py</Text>]),
-        ])
+        // On the desktop the choices of a part stand in a frame of their own, i outside it on the right
+        const group = (id: string, buttons: unknown[]) => (isDesktop && buttons.length > 0
+          ? [<Box key={`group-${id}`} flexDirection="row" alignItems="center" columnGap={1} paddingX="xs" borderStyle="round" borderColor={LOOK.border}>{buttons}</Box>]
+          : buttons)
+        const absent = (id: string, label: string, summary: string, cardWidth?: string) => container(`row-${id}`, [
+          heading(id, label, false, { text: 'NOT INSTALLED', color: LOOK.muted }),
+          block(id, [sentence(id, summary), <Text key={`absent-${id}`} {...quiet}>not installed: install.py</Text>]),
+        ], cardWidth)
         const partRow = (part: Part) => {
-          if (!part.installed) return absent(part.id, part.label, part.summary)
+          if (!part.installed) return absent(part.id, part.label, part.summary, partWidth)
           const active = activeChoice(part)
           return container(`row-${part.id}`, [
-            heading(part.id, part.label, true),
+            // The status line has no switch, and so no state
+            heading(part.id, part.label, true, part.key === null ? undefined : badgeOf(active)),
             block(part.id, [
               sentence(part.id, part.summary),
               // The status line has no switch: the reason stands under its sentence, its buttons are only i
-              ...(part.key === null ? [<Text key={`fixed-${part.id}`} dimColor>{part.tab}</Text>] : []),
+              ...(part.key === null ? [<Text key={`fixed-${part.id}`} {...quiet}>{part.tab}</Text>] : []),
               controls(part.id, [
-                ...(part.key === null ? [] : part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
+                ...group(part.id, part.key === null ? [] : part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
                   part.value === '' && choice === active ? ' (installed)' : ''))),
                 infoButton(part.id),
               ]),
               ...infoText(part.id, part.info, part.tab),
             ]),
-          ])
+          ], partWidth)
         }
         const checkRepo = async (name: string) => {
           // A name the script would refuse starts no process at all. The field gets it without control characters:
@@ -518,19 +548,22 @@ export function registerReport(on: On): void {
         // last_success is a UTC time, shown as the report shows its times; last_error is the category of the error
         const syncState = [sync.last_success === null ? null : `last success ${localTime(sync.last_success)}`,
           sync.last_error === null ? null : `last error ${sync.last_error}`].filter(part => part !== null).join(' · ')
+        // The desktop draws a button of its own beside the field, which submits it: named Check, it is the one Check
+        // there. The terminal names Enter beside the field and draws Check as a button
         const input = (
-          <Input key="repo" label="owner/name" value={repo} placeholder="owner/name" submitLabel="check"
+          <Input key="repo" label="owner/name" value={repo} placeholder="owner/name" submitLabel={isDesktop ? 'Check' : 'check'}
             onInput={(value: string) => setSettings($, { repo: value })} onSubmit={(value: string) => checkRepo(value)} />
         )
+        const parts = shown.modules.map(partRow)
         body = [
-          ...shown.modules.map(partRow),
+          ...(isDesktop ? [grid('parts', parts)] : parts),
           ...(!sync.installed ? [absent('sync', 'Sync', sync.summary)] : [
             container('row-sync', [
-              heading('sync', 'Sync', true),
+              heading('sync', 'Sync', true, badgeOf(sync.mode)),
               block('sync', [
                 sentence('sync', sync.summary),
-                controls('sync', [...sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, '')), infoButton('sync')]),
-                ...(syncState === '' ? [] : [<Text key="sync-state" dimColor>{syncState}</Text>]),
+                controls('sync', [...group('sync', sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, ''))), infoButton('sync')]),
+                ...(syncState === '' ? [] : [<Text key="sync-state" {...quiet}>{syncState}</Text>]),
                 ...infoText('sync', sync.info, sync.tab),
               ]),
             ]),
@@ -540,8 +573,8 @@ export function registerReport(on: On): void {
                 // The terminal draws the field in a frame of its own, so that it reads as a field
                 controls('repo', [
                   isDesktop ? input : <Box key="repo-field" borderStyle="round" paddingX={1}>{input}</Box>,
-                  actionButton('check', 'Check', () => checkRepo(repo)),
-                  ...(canSave ? [actionButton('save', 'Save', save)] : []),
+                  ...(isDesktop ? [] : [actionButton('check', 'Check', () => checkRepo(repo))]),
+                  ...(canSave ? [marked('save', true, actionButton('save', 'Save', save))] : []),
                   infoButton('repo'),
                 ], { alignItems: 'center' }),
                 ...(settings.check === null ? [] : [
