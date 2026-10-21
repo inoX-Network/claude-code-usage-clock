@@ -41,6 +41,8 @@ that key and writes one line to the log.
 | `spawn_rules.apply_to_main_session` | `true` | `false`: calls of the main session are not checked at all. |
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
+| `modules.usage_clock` / `context_reporter` | `true` / `true` | `false` switches the hook off: it stays in `settings.json` and adds nothing ([below](#modules-switch-parts-off)). |
+| `modules.spawn_gate` / `soft_stop` | `""` / `""` | The mode of the gate: `off`, `shadow` or `enforce`, before the `--mode` of its hook entry; empty: the entry decides ([below](#modules-switch-parts-off)). |
 | `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
 | `sync.repo` | `""` | The sync repository on GitHub as `owner/name` (a private one; the installer sets it with `--sync-repo`). Empty: no push. |
 | `sync.transport` | `https` | How the clone reaches it: `https` (`https://github.com/owner/name.git`) or `ssh` (`git@github.com:owner/name.git`). The remote of the clone must be exactly this URL. |
@@ -53,9 +55,28 @@ that key and writes one line to the log.
 | `sync.keep_request_months` | `3` | Full months (at least 1) whose requests stay in the own folder of the sync repository; older months are compacted to their day lines. |
 | `sync.max_clone_mb` | `1024` | The most the files of the sync repository may add up to, in MB of 1024 KiB (a whole number, at least 1). A larger remote is neither fast-forwarded nor rebased onto: push and pull end `internal` and nothing is checked out (a small fetch that would unpack to gigabytes). Raise it if the repository really is that large. The number of files has a fixed limit of 100 000 (no key: a real export has about 120 files a machine and month), against a few objects that would check out as millions of empty files. |
 
-The mode of the gates and `--week-ok-until` are arguments in the hook command in `settings.json`, not in the config
-file. The sync is the other way round: `sync.mode`, `sync.repo` and `sync.machine_name` are in the config file, and the
-installer sets them with `--sync-mode`, `--sync-repo` and `--sync-name` ([the sync](sync.md)).
+The mode of the gates and `--week-ok-until` are arguments in the hook command in `settings.json`; `modules` in the
+config file can override the mode (below). The sync is the other way round: `sync.mode`, `sync.repo` and
+`sync.machine_name` are in the config file, and the installer sets them with `--sync-mode`, `--sync-repo` and
+`--sync-name` ([the sync](sync.md)).
+
+### modules: switch parts off
+
+Every hook reads `config.json` on each run, so a change in `modules` takes effect with the next prompt or tool call,
+without a restart and without touching `settings.json`:
+
+- `modules.usage_clock` and `modules.context_reporter`: `false` and the hook adds nothing to the prompt.
+- `modules.spawn_gate` and `modules.soft_stop`: `off` lets every start or call through as if the hook were not there;
+  `shadow` or `enforce` is the mode of the gate and comes before the `--mode` of its hook entry; `""` (the default)
+  leaves the mode to the entry, as before. `install.py --mode X` writes `X` here as well for each gate it installs,
+  so that the two never disagree, and `install.py --check` says where the mode comes from (`from config` or `from
+  settings.json`).
+- A hook switched off writes one log line `disabled` per session, no more.
+- The status line has no switch: the other parts read its measurement.
+
+The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through
+`settings_cli.py`, with the same check and backup as the installer. Like every key, `modules` is only as safe as
+your guard keeps the model from writing `config.json` ([Working with a guard hook](security.md#working-with-a-guard-hook)).
 
 Three environment variables override the files: `CCUC_CONFIG` (another config file), `CCUC_LOG_DIR` (the log
 folder) and `CCUC_USAGE_FILE` (the shared usage file).

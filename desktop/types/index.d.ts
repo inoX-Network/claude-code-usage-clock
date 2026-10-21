@@ -29,6 +29,24 @@ export type ReportSlot =
   | { status: 'error'; message: string }
   | { status: 'ok'; report: Record<string, unknown> }
 
+/** The Settings tab: what `settings_cli.py show --json` answered, or why there is nothing. */
+export type SettingsSlot =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'missing' }
+  | { status: 'ok'; shown: Record<string, unknown> }
+
+/** The Settings tab of the pane: open or not, the part whose info is unfolded, the repository typed into the field,
+ *  the answer of the last Check (Save is offered only after `private_ok` for exactly that name), and the last note. */
+export type SettingsState = {
+  isOpen: boolean
+  slot: SettingsSlot | null
+  info: string | null
+  repo: string | null
+  check: { result: string; repo: string; text: string } | null
+  note: string | null
+}
+
 /** The open report pane: the tab chosen in each row, and what was read per period since `/report` was run. */
 export type ReportState = {
   period: ReportPeriod
@@ -38,6 +56,7 @@ export type ReportState = {
   /** The session the pane was opened from, marked in the Sessions view; null when it could not be read. */
   own: string | null
   slots: { [period in ReportPeriod]?: ReportSlot }
+  settings: SettingsState
 }
 
 declare module 'claude-code' {

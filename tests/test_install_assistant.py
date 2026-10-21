@@ -1099,3 +1099,39 @@ def test_every_info_link_points_to_a_heading_of_the_documentation(machine):
         assert link.startswith(prefix), key
         path, anchor = link[len(prefix):].split('#')
         assert anchor in test_doc_links.anchors(os.path.join(ROOT, path)), (key, link)
+
+
+# --- REPORT-SETTINGS: the mode of a gate in config.json ---------------------------------------------------------
+
+def set_modules(machine, **values):
+    cfg = machine.config_data()
+    cfg.setdefault('modules', {}).update(values)
+    machine.config.write_text(json.dumps(cfg), encoding='utf-8')
+
+
+def test_the_mode_in_config_json_is_the_current_mode_of_a_gate(machine):
+    assert machine.cli('--components', 'spawn-gate', '--mode', 'shadow')[0] == 0
+    set_modules(machine, spawn_gate='enforce')
+    code, out = machine.ask('', '', '', '', '', '', '', 'n')
+    labels(out, (ENFORCE, '[Y/n]' + CURRENT))
+    assert runs(machine.module, out)[0][2:4] == ['--mode', 'enforce']
+
+
+def test_a_gate_switched_off_in_config_json_is_kept_on_enter(machine):
+    assert machine.cli('--components', 'spawn-gate,soft-stop', '--mode', 'shadow')[0] == 0
+    set_modules(machine, spawn_gate='off')
+    before = machine.config.read_bytes()
+    code, out = machine.ask('', '', '', '', '', '', '', '')
+    assert prompt_of(out, ENFORCE).endswith(f'{ENFORCE} [y/n, Enter keeps] ')
+    assert 'spawn-gate off, soft-stop shadow' in out
+    assert '--mode' not in runs(machine.module, out)[0] and machine.config.read_bytes() == before
+
+
+def test_the_only_gate_switched_off_in_config_json_is_kept_on_enter(machine):
+    assert machine.cli('--components', 'spawn-gate', '--mode', 'enforce')[0] == 0
+    set_modules(machine, spawn_gate='off')
+    before = machine.config.read_bytes()
+    code, out = machine.ask('', '', '', '', '', '', '', '')
+    assert prompt_of(out, ENFORCE).endswith(f'{ENFORCE} [y/n, Enter keeps] ') and 'spawn-gate off;' in out
+    assert runs(machine.module, out) == [['--components', 'spawn-gate', '--sync-mode', 'off']]
+    assert machine.config.read_bytes() == before

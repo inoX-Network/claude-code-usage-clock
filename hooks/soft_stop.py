@@ -258,8 +258,13 @@ def main() -> int:
         agent_id = hook_input.get('agent_id')
         if not agent_id:
             return 0  # main session: never block
+        mode = args['mode']
         try:
             cfg = _config.load(log_problems=True)
+            mode = _config.gate_mode(cfg, 'soft_stop', mode)      # modules.soft_stop before --mode of the entry
+            if mode == 'off':      # switched off in config.json: the call goes through, nothing is counted
+                _hookio.log_disabled('soft_stop', 'soft_stop', hook_input)
+                return 0
             tool = str(hook_input.get('tool_name') or '')
             raw = hook_input.get('tool_input')
             tool_input = raw if isinstance(raw, dict) else {}
@@ -267,15 +272,15 @@ def main() -> int:
             since, has = counter.read(str(agent_id))
             usage = _usage.read_usage(_usage.usage_path(), None, cfg['thresholds']['max_age_min'])
             decision = decide(usage, tool, tool_input, since, has, cfg)
-            effective = decision.action if args['mode'] == 'enforce' else 'allow'
+            effective = decision.action if mode == 'enforce' else 'allow'
             if effective != 'deny':
                 counter.book(str(agent_id), is_checkpoint_write(tool, tool_input, normalize_suffix(cfg.get('checkpoint_dir_suffix'))))
         except Exception as error:  # fail open
-            _hookio.log_decision('soft_stop', args['mode'], hook_input, 'error', type(error).__name__)
+            _hookio.log_decision('soft_stop', mode, hook_input, 'error', type(error).__name__)
             return 0
-        _hookio.log_decision('soft_stop', args['mode'], hook_input, decision.action, decision.reason,
+        _hookio.log_decision('soft_stop', mode, hook_input, decision.action, decision.reason,
                              calls_since_checkpoint=since)
-        if args['mode'] != 'enforce':
+        if mode != 'enforce':
             if decision.action in _hookio.SHADOW_PHRASES:
                 _hookio.emit_context(EVENT, _hookio.shadow_note('Soft stop', 'this call', decision.action,
                                                                 decision.reason, 'Mention it in your report.'))

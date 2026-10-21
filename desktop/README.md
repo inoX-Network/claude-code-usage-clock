@@ -45,8 +45,8 @@ went into. `/report month` opens it on that period (`day`, `week`, `month` or `y
 another word, it is the week).
 
 ```
-[Overview] Agents  Models  Cache/Thinking  Tokens  Projects  Sessions     Day  Week  Month  Year  Refresh
- <- keys a b c d e f g: the view                                        <- keys 1 2 3 4: the period, r: read again
+[Overview] Agents  Models  Cache/Thinking  Tokens  Projects  Sessions  Settings     Day  Week  Month  Year  Refresh
+ <- keys a b c d e f g: the view, h: Settings                                     <- keys 1 2 3 4: the period, r: read again
 
 Week to Mon 19 Oct 09:00 · 39 % of the weekly limit used (+39 points) · 100 USD at API prices
 5h windows: 1, highest 82 % (Tue 13 Oct 14:30)
@@ -76,6 +76,13 @@ to the prompt (the engine's rule); Ctrl+X then Tab takes them into the pane agai
 | Tokens | Input, cache write (5 minutes, 1 hour), cache read and output tokens. |
 | Projects | Every project: USD, share, estimated points of the weekly limit, sessions. |
 | Sessions | Every session of the period, highest cost first; `▶` marks the session you opened `/report` from. With the [sync](../docs/usage-report.md#other-machines-the-sync) a last column `machine` names the machine each session ran on, and only a session of this machine can carry the mark. Enter on one opens its detail: cost and estimated points, tokens by kind, models, subagents, and what its context held after the first answer (see below). `q` goes back to the list. |
+
+**Settings** (key `h`) is a tab of its own beside the views: a switch per part of usage-clock (`on`/`off`, or
+`off`/`shadow`/`enforce` for the gates), the mode of the sync, and the sync repository with **Check** and, only after a
+check found that name private and reachable, **Save**. `i` on a row unfolds its text from the installer. The tab writes
+`config.json` only, through `settings_cli.py` next to the hooks, which the plugin runs with a fixed list of arguments
+(never a shell); without that script (an older installation) it shows one line with the update command. All of it:
+[The Settings tab](../docs/reports.md#the-settings-tab).
 
 **In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
 figures (the weekly limit as a half circle with a mark where red starts, the highest 5h window with a column per

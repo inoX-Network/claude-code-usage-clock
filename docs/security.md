@@ -51,7 +51,7 @@ To make the gates a lock rather than a seatbelt, let your guard block the model 
 | Path | Why |
 |---|---|
 | `~/.claude/settings.json` | Mode and `--week-ok-until` live in the hook commands. |
-| `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds. |
+| `~/.claude/hooks/usage-clock/` | The hooks and `config.json` with the thresholds and the switches of `modules`: a model that writes it can switch a gate `off`, so `modules`, like every key, is only as safe as this row. |
 | `~/.claude/rate-limit.json` (your `usage_file`) | The shared usage numbers. |
 | `~/.cache/claude-usage-clock/` | Log, per-agent checkpoint counters, context state, the context split of each session, measurement history, report archive, watcher heartbeats and the lock of the usage file (a model that holds it keeps the numbers from updating). |
 

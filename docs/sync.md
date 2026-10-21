@@ -38,7 +38,8 @@ The installer:
 
 - adds the hooks `SessionStart` and `SessionEnd` (`sync.py session-start` and `session-end`) to `settings.json`,
 - sets `sync.repo` and `sync.mode` in `config.json`, and with `--sync-name NAME` the name of this machine
-  (`sync.machine_name`; the host name is never used): the only keys of that file it ever writes, with a backup; it
+  (`sync.machine_name`; the host name is never used): with `modules.<gate>` of `--mode` the only keys of that file it
+  ever writes, with a backup; it
   says which mode applies and where it comes from (`Sync mode: shadow (default, nothing installed yet)`; a run without
   `--sync-mode` keeps the mode of an installed sync),
 - checks once, and shows it, that the repository **cannot be read without logging in**. A public repository, or an

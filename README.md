@@ -33,6 +33,11 @@ repo closes that gap with a status line and four hooks (five parts):
 | **Soft stop** (`PreToolUse`: all tools) | Slows subagents down near the five-hour limit: warn, then only allow saving a checkpoint, then ask them to finish with a partial result. Never blocks the main session. | available | log only |
 | **Sync** (`SessionStart`, `SessionEnd`) | Optional, not one of the five: puts the usage data of each of your computers into a private GitHub repository of yours, so the report shows all of them. Opt-in, starts in shadow mode (commits locally, pushes nothing); what it sends and its limits: [docs/sync.md](docs/sync.md). | available | off |
 
+The usage clock, the context reporter and the two gates can each be switched off, and the gates set to a mode, in
+`config.json` ([`modules`](docs/configuration.md#modules-switch-parts-off)) or in the
+[Settings tab of /report](docs/reports.md#the-settings-tab), without a restart and without touching `settings.json`;
+the status line cannot (the others read its measurement).
+
 On top of these there are two optional helpers that need no settings entry: the [wake-up
 watcher](docs/statusline.md#the-wake-up-watcher), off by default, and the plugin in [`desktop/`](desktop/README.md), which draws the
 status line in the Claude desktop app and adds [`/report`](docs/reports.md#the-report-pane), a pane with the usage report.

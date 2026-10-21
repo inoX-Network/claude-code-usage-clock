@@ -85,7 +85,8 @@ script that `tools/install.py` installs.
 
 - `/report month` opens it on that period (`day`, `week`, `month` or `year`; the default is the week).
 - Seven views, each on a key: `a` Overview, `b` Agents, `c` Models, `d` Cache/Thinking, `e` Tokens, `f` Projects,
-  `g` Sessions. The period is on `1` to `4`, `r` reads it again, Esc closes the pane.
+  `g` Sessions; `h` opens [Settings](#the-settings-tab). The period is on `1` to `4`, `r` reads it again, Esc closes
+  the pane.
 - The desktop app draws tiles and bars, the terminal the same numbers as text.
 - Sessions lists every session of the period, highest cost first, and marks the one you opened `/report` from: `▶` in
   the terminal, under "This session" in the app. A session opens into its detail (cost, tokens by kind, models,
@@ -95,6 +96,32 @@ script that `tools/install.py` installs.
 
 The pane makes no model call, and nothing of it reaches the model or the transcript. Every key, tile and failure
 message: [`desktop/README.md`](../desktop/README.md#the-usage-report-report).
+
+### The Settings tab
+
+`h` opens **Settings**, a tab of its own beside the views. It switches the parts of an installed usage-clock on and off
+and sets the sync repository, without a restart and without changing `settings.json`:
+
+- One row per part with its name and what it does: `on`/`off` for the usage clock and the context reporter,
+  `off`/`shadow`/`enforce` for the spawn gate and the soft stop, `off`/`shadow`/`on` for the sync. The active choice is
+  marked; a gate without a mode of its own shows the mode of its hook entry with `(installed)`. These are the keys
+  [`modules`](configuration.md#modules-switch-parts-off) and `sync.mode` of `config.json`; every hook reads them on its
+  next run.
+- The status line has no switch (the other parts read its measurement). A part that is not installed stands grey
+  with `not installed: install.py` and no button: the tab never adds or removes a hook.
+- Sync repository (with the sync installed): a field with `sync.repo` and **Check**, the test of `install.py
+  --sync-repo` (`owner/name`, not readable without logging in, reachable with the login of git), which writes nothing.
+  Only after it found that very name private and reachable, **Save** appears: it sets `sync.repo` and clones the
+  repository, as the installer does.
+  While `<log_dir>/sync/repo` holds a clone of another repository, Save changes nothing and says so: move that folder
+  away (do not delete it, it may hold commits that were never pushed), then save again.
+- `i` on a row unfolds a few lines about the part, the same text the installer's assistant prints on `i`, and what the
+  switch here does differently.
+
+The tab writes only through `settings_cli.py`, which the installer puts next to the hooks: it checks every value, keeps
+a backup (`config.json.bak-usage-clock-<timestamp>`) and writes atomically, as the installer does. The plugin runs it
+with a fixed list of arguments, never through a shell. With an installation older than the tab, the tab shows one line
+with the update command.
 
 ### What a session started with
 

@@ -473,6 +473,28 @@ def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | 
     return judge(done.returncode, done.stderr)
 
 
+def check_access(repo: str, transport: str, directory: str, deadline: _sync_core.Deadline | None = None,
+                 execute: Execute | None = None) -> str:
+    """Whether this login reaches `owner/name` (the Settings tab checks a repository before it saves it, and writes
+    nothing): `reachable`, `not_found_or_no_access` (GitHub says not found, or git has no credentials for it) or
+    `unclear`. One `git ls-remote` with the credentials of the user, without a prompt (git_env), outside any repository
+    (GIT_DIR is the null device), in `directory`, at most VISIBILITY_TIMEOUT_S. `execute` replaces run_command (tests)."""
+    seconds = VISIBILITY_TIMEOUT_S if deadline is None else min(VISIBILITY_TIMEOUT_S, deadline.left())
+    base = {name: value for name, value in os.environ.items()
+            if name not in FOREIGN_ENV and not name.startswith(FOREIGN_ENV_PREFIXES)}
+    env = _sync_core.git_env(dict(base, GIT_DIR=os.devnull, LC_ALL='C', LANGUAGE='C'), deadline)
+    argv = [_sync_core.GIT, 'ls-remote', '--heads', remote_url(repo, transport)]
+    try:
+        done = (execute or _sync_core.run_command)(argv, _sync_core.Deadline(seconds), env, directory)
+    except _sync_core.SyncError:
+        return 'unclear'
+    if done.returncode == 0:
+        return 'reachable'
+    if any(text in done.stderr for text in AUTH_TEXTS):      # Repository not found is one of them
+        return 'not_found_or_no_access'
+    return 'unclear'
+
+
 def private_checked(directory: str, repo: str) -> float | None:
     """When `<directory>/visibility.json` says `repo` was found private (Unix seconds); None for a file that is
     missing, broken or of another repository. `--check` of the installer shows its age."""
