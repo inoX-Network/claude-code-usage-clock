@@ -121,7 +121,9 @@ and sets the sync repository, without a restart and without changing `settings.j
   nothing.
 
 The tab writes only through `settings_cli.py`, which the installer puts next to the hooks: it checks every value, keeps
-a backup (`config.json.bak-usage-clock-<timestamp>`) and writes atomically, as the installer does. The plugin runs it
+a backup (`config.json.bak-usage-clock-<timestamp>`; the ten newest stay, older ones of that name are removed) and
+writes atomically under a lock (`config.json.lock-usage-clock`), as the installer does, so that a click while the
+installer runs loses no change. The plugin runs it
 with a fixed list of arguments, never through a shell. With an installation older than the tab, the tab shows one line
 with the update command.
 

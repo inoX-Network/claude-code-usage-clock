@@ -140,7 +140,7 @@ the installer did. What stays, and how to remove it:
 | The shared usage file `~/.claude/rate-limit.json` (the `usage_file` in your config); versions before October 2026 also left its lock file next to it | `rm ~/.claude/rate-limit.json ~/.claude/rate-limit.json.lock` |
 | `autoContinueAtUsageLimit: true`, if you installed with `--auto-continue` | Remove the key from `settings.json` by hand, or set it to `false`. |
 | Your earlier status line, if you installed with `--replace-statusline`: it is **not** restored | Copy it back from the backup `settings.json.bak-usage-clock-<timestamp>` that the installing run printed (the `Undo:` line). |
-| The backups `settings.json.bak-usage-clock-*` (and `config.json.bak-usage-clock-*`, if the installer set the sync keys) | Delete them when you no longer need them. |
+| The backups `settings.json.bak-usage-clock-*` (all of them) and `config.json.bak-usage-clock-*` (the ten newest, written whenever the installer or the Settings tab changed a key), and the lock `config.json.lock-usage-clock` | Delete them when you no longer need them. |
 | The local clone of the sync, if you installed it: `<log_dir>/sync/` (the clone in `repo/`, its state, the cache of the visibility check and the machine id) | Part of the log folder: `rm -r ~/.cache/claude-usage-clock/sync`, or the whole log folder as above. Commits of shadow mode that were never pushed go with it. |
 | The data of this machine in the sync repository on GitHub (`machines/<machine id>/`): the uninstall never touches the remote | Delete that folder in the repository yourself (a commit that removes it), or the whole repository on GitHub. |
 

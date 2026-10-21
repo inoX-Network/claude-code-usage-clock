@@ -1338,12 +1338,12 @@ def test_v8_a_gate_switched_on_again_takes_the_mode_of_question_6_as_a_new_gate(
 
 def test_v8_only_switching_off_installs_nothing_and_copies_no_file(machine):
     assert machine.cli('--components', 'usage-clock')[0] == 0
-    hooks = {k: v for k, v in machine.files().items() if not k.endswith('config.json')}
+    hooks = {k: v for k, v in machine.files().items() if 'config.json' not in k}      # with its backups and lock
     code, out = machine.ask('', 'n', '', '', '', '', '')
     assert code == 0, out
     assert runs(machine.module, out) == [['--off', 'usage-clock', '--sync-mode', 'off']]
     assert modules(machine)['usage_clock'] == 'false' and 'Smoke test' not in out and 'Files:' not in out
-    assert {k: v for k, v in machine.files().items() if not k.endswith('config.json') and '.bak-' not in k} == hooks
+    assert {k: v for k, v in machine.files().items() if 'config.json' not in k} == hooks
 
 
 def test_v8_the_context_reporter_is_not_asked_without_the_status_line_and_stays_as_it_is(machine):

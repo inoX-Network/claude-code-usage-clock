@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
+import stat
 import time
 from datetime import datetime
 from typing import NamedTuple
@@ -20,6 +22,7 @@ import _config
 import _plat
 import _sync_core
 import _sync_git
+import _usage
 
 SECTIONS = ('sync', 'modules')      # the sections of config.json whose keys are written here
 SCRIPTS = {'statusline': 'statusline.py', 'usage-clock': 'usage_clock.py', 'context-reporter': 'context_reporter.py',
@@ -33,6 +36,10 @@ HOOKS = {'usage-clock': [('UserPromptSubmit', None)],
          'sync': [('SessionStart', None), ('SessionEnd', None)]}
 TOUCHED_EVENTS = tuple(dict.fromkeys(event for entries in HOOKS.values() for event, _ in entries))
 TEMP_SUFFIX = '.tmp-usage-clock'
+LOCK_SUFFIX = '.lock-usage-clock'       # next to config.json: one reader-changer-writer at a time (write_keys)
+BACKUP_INFIX = '.bak-usage-clock-'
+BACKUP_STAMP = re.compile(r'\d{8}-\d{6}-\d{6}(-\d{1,3})?')        # what make_backup puts after BACKUP_INFIX
+BACKUPS_KEPT = 10       # of config.json, which the Settings tab writes on every change; settings.json keeps all
 CLONE_TIMEOUT_S = 300           # the clone of --sync-repo, under the sync lock (no push runs meanwhile)
 CHECK_GIT_TIMEOUT_S = 15        # each git call of --check in the clone
 DOCS = 'https://github.com/inoX-Network/claude-code-usage-clock/blob/main/docs/'
@@ -210,26 +217,59 @@ def installed_parts(data: dict, target: str) -> set[str]:
 
 # --- config.json ------------------------------------------------------------------------------------------------
 
-def make_backup(path: str) -> str:
-    """Copies path exclusively to <path>.bak-usage-clock-<stamp with microseconds>[-n]. Never overwrites a backup."""
+def _no_follow(path: str, flags: int) -> int:
+    return os.open(path, flags | _plat.NO_FOLLOW)
+
+
+def make_backup(path: str, keep: int | None = None) -> str:
+    """Copies path exclusively to <path>.bak-usage-clock-<stamp with microseconds>[-n], with its mode and times. Never
+    overwrites a backup and never reads through a link (a path that is one is an OSError). With `keep`, only the newest
+    `keep` backups of path stay (prune_backups)."""
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    for n in range(1000):
-        backup = f'{path}.bak-usage-clock-{stamp}' + (f'-{n}' if n else '')
-        try:
-            descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            continue
-        with open(path, 'rb') as source, os.fdopen(descriptor, 'wb') as copy_file:
-            shutil.copyfileobj(source, copy_file)
-        shutil.copystat(path, backup)
-        return backup
+    with open(path, 'rb', opener=_no_follow) as source:
+        info = os.fstat(source.fileno())
+        for n in range(1000):
+            backup = f'{path}{BACKUP_INFIX}{stamp}' + (f'-{n}' if n else '')
+            try:
+                descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _plat.NO_FOLLOW | _plat.O_BINARY,
+                                     0o600)
+            except FileExistsError:
+                continue
+            with os.fdopen(descriptor, 'wb') as copy_file:
+                shutil.copyfileobj(source, copy_file)
+                copy_file.flush()
+                _plat.fchmod(descriptor, stat.S_IMODE(info.st_mode))
+                if os.utime in os.supports_fd:      # by the open file: no link in between (not on Windows)
+                    os.utime(descriptor, ns=(info.st_atime_ns, info.st_mtime_ns))
+            if os.utime not in os.supports_fd:
+                os.utime(backup, ns=(info.st_atime_ns, info.st_mtime_ns))
+            if keep is not None:
+                prune_backups(path, keep)
+            return backup
     raise RuntimeError(f'No free backup name for {path}')
 
 
-def write_json(path: str, data: dict, existed: bool, backup: bool | None = None) -> str | None:
-    """Backup (if the file exists, or as `backup` says), then temp file + os.replace. Keeps the permissions. Returns
-    the backup path. Writes config.json, too."""
-    backup = make_backup(path) if (existed if backup is None else backup) else None
+def prune_backups(path: str, keep: int) -> None:
+    """Removes the backups of path beyond the newest `keep`: only regular files with the exact names make_backup gives.
+    A backup that cannot be removed stays."""
+    folder, name = os.path.split(path)
+    prefix = name + BACKUP_INFIX
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.startswith(prefix) and BACKUP_STAMP.fullmatch(n[len(prefix):]))
+    except OSError:
+        return
+    for old in names[:-keep]:
+        try:
+            if stat.S_ISREG(os.lstat(os.path.join(folder, old)).st_mode):
+                os.unlink(os.path.join(folder, old))
+        except OSError:
+            pass
+
+
+def write_json(path: str, data: dict, existed: bool, backup: bool | None = None, keep: int | None = None) -> str | None:
+    """Backup (if the file exists, or as `backup` says; `keep` as make_backup takes it), then temp file + os.replace.
+    Keeps the permissions. Returns the backup path. Writes config.json, too."""
+    backup = make_backup(path, keep) if (existed if backup is None else backup) else None
     temp = path + TEMP_SUFFIX
     try:
         os.unlink(temp)  # a leftover of an aborted run, possibly a symlink: never write through it
@@ -242,8 +282,10 @@ def write_json(path: str, data: dict, existed: bool, backup: bool | None = None)
     try:
         with open(temp, encoding='utf-8') as f:
             json.load(f)  # cross-check: valid JSON
-        if existed:
-            shutil.copymode(path, temp)
+        if existed:      # the mode of the file itself, never that of a link's target
+            info = os.stat(path, follow_symlinks=False)
+            if stat.S_ISREG(info.st_mode):
+                os.chmod(temp, stat.S_IMODE(info.st_mode))
         _plat.replace(temp, path)
     except BaseException:      # our own temp file: never left behind
         os.unlink(temp)
@@ -274,12 +316,15 @@ def read_config(path: str, example: str | None = None) -> dict:
 
 def write_keys(path: str, sections: dict, existed: bool, example: str | None = None) -> str | None:
     """Sets the keys of `sections` ({'sync': {'mode': 'on'}}) into config.json as it is now (read again: the clone may
-    have taken minutes) and writes it with write_json, with a backup if it `existed` before the run. Returns the backup
-    path."""
-    content = read_config(path, example)
-    for section, values in sections.items():
-        content.setdefault(section, {}).update(values)
-    return write_json(path, content, os.path.exists(path), backup=existed)
+    have taken minutes) and writes it with write_json, with a backup if it `existed` before the run (the newest
+    BACKUPS_KEPT stay). Reads and writes under the lock <path>.lock-usage-clock, so that the tab and the installer at
+    the same time lose no change. Returns the backup path."""
+    descriptor = os.open(path + LOCK_SUFFIX, os.O_RDWR | os.O_CREAT | _plat.NO_FOLLOW | _plat.O_BINARY, 0o600)
+    with os.fdopen(descriptor, 'r+b') as lock, _usage.locked(lock):
+        content = read_config(path, example)
+        for section, values in sections.items():
+            content.setdefault(section, {}).update(values)
+        return write_json(path, content, os.path.exists(path), backup=existed, keep=BACKUPS_KEPT)
 
 
 # --- Sync -------------------------------------------------------------------------------------------------------
