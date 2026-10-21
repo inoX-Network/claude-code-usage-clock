@@ -75,6 +75,8 @@ def _time(raw: bytes) -> str:
 
 def read_debug_log(path: str) -> DebugLog | None:
     """The side calls in the debug log at `path`; None if there is none (or it is a link, or no regular file)."""
+    if os.path.islink(path):      # Windows has no O_NOFOLLOW
+        return None
     try:
         descriptor = os.open(path, os.O_RDONLY | _plat.NO_FOLLOW | _plat.O_NONBLOCK | _plat.O_BINARY)
     except OSError:
@@ -142,6 +144,8 @@ def append_side(log_dir: str, lines: list[dict]) -> int:
     if not _plat.is_folder(os.lstat(log_dir)):
         raise OSError(f'{log_dir} is not a folder')
     path = os.path.join(log_dir, _sync_export.SIDE_FILE)
+    if os.path.islink(path):      # Windows has no O_NOFOLLOW
+        raise OSError(f'{path} is a link')
     known = _known_keys(path)
     new = [line for line in lines if line['kind'] != 'side' or line['k'] not in known]
     descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | _plat.NO_FOLLOW | _plat.O_BINARY, 0o600)
