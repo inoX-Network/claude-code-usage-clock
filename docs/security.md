@@ -31,7 +31,7 @@
   after that); until then pushes still go to it. Behind a proxy that adds credentials to every request (a Claude
   cloud container) the anonymous read works on a private repository too; the check then asks the GitHub API
   anonymously and counts the repository private only if the answer is `"private": true` for this very repository
-  ([the sync](sync.md#install)). That answer proves that the proxy added credentials (anonymously GitHub answers 404
+  ([the sync](sync.md#install)); an answer that does not say either way pushes nothing and asks again next time. That answer proves that the proxy added credentials (anonymously GitHub answers 404
   for a private repository) and that GitHub calls the repository private at this moment. It does not prove who else
   can read it, it does not limit what those credentials may write elsewhere, and it relies on GitHub and the proxy
   answering truthfully: a proxy that forges answers can make any repository look private, as it could forge the

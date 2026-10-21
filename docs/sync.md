@@ -72,8 +72,12 @@ public. So when the anonymous read works, the check asks the GitHub API once mor
 gets `404` for a private repository; an answer `200` with `"private": true` for this very repository can only come
 through such a proxy, so the repository counts as private, with the reason `credentials_injected`: the installer says
 `a proxy adds credentials to every request, the GitHub API says private`, `--check` adds it to the visibility line,
-and the log has one line `credentials_injected` per check. Every other answer (`false`, an error, a redirect, no
-answer in time, anything it cannot read) counts as public, as before. On a computer without such a proxy the
+and the log has one line `credentials_injected` per check. Only an explicit answer makes it public (`"private":
+false`, or `visibility` `public` or `internal`), which blocks the sync until the installer runs again. Any other
+answer, or none (an error, a redirect, the limit of 60 anonymous requests an hour, no answer in time, a name that
+does not fit, anything it cannot read), leaves it unclear: nothing is pushed, the next run asks again, and the log
+line of the failure names why (`GitHub API: http_429`, `timeout`, `name_mismatch` ...), so that a lasting cause such
+as a renamed repository (a redirect on every run) shows. On a computer without such a proxy the
 anonymous read is refused and the API is never asked. Be aware what this means there: the promise above, access to
 **this repository only** (a deploy key or a fine-grained token), does not hold behind such a proxy. The sync then
 writes with the credentials of the session, and those reach whatever the session may reach.

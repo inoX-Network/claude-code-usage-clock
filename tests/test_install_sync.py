@@ -874,7 +874,7 @@ def test_behind_a_proxy_that_adds_credentials_the_api_decides_and_check_shows_wh
     credentials of the session); the anonymous API answer `private: true` proves it and the installation goes on."""
     setup.probe = answer(0)
     asked = []
-    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: asked.append(repo) or INJECTED_ANSWER)
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: asked.append(repo) or (INJECTED_ANSWER, ''))
     code, out = setup.sync()
     assert code == 0, out
     assert f'Sync: {REPO} is not public ({INJECTED_NOTE}).' in out
@@ -893,10 +893,18 @@ def test_behind_a_proxy_that_adds_credentials_the_api_decides_and_check_shows_wh
 
 def test_behind_such_a_proxy_a_public_api_answer_stops_the_installation(setup, monkeypatch):
     setup.probe = answer(0)
-    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: json.dumps({'private': False,
-                                                                                'full_name': REPO}).encode())
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: (json.dumps({'private': False,
+                                                                                 'full_name': REPO}).encode(), ''))
     code, out = setup.sync()
     assert code == 1 and 'it is public: nothing was installed' in out, out
+    assert not setup.clone.exists() and not (setup.directory / _sync_git.VISIBILITY_FILE).exists()
+
+
+def test_behind_such_a_proxy_no_answer_of_the_api_stops_the_installation_and_says_why(setup, monkeypatch):
+    setup.probe = answer(0)
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: (None, 'http_429'))
+    code, out = setup.sync()
+    assert code == 1 and f'Error: whether {REPO} is public could not be told (GitHub API: http_429)' in out, out
     assert not setup.clone.exists() and not (setup.directory / _sync_git.VISIBILITY_FILE).exists()
 
 

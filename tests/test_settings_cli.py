@@ -264,13 +264,13 @@ def test_check_repo_gives_each_result_and_writes_nothing(machine, probe, access,
     assert machine.tree() == before
 
 
-@pytest.mark.parametrize('private, result', [(True, 'private_ok'), (False, 'public')])
+@pytest.mark.parametrize('private, result', [(True, 'private_ok'), (False, 'public'), (None, 'unclear')])
 def test_check_repo_behind_a_proxy_that_adds_credentials_takes_the_answer_of_the_api(machine, monkeypatch, private,
                                                                                       result):
     machine.install('--components', 'sync', '--sync-repo', REPO)
     machine.probe = answer(0)
-    monkeypatch.setattr(_sync_git, 'ask_api',
-                        lambda repo, seconds: json.dumps({'private': private, 'full_name': repo}).encode())
+    monkeypatch.setattr(_sync_git, 'ask_api', lambda repo, seconds: (None, 'timeout') if private is None else (
+        json.dumps({'private': private, 'full_name': repo}).encode(), ''))
     before = machine.tree()
     code, done = machine.cli('check-repo', OTHER)
     assert (code, done['result']) == ((0 if private else 1), result)

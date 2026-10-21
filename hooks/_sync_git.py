@@ -29,8 +29,9 @@ A push (`push`, the runner of `sync.py push`), after the core took the lock and 
    push until the installer runs again), a request for a user name is private (cached), anything else is unclear
    (`network`, no push). Readable asks once more, anonymously, the REST API (`ask_api`, no redirect, at most 64 KB,
    within the same 15 s): behind a proxy that adds credentials to every request (a Claude cloud container) the
-   ls-remote reads a private repository too. Only `private: true` of this very repository makes it private, noted
-   with the reason `credentials_injected` and one log line; every other answer stays public.
+   ls-remote reads a private repository too. `private: true` of this very repository makes it private (noted with
+   the reason `credentials_injected`, one log line); only an explicit `private: false` or `visibility` public or
+   internal makes it public; any other answer, or none, is unclear, and its log line names why.
 4. **Update** (`update_clone`, shared with the pull): fetch; behind the remote: fast-forward. A local history that
    went apart from the remote (commits of an earlier run that were not pushed: shadow mode, a failed push) is rebased
    onto it if the work tree is clean, else after the commit (step 7b). Before every fast-forward or rebase (also those
@@ -94,6 +95,7 @@ URLS = {'https': 'https://github.com/{}.git', 'ssh': 'git@github.com:{}.git'}
 PROBE_URL = 'https://github.com/{}.git'
 API_URL = 'https://api.github.com/repos/{}'      # the second stage of the visibility probe (0034-SYNC-PROXY-SICHT)
 API_MAX_BYTES = 64 * 1024                        # a longer answer is no answer
+API_PIECE = 16 * 1024                            # read in pieces: the clock is checked between them
 CREDENTIALS_INJECTED = 'credentials_injected'    # the reason of a private result the API proved, in visibility.json
 REASONS = (CREDENTIALS_INJECTED,)
 INJECTED_NOTE = 'a proxy adds credentials to every request, the GitHub API says private'   # installer, --check
@@ -469,7 +471,8 @@ def judge(returncode: int, errors: str) -> str:
 
 class Visibility(NamedTuple):
     """The result of the visibility probe and why: `reason` is CREDENTIALS_INJECTED for a private result the API
-    proved behind a proxy that adds credentials, else empty."""
+    proved behind a proxy that adds credentials, why the API gave no answer for an UNCLEAR one it was asked for
+    (`timeout`, `http_301`, `name_mismatch` ...), else empty."""
     result: str
     reason: str = ''
 
@@ -486,48 +489,77 @@ def api_opener():
     return urllib.request.build_opener(NoRedirect)
 
 
-def ask_api(repo: str, seconds: float, opener=None) -> bytes | None:
-    """The body of one anonymous `GET API_URL` (no Authorization header, no redirect) of at most `seconds`, if GitHub
-    answered 200 with at most API_MAX_BYTES; anything else (a timeout, no network, another status, a longer body) is
-    None. `opener` replaces api_opener() (tests)."""
+def ask_api(repo: str, seconds: float, opener=None,
+            clock: Callable[[], float] = time.monotonic) -> tuple[bytes | None, str]:
+    """(body, '') of one anonymous `GET API_URL` (no Authorization header, no redirect) if GitHub answered 200 with at
+    most API_MAX_BYTES within `seconds` in all; else (None, why): `timeout`, `network`, `http_<status>` (also every
+    3xx: no redirect is followed), `status_<status>` (another 2xx) or `too_large`. urllib's timeout holds for each read
+    of the socket, so the body is read in pieces against the clock. `opener` replaces api_opener() (tests)."""
     import http.client
+    import socket
+    import urllib.error
     import urllib.request
+    end = clock() + seconds
     request = urllib.request.Request(API_URL.format(repo), headers={
         'Accept': 'application/vnd.github+json', 'User-Agent': f'claude-code-usage-clock/{TOOL_VERSION}'})
     try:
         with (opener or api_opener()).open(request, timeout=seconds) as response:
             if response.status != 200:
-                return None
-            body = response.read(API_MAX_BYTES + 1)
-    except (OSError, ValueError, http.client.HTTPException):    # URLError, HTTPError and timeouts are OSErrors
-        return None
-    return body if len(body) <= API_MAX_BYTES else None
+                return None, f'status_{response.status}'
+            body = b''
+            while len(body) <= API_MAX_BYTES:
+                piece = response.read(min(API_PIECE, API_MAX_BYTES + 1 - len(body)))
+                if not piece:
+                    break
+                body += piece
+                if clock() > end:
+                    return None, 'timeout'
+    except urllib.error.HTTPError as error:
+        return None, f'http_{error.code}'
+    except urllib.error.URLError as error:
+        return None, 'timeout' if isinstance(error.reason, (socket.timeout, TimeoutError)) else 'network'
+    except (TimeoutError, socket.timeout):
+        return None, 'timeout'
+    except (OSError, ValueError, http.client.HTTPException):
+        return None, 'network'
+    return (body, '') if len(body) <= API_MAX_BYTES else (None, 'too_large')
 
 
-def proves_private(repo: str, body: bytes | None) -> bool:
-    """True only for an answer of the API that says `repo` is private: `private` the JSON true, `visibility` missing or
-    "private", `full_name` this repository (in any case). Anything else, also an answer that cannot be read, is
-    False: the repository counts as public."""
-    if body is None:
-        return False
+def judge_api(repo: str, body: bytes) -> Visibility:
+    """The answer of the API about `repo` (0034-SYNC-PROXY-SICHT v2): PUBLIC only if it says so (`private` the JSON
+    false, or `visibility` public or internal); PRIVATE with CREDENTIALS_INJECTED for `private` the JSON true with
+    `visibility` missing or "private"; both only for `full_name` this repository (in any case). Anything else is
+    UNCLEAR with the reason: `no_json`, `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`."""
     try:
         data = json.loads(body)
     except (ValueError, RecursionError):        # no JSON, no UTF-8, nested too deep
-        return False
-    return (isinstance(data, dict) and data.get('private') is True and data.get('visibility', 'private') == 'private'
-            and isinstance(data.get('full_name'), str) and data['full_name'].lower() == repo.lower())
+        return Visibility(UNCLEAR, 'no_json')
+    if not isinstance(data, dict):
+        return Visibility(UNCLEAR, 'not_an_object')
+    name = data.get('full_name')
+    if not isinstance(name, str) or name.lower() != repo.lower():
+        return Visibility(UNCLEAR, 'name_mismatch')
+    private, visibility = data.get('private'), data.get('visibility', 'private')
+    if private is False or visibility in ('public', 'internal'):
+        return Visibility(PUBLIC)
+    if private is not True:
+        return Visibility(UNCLEAR, 'no_private')
+    if visibility != 'private':
+        return Visibility(UNCLEAR, 'visibility_other')
+    return Visibility(PRIVATE, CREDENTIALS_INJECTED)
 
 
 def probe_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | None = None,
-                     execute: Execute | None = None, api: Callable[[str, float], bytes | None] | None = None
-                     ) -> Visibility:
+                     execute: Execute | None = None,
+                     api: Callable[[str, float], tuple[bytes | None, str]] | None = None) -> Visibility:
     """Whether `owner/name` can be read on GitHub without logging in: PUBLIC, PRIVATE or UNCLEAR, with the reason.
     One anonymous `git ls-remote` in `directory` (the sync folder); a timeout or a git that cannot be started is
     UNCLEAR. Only if it could read the repository, one anonymous request to the API (`api`, default ask_api): behind
     a proxy that adds credentials to every request (a Claude cloud container) the ls-remote reads a private repository
-    too, and only the API answer `private: true` tells it apart; PRIVATE with CREDENTIALS_INJECTED then, PUBLIC for
-    every other answer or no time left. Both together take at most VISIBILITY_TIMEOUT_S, less if `deadline` has less
-    left. `execute` replaces _sync_core.run_command (tests). The installer runs it too."""
+    too, and only the API tells them apart (judge_api). PUBLIC blocks every push until the installer runs again, so
+    only an explicit answer gives it; no answer, one that cannot be read or no time left is UNCLEAR, which pushes
+    nothing either but asks again next time. Both together take at most VISIBILITY_TIMEOUT_S, less if `deadline` has
+    less left. `execute` replaces _sync_core.run_command (tests). The installer runs it too."""
     budget = _sync_core.Deadline(VISIBILITY_TIMEOUT_S if deadline is None
                                  else min(VISIBILITY_TIMEOUT_S, deadline.left()))
     argv = [_sync_core.GIT, '-c', 'credential.helper=', 'ls-remote', '--heads', PROBE_URL.format(repo)]
@@ -539,13 +571,15 @@ def probe_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | 
     if result != PUBLIC:
         return Visibility(result)
     left = budget.left()
-    if left <= 0 or not proves_private(repo, (api or ask_api)(repo, left)):
-        return Visibility(PUBLIC)
-    return Visibility(PRIVATE, CREDENTIALS_INJECTED)
+    if left <= 0:
+        return Visibility(UNCLEAR, 'no_time')
+    body, why = (api or ask_api)(repo, left)
+    return Visibility(UNCLEAR, why) if body is None else judge_api(repo, body)
 
 
 def check_visibility(repo: str, directory: str, deadline: _sync_core.Deadline | None = None,
-                     execute: Execute | None = None, api: Callable[[str, float], bytes | None] | None = None) -> str:
+                     execute: Execute | None = None,
+                     api: Callable[[str, float], tuple[bytes | None, str]] | None = None) -> str:
     """The result of probe_visibility alone (the Settings tab)."""
     return probe_visibility(repo, directory, deadline, execute, api).result
 
@@ -629,7 +663,8 @@ def _ensure_private(run: _sync_core.Run, repo: str, execute: Execute | None) -> 
         raise _fail('visibility', 'the sync repo can be read without logging in: it is public, nothing is pushed '
                                   'until the installer runs again with --sync-repo')
     if result == UNCLEAR:
-        raise _fail('network', 'whether the sync repo is public could not be told: nothing is pushed')
+        why = f' (GitHub API: {reason})' if reason else ''
+        raise _fail('network', f'whether the sync repo is public could not be told{why}: nothing is pushed')
     if reason == CREDENTIALS_INJECTED:
         note_injected(run.log_dir)
     remember_private(run.directory, repo, run.started, reason)

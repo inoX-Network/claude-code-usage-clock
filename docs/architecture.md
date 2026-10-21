@@ -635,8 +635,13 @@ run the installer with --sync-repo`).
   container) lets the ls-remote read a private repository; a truly anonymous request would get 404 there, so a 200
   with `private` the JSON `true`, `visibility` missing or `private` and `full_name` this repository (any case) proves
   it: private, noted with `"reason": "credentials_injected"` (`private_reason`, shown by `--check`) and one log line
-  `credentials_injected`. Every other answer (false, 3xx, 403, 404, 5xx, a timeout, no JSON, another type, `internal`,
-  another name, too long, no time left) stays public. Without such a proxy the ls-remote is refused and the API is
+  `credentials_injected`. `judge_api`: public only for an explicit answer, `private` false or `visibility` `public`
+  or `internal`, for this repository (the block `visibility`); everything else is unclear (`network`, no push, no
+  cache, the next run asks again) with its reason in the failure line (`GitHub API: <why>`): from `ask_api`
+  `timeout`, `network`, `http_<status>` (every 3xx too), `status_<status>`, `too_large`; from `judge_api` `no_json`,
+  `not_an_object`, `name_mismatch`, `no_private`, `visibility_other`; `no_time` if nothing of the 15 s is left. The
+  body is read in pieces of 16 KB against the clock, as urllib's timeout holds for each read only. Without such a
+  proxy the ls-remote is refused and the API is
   never asked. The note holds for 24 h (the node asks for it): a
   repository made public within that time is still pushed to until the note is older. Whoever can write
   `<log_dir>/sync/` can write the note as well; the sync folder is as private as the log folder (0700).

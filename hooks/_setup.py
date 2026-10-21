@@ -364,8 +364,9 @@ def prepare_clone(plan: SyncPlan) -> bool:
                   'writes only to a private repository; make it private, then run again.')
             return False
         if result != _sync_git.PRIVATE:
-            print(f'Error: whether {plan.repo} is public could not be told (no network, or an answer this tool does '
-                  'not know): nothing was installed. Run again when GitHub can be reached.')
+            why = f' (GitHub API: {reason})' if reason else ' (no network, or an answer this tool does not know)'
+            print(f'Error: whether {plan.repo} is public could not be told{why}: nothing was installed. Run again when '
+                  'GitHub can be reached.')
             return False
         _sync_git.remember_private(directory, plan.repo, time.time(), reason)
         if reason == _sync_git.CREDENTIALS_INJECTED:

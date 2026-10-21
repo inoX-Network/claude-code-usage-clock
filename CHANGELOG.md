@@ -45,9 +45,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   settings again, so that the focus stays on the button; only the first read says loading.
 - The sync behind a proxy that adds credentials to every request (a Claude cloud container): the anonymous check read
   the private repository through the proxy, called it public and stopped the installation. When the anonymous read
-  works, the check now asks the GitHub API once, anonymously, without redirects; only `"private": true` for this very
+  works, the check now asks the GitHub API once, anonymously, without redirects: `"private": true` for this very
   repository makes it private, with the reason `credentials_injected` in the installer output, in `--check` and as
-  one log line. Every other answer counts as public, as before; without such a proxy nothing changes. See
+  one log line; only an explicit `"private": false` (or `visibility` public or internal) makes it public. No answer
+  (a timeout, the rate limit, a redirect, an error, a name that does not fit) leaves it unclear: nothing is pushed,
+  the next run asks again, and the failure names why. Without such a proxy nothing changes. See
   [docs/sync.md](docs/sync.md#install).
 - A sync repository that does not exist, or that the login cannot reach, was reported as missing credentials, and
   the installer told you to sign in. The error now says `the repository does not exist or this login cannot reach it
