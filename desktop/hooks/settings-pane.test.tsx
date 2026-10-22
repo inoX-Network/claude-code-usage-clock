@@ -158,6 +158,13 @@ function elementsIn(node: { children: unknown[] } | undefined): Drawn[] {
   return (node?.children ?? []).filter((child): child is Drawn => typeof child === 'object' && child !== null)
 }
 
+/** Whether a choice is marked as its surface shows it: the desktop's primary button, the terminal's label on the accent. */
+async function isMarked(ui: Pane, surface: Surface, key: string): Promise<boolean> {
+  return surface === 'desktop'
+    ? (await ui.find({ key }))?.props.variant === 'primary'
+    : (await labelOf(ui, key)).backgroundColor === 'claude'
+}
+
 /** The plates of the accent colour: what the desktop shows of a marked button, as its own label colours do not show. */
 async function plates(ui: Pane) {
   return (await ui.findAll({ type: 'Box' })).filter(box => box.props.backgroundColor === LOOK.accent)
@@ -202,9 +209,9 @@ for (const surface of SURFACES) {
     expect((await ui.find({ key: 'set-usage_clock-false' }))?.text.trim()).toBe('off')
     expect((await ui.find({ key: 'set-spawn_gate-shadow' }))?.text.trim()).toBe('shadow (installed)')
     expect((await ui.find({ key: 'set-spawn_gate-enforce' }))?.text.trim()).toBe('enforce')
-    expect((await labelOf(ui, 'set-spawn_gate-shadow')).backgroundColor).toBe('claude')
-    expect((await labelOf(ui, 'set-spawn_gate-enforce')).backgroundColor).toBeUndefined()
-    expect((await labelOf(ui, 'set-sync-shadow')).backgroundColor).toBe('claude')
+    expect(await isMarked(ui, surface, 'set-spawn_gate-shadow')).toBe(true)
+    expect(await isMarked(ui, surface, 'set-spawn_gate-enforce')).toBe(false)
+    expect(await isMarked(ui, surface, 'set-sync-shadow')).toBe(true)
     await ui.unmount()
   })
 
@@ -517,32 +524,36 @@ test('terminal: the link of the info stays a line of its own after More:', async
   await ui.unmount()
 })
 
-test('desktop: the active choice of every group stands on the plate of the open tab, no other choice', async ($, on) => {
+test('desktop: the active choice of every group is the primary button of the app, as large as the others; none stands on a plate', async ($, on) => {
   world(on)
   const ui = await open($, 'desktop')
   const buttons = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
-  expect(choices(await onPlate(ui))).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
+  const primary = async () => choices((await ui.findAll({ type: 'Button' })).filter(button => button.props.variant === 'primary').map(button => button.key))
+  expect(await primary()).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
+  expect(choices(await onPlate(ui))).toEqual([])
   expect(choices(await buttons())).toHaveLength(13)
-  // The plate of a choice is the plate of the open tab
-  const looks = (await plates(ui)).map(({ props }) => ({ ...props, key: undefined, children: undefined }))
-  expect(looks.length).toBeGreaterThan(4)
-  for (const look of looks) expect(look).toEqual(looks[0])
+  // A choice is the app's own button, not one drawn without chrome
+  for (const button of (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('set-'))) {
+    expect([button.key, button.props.plain]).toEqual([button.key, undefined])
+  }
   await ui.press({ key: 'set-spawn_gate-enforce' })
   await ui.press({ key: 'set-usage_clock-false' })
   await ui.press({ key: 'set-sync-on' })
-  expect(choices(await onPlate(ui))).toEqual(['set-desktop_line-full', 'set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
+  expect(await primary()).toEqual(['set-desktop_line-full', 'set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
   await ui.unmount()
 })
 
-test('desktop: the choices of a part stand in a framed group, i outside it on the right', async ($, on) => {
+test('desktop: the choices of a part stand in a framed group that wraps inside its card; i stands in the head', async ($, on) => {
   world(on)
   const ui = await open($, 'desktop')
   for (const [id, keys] of [['usage_clock', ['true', 'false']], ['context_reporter', ['true', 'false']],
     ['spawn_gate', ['off', 'shadow', 'enforce']], ['sync', ['off', 'shadow', 'on']]] as const) {
     const group = await ui.find({ key: `group-${id}` })
-    expect([id, group?.props.borderStyle, group?.props.borderColor]).toEqual([id, 'round', LOOK.border])
+    expect([id, group?.props.borderStyle, group?.props.borderColor, group?.props.flexWrap]).toEqual([id, 'round', LOOK.border, 'wrap'])
     expect([id, buttonsIn(group)]).toEqual([id, keys.map(choice => `set-${id}-${choice}`)])
-    expect([id, buttonsIn(await ui.find({ key: `controls-${id}` })).at(-1)]).toEqual([id, `info-${id}`])
+    // The head holds the name, the state and i: i never wraps onto a line of its own below the choices
+    expect([id, buttonsIn(await ui.find({ key: `head-${id}` }))]).toEqual([id, [`info-${id}`]])
+    expect([id, buttonsIn(await ui.find({ key: `controls-${id}` }))]).toEqual([id, keys.map(choice => `set-${id}-${choice}`)])
   }
   expect(await ui.find({ key: 'group-statusline' })).toBeUndefined()
   await ui.unmount()
@@ -555,10 +566,10 @@ for (const surface of SURFACES) {
     for (const choice of ['off', 'short', 'full']) {
       expect((await ui.find({ key: `set-desktop_line-${choice}` }))?.text.trim()).toBe(choice)
     }
-    expect((await labelOf(ui, 'set-desktop_line-full')).backgroundColor).toBe('claude')
+    expect(await isMarked(ui, surface, 'set-desktop_line-full')).toBe(true)
     await ui.press({ key: 'set-desktop_line-short' })
     expect(settingsRuns(seen).slice(1)).toEqual([[...PREFIX, 'set', 'modules.desktop_line', 'short'], [...PREFIX, 'show', '--json']])
-    expect((await labelOf(ui, 'set-desktop_line-short')).backgroundColor).toBe('claude')
+    expect(await isMarked(ui, surface, 'set-desktop_line-short')).toBe(true)
     await ui.unmount()
   })
 }
@@ -569,8 +580,9 @@ test('desktop: the head of a card is the name and its state as a small label in 
   // The engine finds a Text by its text only: the name and the label are the Texts of the head
   const head = async (id: string) => elementsIn(await ui.find({ key: `head-${id}` }))
   const state = async (id: string) => {
-    const label = (await head(id))[1]
-    return label === undefined ? undefined : [label.children.join(''), label.props.color, label.props.size]
+    // The state stands right of the name, before i
+    const label = elementsIn((await head(id))[1])[0]
+    return label === undefined || label.type !== 'Text' ? undefined : [label.children.join(''), label.props.color, label.props.size]
   }
   for (const [id, name] of [['desktop_line', 'Desktop line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'], ['sync', 'Sync']]) {
     const [text] = await head(id)

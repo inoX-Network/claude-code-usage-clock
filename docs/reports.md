@@ -111,8 +111,8 @@ and sets the sync repository, without a restart and without changing `settings.j
   category of its last error. After a button the tab stays as it is while it reads the settings again.
   In the desktop app each part is a card like the tiles of the other views, two side by side where the pane is wide
   enough; the sync and its repository span the width. The head of a card names the state in effect (`ON`, `OFF`,
-  `SHADOW`, `ENFORCE`, or `NOT INSTALLED`), the choices stand in a frame with `i` beside it, and the active one stands
-  on the plate of the open tab.
+  `SHADOW`, `ENFORCE`, or `NOT INSTALLED`) with `i` beside it; the choices stand in a frame that wraps inside a narrow
+  card, and the active one is the app's own primary button, as large as the others.
 - The status line has no switch (the other parts read its measurement), so the tab shows no card for it while it is
   installed; without it a warning card says that nothing measures. A part that is not installed stands grey with
   `not installed: install.py` and no button: the tab never adds or removes a hook.

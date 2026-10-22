@@ -453,14 +453,17 @@ export function registerReport(on: On): void {
           await setSettings($, { note: noteOf(run) })
           await loadSettings($)
         }
-        // The active choice is marked as the open tab is: the desktop shows it on the same plate
-        const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => marked(`set-${id}-${choice}`, choice === active,
-          <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
-            {choice === active
-              ? <Text key={`label-set-${id}-${choice}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${choiceLabel(choice)}${suffix} `}</Text>
-              : <Text key={`label-set-${id}-${choice}`}>{choiceLabel(choice)}</Text>}
-          </Button>,
-        )
+        // The active choice is marked: the desktop draws it as its own primary button, as large as the others (a plate
+        // as the open tab has would not fit three choices into a card); the terminal as the open tab, on the accent
+        const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => (isDesktop
+          ? <Button key={`set-${id}-${choice}`} {...(choice === active ? { variant: 'primary' as const } : {})} onPress={choose(key, choice)}>
+              <Text key={`label-set-${id}-${choice}`}>{`${choiceLabel(choice)}${choice === active ? suffix : ''}`}</Text>
+            </Button>
+          : <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
+              {choice === active
+                ? <Text key={`label-set-${id}-${choice}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${choiceLabel(choice)}${suffix} `}</Text>
+                : <Text key={`label-set-${id}-${choice}`}>{choiceLabel(choice)}</Text>}
+            </Button>)
         // Check and Save on the plate of the marked choice, so that they read as buttons. The desktop does not draw the
         // colours of a label: there Save stands on the plate of the open tab
         const actionButton = (key: string, label: string, onPress: () => Promise<void>) => (
@@ -482,10 +485,15 @@ export function registerReport(on: On): void {
         })
         // A row: the name on a line of its own, below it one indented block with the sentence, the buttons and what
         // they unfold. Every row has this shape, so its buttons start in the same column
-        const heading = (id: string, label: string, isInstalled: boolean, badge?: { text: string; color: string }) => (isDesktop
+        // On the desktop i stands in the head, right of the state: below the choices a narrow card wrapped it onto a line
+        // of its own
+        const heading = (id: string, label: string, isInstalled: boolean, badge?: { text: string; color: string }, info?: unknown) => (isDesktop
           ? <Box key={`head-${id}`} flexDirection="row" justifyContent="space-between" alignItems="center" columnGap="sm">
               <Text key={`part-${id}`} weight="semibold" color={isInstalled ? LOOK.text : LOOK.muted}>{label}</Text>
-              {badge === undefined ? null : <Text key={`state-${id}`} size="caption" weight="bold" color={badge.color}>{badge.text}</Text>}
+              <Box key={`head-right-${id}`} flexDirection="row" alignItems="center" columnGap="sm">
+                {badge === undefined ? null : <Text key={`state-${id}`} size="caption" weight="bold" color={badge.color}>{badge.text}</Text>}
+                {info ?? null}
+              </Box>
             </Box>
           : <Text key={`part-${id}`} weight="bold" dimColor={!isInstalled}>{label}</Text>)
         const block = (id: string, children: unknown[]) => (
@@ -495,10 +503,14 @@ export function registerReport(on: On): void {
         const controls = (id: string, children: unknown[], look: { alignItems?: 'center' } = {}) => (
           <Box key={`controls-${id}`} flexDirection="row" flexWrap="wrap" columnGap={isDesktop ? 1 : 2} {...look}>{children}</Box>
         )
-        // On the desktop the choices of a part stand in a frame of their own, i outside it on the right
+        // On the desktop the choices of a part stand in a frame of their own, which wraps inside a narrow card rather
+        // than reach past its edge
         const group = (id: string, buttons: unknown[]) => (isDesktop && buttons.length > 0
-          ? [<Box key={`group-${id}`} flexDirection="row" alignItems="center" columnGap={1} paddingX="xs" borderStyle="round" borderColor={LOOK.border}>{buttons}</Box>]
+          ? [<Box key={`group-${id}`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={1} rowGap="xs" paddingX="xs" borderStyle="round" borderColor={LOOK.border}>{buttons}</Box>]
           : buttons)
+        // i: in the head on the desktop, after the choices in the terminal
+        const infoInHead = (id: string) => (isDesktop ? infoButton(id) : undefined)
+        const infoInRow = (id: string) => (isDesktop ? [] : [infoButton(id)])
         const absent = (id: string, label: string, summary: string, cardWidth?: string) => container(`row-${id}`, [
           heading(id, label, false, { text: 'NOT INSTALLED', color: LOOK.muted }),
           block(id, [sentence(id, summary), <Text key={`absent-${id}`} {...quiet}>not installed: install.py</Text>]),
@@ -518,13 +530,13 @@ export function registerReport(on: On): void {
           if (!part.installed) return absent(part.id, part.label, part.summary, partWidth)
           const active = activeChoice(part)
           return container(`row-${part.id}`, [
-            heading(part.id, part.label, true, badgeOf(active)),
+            heading(part.id, part.label, true, badgeOf(active), infoInHead(part.id)),
             block(part.id, [
               sentence(part.id, part.summary),
               controls(part.id, [
                 ...group(part.id, part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
                   part.value === '' && choice === active ? ' (installed)' : ''))),
-                infoButton(part.id),
+                ...infoInRow(part.id),
               ]),
               ...infoText(part.id, part.info, part.tab),
             ]),
@@ -568,10 +580,10 @@ export function registerReport(on: On): void {
           ...(isDesktop ? [grid('parts', parts)] : parts),
           ...(!sync.installed ? [absent('sync', 'Sync', sync.summary)] : [
             container('row-sync', [
-              heading('sync', 'Sync', true, badgeOf(sync.mode)),
+              heading('sync', 'Sync', true, badgeOf(sync.mode), infoInHead('sync')),
               block('sync', [
                 sentence('sync', sync.summary),
-                controls('sync', [...group('sync', sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, ''))), infoButton('sync')]),
+                controls('sync', [...group('sync', sync.choices.map(choice => choiceButton('sync', 'sync.mode', choice, sync.mode, ''))), ...infoInRow('sync')]),
                 ...(syncState === '' ? [] : [<Text key="sync-state" {...quiet}>{syncState}</Text>]),
                 ...infoText('sync', sync.info, sync.tab),
               ]),

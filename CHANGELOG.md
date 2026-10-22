@@ -15,6 +15,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Changed
 
+- The cards of the Settings tab in the desktop app (plugin 0.10.2) mark the active choice with the app's own primary
+  button instead of the plate of the open tab, which made it twice as large: three choices reached past the edge of a
+  half-width card. The frame of the choices wraps inside the card, and `i` stands in the head beside the state, where
+  it no longer falls onto a line of its own.
 - The Settings tab (plugin 0.10.1) shows no card for the status line while it is installed: it has no switch, and the
   card only said so. Without the status line a warning card says that nothing measures. The card of the desktop line
   says that the line moves after Claude's next answer.
