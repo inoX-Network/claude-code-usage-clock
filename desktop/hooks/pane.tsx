@@ -504,17 +504,25 @@ export function registerReport(on: On): void {
           block(id, [sentence(id, summary), <Text key={`absent-${id}`} {...quiet}>not installed: install.py</Text>]),
         ], cardWidth)
         const partRow = (part: Part) => {
+          // The status line has no switch: installed it needs no card; missing, nothing measures for the other parts,
+          // and its row warns of that
+          if (part.key === null) {
+            return part.installed ? null : container(`row-${part.id}`, [
+              heading(part.id, part.label, false, { text: 'NOT INSTALLED', color: LOOK.warning }),
+              block(part.id, [
+                sentence(part.id, part.summary),
+                <Text key={`warning-${part.id}`} color={isDesktop ? LOOK.warning : 'warning'}>{part.tab}</Text>,
+              ]),
+            ], partWidth)
+          }
           if (!part.installed) return absent(part.id, part.label, part.summary, partWidth)
           const active = activeChoice(part)
           return container(`row-${part.id}`, [
-            // The status line has no switch, and so no state
-            heading(part.id, part.label, true, part.key === null ? undefined : badgeOf(active)),
+            heading(part.id, part.label, true, badgeOf(active)),
             block(part.id, [
               sentence(part.id, part.summary),
-              // The status line has no switch: the reason stands under its sentence, its buttons are only i
-              ...(part.key === null ? [<Text key={`fixed-${part.id}`} {...quiet}>{part.tab}</Text>] : []),
               controls(part.id, [
-                ...group(part.id, part.key === null ? [] : part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
+                ...group(part.id, part.choices.map(choice => choiceButton(part.id, part.key as string, choice, active,
                   part.value === '' && choice === active ? ' (installed)' : ''))),
                 infoButton(part.id),
               ]),
@@ -555,7 +563,7 @@ export function registerReport(on: On): void {
           <Input key="repo" label="owner/name" value={repo} placeholder="owner/name" submitLabel={isDesktop ? 'Check' : 'check'}
             onInput={(value: string) => setSettings($, { repo: value })} onSubmit={(value: string) => checkRepo(value)} />
         )
-        const parts = shown.modules.map(partRow)
+        const parts = shown.modules.map(partRow).filter(row => row !== null)
         body = [
           ...(isDesktop ? [grid('parts', parts)] : parts),
           ...(!sync.installed ? [absent('sync', 'Sync', sync.summary)] : [

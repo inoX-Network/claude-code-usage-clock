@@ -127,9 +127,10 @@ INFO = {
 # What the Settings tab does differently from the assistant, one sentence per part (the tab only switches config.json;
 # the assistant also writes the hook entries)
 TAB = {
-    'statusline': 'The status line cannot be switched off here: the other parts read its measurement.',
-    'desktop-line': 'Here the buttons set modules.desktop_line in config.json; the app redraws the line with the next '
-                    'measurement.',
+    'statusline': 'Without it nothing measures the usage: the usage clock and the gates see unknown. tools/install.py '
+                  'installs it; the tab shows no card for it while it is installed, as it has no switch.',
+    'desktop-line': "Here the buttons set modules.desktop_line in config.json; the line moves after Claude's next "
+                    'answer.',
     'usage-clock': 'Here the switch is modules.usage_clock in config.json: off, the hook stays and adds nothing.',
     'context-reporter': 'Here the switch is modules.context_reporter in config.json: off, the hook stays and says '
                         'nothing.',

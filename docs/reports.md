@@ -113,8 +113,11 @@ and sets the sync repository, without a restart and without changing `settings.j
   enough; the sync and its repository span the width. The head of a card names the state in effect (`ON`, `OFF`,
   `SHADOW`, `ENFORCE`, or `NOT INSTALLED`), the choices stand in a frame with `i` beside it, and the active one stands
   on the plate of the open tab.
-- The status line has no switch (the other parts read its measurement): its row says so instead. A part that is not
-  installed stands grey with `not installed: install.py` and no button: the tab never adds or removes a hook.
+- The status line has no switch (the other parts read its measurement), so the tab shows no card for it while it is
+  installed; without it a warning card says that nothing measures. A part that is not installed stands grey with
+  `not installed: install.py` and no button: the tab never adds or removes a hook.
+- The line of the desktop app moves after Claude's next answer: the plugin reads `config.json` again with each
+  measurement.
 - Sync repository (with the sync installed): a field with `sync.repo` and **Check**, the test of `install.py
   --sync-repo` (`owner/name`, not readable without logging in, reachable with the login of git), which writes nothing.
   Only after it found that very name private and reachable, **Save** appears: it sets `sync.repo` and clones the
