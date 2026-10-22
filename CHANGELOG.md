@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Added
+
+- The line of the desktop app (plugin 0.10.0) stands in a row of its own above the prompt, as wide as the transcript
+  and in colour, instead of the footer, which cut it after the week. `modules.desktop_line` in `config.json` says
+  where: `full` (the default) above the prompt, `short` in the footer as before, `off` nowhere. The Settings tab of
+  `/report` has a row for it; the plugin reads the key again with every measurement.
+
 ### Changed
 
 - The Settings tab in the desktop app (plugin 0.9.3) draws its parts as the cards of the other views, two side by side

@@ -16,9 +16,12 @@ export type LineConfig = {
   startBlockWeek: number
   /** What the spawn gate does from startBlockWeek on (thresholds.week_action); the weekly marker names it. */
   weekAction: WeekAction
+  /** Where the app shows the line (modules.desktop_line): a band above the prompt, the footer, or nowhere. */
+  desktopLine: DesktopLine
 }
 
 export type WeekAction = 'warn' | 'ask' | 'deny'
+export type DesktopLine = 'off' | 'short' | 'full'
 
 export type ReportPeriod = 'day' | 'week' | 'month' | 'year'
 export type ReportView = 'overview' | 'agents' | 'models' | 'cache' | 'tokens' | 'projects' | 'sessions'

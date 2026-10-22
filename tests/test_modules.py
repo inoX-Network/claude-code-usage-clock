@@ -67,8 +67,8 @@ def context_state(tmp_path, session='s1'):
 # --- The config -------------------------------------------------------------------------------------------------
 
 def test_the_defaults_switch_everything_on_and_leave_the_mode_to_the_entry():
-    assert _config.DEFAULTS['modules'] == {'usage_clock': True, 'context_reporter': True, 'spawn_gate': '',
-                                           'soft_stop': ''}
+    assert _config.DEFAULTS['modules'] == {'desktop_line': 'full', 'usage_clock': True, 'context_reporter': True,
+                                           'spawn_gate': '', 'soft_stop': ''}
     with open(os.path.join(ROOT, 'config.example.json'), encoding='utf-8') as f:
         assert json.load(f)['modules'] == _config.DEFAULTS['modules']
 

@@ -68,6 +68,7 @@ DEFAULTS: dict = {
         'model_override_in_call': 'warn',
     },
     'modules': {
+        'desktop_line': 'full',
         'usage_clock': True,
         'context_reporter': True,
         'spawn_gate': '',
@@ -112,6 +113,7 @@ _CHOICES = {
     ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
+    ('modules', 'desktop_line'): ('off', 'short', 'full'),
     ('modules', 'spawn_gate'): ('', 'off', 'shadow', 'enforce'),
     ('modules', 'soft_stop'): ('', 'off', 'shadow', 'enforce'),
     ('sync', 'mode'): ('off', 'shadow', 'on'),

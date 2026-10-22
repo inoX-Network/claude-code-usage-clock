@@ -41,6 +41,7 @@ that key and writes one line to the log.
 | `spawn_rules.apply_to_main_session` | `true` | `false`: calls of the main session are not checked at all. |
 | `spawn_rules.skill_fork_missing_agent` | `warn` | A forked skill without a complete agent definition: `warn` or `deny`. |
 | `spawn_rules.model_override_in_call` | `warn` | A `model` in an Agent call overrides the definition: `allow`, `warn` or `deny`. |
+| `modules.desktop_line` | `"full"` | Where the desktop app shows the line: `full` in a row above the prompt, `short` in its footer, `off` nowhere ([below](#modules-switch-parts-off)). |
 | `modules.usage_clock` / `context_reporter` | `true` / `true` | `false` switches the hook off: it stays in `settings.json` and adds nothing ([below](#modules-switch-parts-off)). |
 | `modules.spawn_gate` / `soft_stop` | `""` / `""` | The mode of the gate: `off`, `shadow` or `enforce`, before the `--mode` of its hook entry; empty: the entry decides ([below](#modules-switch-parts-off)). |
 | `sync.mode` | `off` | Sync across machines: `off`, `shadow` or `on`. |
@@ -71,6 +72,9 @@ without a restart and without touching `settings.json`:
   leaves the mode to the entry, as before. `install.py --mode X` writes `X` here as well for each gate it installs,
   so that the two never disagree, and `install.py --check` says where the mode comes from (`from config` or `from
   settings.json`).
+- `modules.desktop_line`: where the plugin of the desktop app draws the line, read again with every measurement:
+  `full` (the default) a row of its own above the prompt, `short` the footer beside the model, `off` nowhere. It
+  touches no hook and not the terminal, which keeps its status line ([desktop app](../desktop/README.md#where-the-line-stands)).
 - A hook switched off writes one log line `disabled` per session, no more; `log_summary.py` lists them per hook with
   the time of the last one, and `install.py --check` notes each part switched off.
 - The status line has no switch: the other parts read its measurement.

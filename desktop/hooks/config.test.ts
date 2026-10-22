@@ -20,7 +20,17 @@ test('no file or broken JSON: the defaults of hooks/_config.py', () => {
   expect(DEFAULTS).toEqual({
     yellowFrom: 50, redFrom: 75, weekStopMarker: true, showReset: true,
     contextYellowFromK: 300, contextRedFromK: 500, cacheYellowBelowMin: 5, startBlockWeek: 75, weekAction: 'warn',
+    desktopLine: 'full',
   })
+})
+
+test('modules.desktop_line: off, short or full; anything else keeps full, as _CHOICES in _config.py', () => {
+  for (const value of ['off', 'short', 'full'] as const) {
+    expect(parseConfig(JSON.stringify({ modules: { desktop_line: value } })).desktopLine).toBe(value)
+  }
+  for (const value of ['wide', 'Full', true, 1, null]) {
+    expect(parseConfig(JSON.stringify({ modules: { desktop_line: value } })).desktopLine).toBe('full')
+  }
 })
 
 test('every valid key overrides its default', () => {
@@ -31,10 +41,12 @@ test('every valid key overrides its default', () => {
     },
     thresholds: { start_block_week: 90, warn: 1, week_action: 'deny' },
     wake_watcher: { from_k: 300 },
+    modules: { desktop_line: 'short' },
   })
   expect(parseConfig(text)).toEqual({
     yellowFrom: 70, redFrom: 85, weekStopMarker: false, showReset: false,
     contextYellowFromK: 200, contextRedFromK: 400, cacheYellowBelowMin: 10, startBlockWeek: 90, weekAction: 'deny',
+    desktopLine: 'short',
   })
 })
 

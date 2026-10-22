@@ -55,6 +55,7 @@
     "model_override_in_call": "warn"
   },
   "modules": {
+    "desktop_line": "full",
     "usage_clock": true,
     "context_reporter": true,
     "spawn_gate": "",

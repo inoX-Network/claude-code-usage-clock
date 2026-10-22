@@ -7,7 +7,7 @@ settings.json and adds or removes no hook: the parts read their switch from conf
                                texts of the assistant's `i` and a sentence for the tab; the sync: repo, mode, last
                                success, last error
   set modules.<name> <value>   usage_clock and context_reporter: true|false; spawn_gate and soft_stop: off|shadow|
-                               enforce, or "" for the mode of the hook entry
+                               enforce, or "" for the mode of the hook entry; desktop_line: off|short|full
   set sync.mode off|shadow|on
   check-repo OWNER/NAME        the test of install.py --sync-repo (owner/name, not readable without logging in,
                                reachable with the login of git), writes nothing
@@ -40,12 +40,17 @@ import _sync_git
 DEFAULT_SETTINGS = '~/.claude/settings.json'
 # (id in show, component of install.py, key in modules, label)
 PARTS = (('statusline', 'statusline', None, 'Status line'),
+         ('desktop_line', 'desktop-line', 'desktop_line', 'Desktop line'),
          ('usage_clock', 'usage-clock', 'usage_clock', 'Usage clock'),
          ('context_reporter', 'context-reporter', 'context_reporter', 'Context reporter'),
          ('spawn_gate', 'spawn-gate', 'spawn_gate', 'Spawn gate'),
          ('soft_stop', 'soft-stop', 'soft_stop', 'Soft stop'))
 SWITCH_VALUES = ('true', 'false')
 GATE_VALUES = ('off', 'shadow', 'enforce')
+LINE_VALUES = ('off', 'short', 'full')
+# The part whose switch needs another component: the plugin draws the desktop line and finds this script next to the
+# status line
+INSTALLED_WITH = {'desktop-line': 'statusline'}
 SYNC_MODES = ('off', 'shadow', 'on')
 CONTROL = re.compile('[\x00-\x09\x0b-\x1f\x7f-\x9f]')
 RESULTS = {
@@ -89,10 +94,12 @@ def show(data: dict, parts: set[str], target: str, path: str) -> int:
     cfg = _config.load(log_problems=False, path=path, problems=problems)
     modules = []
     for part_id, component, key, label in PARTS:
-        entry = {'id': part_id, 'label': label, 'installed': component in parts, 'summary': _setup.TAB_SUMMARY[component],
+        entry = {'id': part_id, 'label': label, 'installed': INSTALLED_WITH.get(component, component) in parts, 'summary': _setup.TAB_SUMMARY[component],
                  'info': '\n'.join(_setup.INFO[component]), 'tab': _setup.TAB[component]}
         if key is None:
             entry.update(key=None, value=None, choices=[])
+        elif part_id == 'desktop_line':
+            entry.update(key=f'modules.{key}', value=cfg['modules'][key], choices=list(LINE_VALUES))
         elif part_id in ('spawn_gate', 'soft_stop'):
             command = _setup.installed_command(data, component, target)
             entry.update(key=f'modules.{key}', value=cfg['modules'][key], choices=list(GATE_VALUES),
@@ -120,10 +127,12 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
         section, component, stored = 'modules', name.replace('_', '-'), value == 'true'
     elif key in ('modules.spawn_gate', 'modules.soft_stop') and value in ('',) + GATE_VALUES:
         section, component, stored = 'modules', name.replace('_', '-'), value
+    elif key == 'modules.desktop_line' and value in LINE_VALUES:
+        section, component, stored = 'modules', INSTALLED_WITH['desktop-line'], value
     else:
         raise _setup.UsageError(f'{key} {value!r}: the tab sets modules.usage_clock and modules.context_reporter to '
-                                'true|false, modules.spawn_gate and modules.soft_stop to off|shadow|enforce or "", and '
-                                'sync.mode to off|shadow|on.')
+                                'true|false, modules.spawn_gate and modules.soft_stop to off|shadow|enforce or "", '
+                                'modules.desktop_line to off|short|full, and sync.mode to off|shadow|on.')
     if component not in parts:
         raise not_installed(component)
     if key == 'sync.mode' and value != 'off':      # off pushes nothing, wherever the log folder is

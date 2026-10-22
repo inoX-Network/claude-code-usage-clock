@@ -27,6 +27,7 @@ function shown(values: Record<string, unknown> = {}, sync: Record<string, unknow
   return {
     modules: [
       part('statusline', 'Status line', true, null, null, []),
+      part('desktop_line', 'Desktop line', true, 'modules.desktop_line', values.desktop_line ?? 'full', ['off', 'short', 'full']),
       part('usage_clock', 'Usage clock', true, 'modules.usage_clock', values.usage_clock ?? true, ['true', 'false']),
       part('context_reporter', 'Context reporter', true, 'modules.context_reporter', true, ['true', 'false']),
       part('spawn_gate', 'Spawn gate', true, 'modules.spawn_gate', values.spawn_gate ?? '', ['off', 'shadow', 'enforce'],
@@ -512,8 +513,8 @@ test('desktop: the active choice of every group stands on the plate of the open 
   world(on)
   const ui = await open($, 'desktop')
   const buttons = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
-  expect(choices(await onPlate(ui))).toEqual(['set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
-  expect(choices(await buttons())).toHaveLength(10)
+  expect(choices(await onPlate(ui))).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
+  expect(choices(await buttons())).toHaveLength(13)
   // The plate of a choice is the plate of the open tab
   const looks = (await plates(ui)).map(({ props }) => ({ ...props, key: undefined, children: undefined }))
   expect(looks.length).toBeGreaterThan(4)
@@ -521,7 +522,7 @@ test('desktop: the active choice of every group stands on the plate of the open 
   await ui.press({ key: 'set-spawn_gate-enforce' })
   await ui.press({ key: 'set-usage_clock-false' })
   await ui.press({ key: 'set-sync-on' })
-  expect(choices(await onPlate(ui))).toEqual(['set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
+  expect(choices(await onPlate(ui))).toEqual(['set-desktop_line-full', 'set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
   await ui.unmount()
 })
 
@@ -539,6 +540,21 @@ test('desktop: the choices of a part stand in a framed group, i outside it on th
   await ui.unmount()
 })
 
+for (const surface of SURFACES) {
+  test(`${surface}: the desktop line has off, short and full; its buttons set modules.desktop_line`, async ($, on) => {
+    const seen = world(on)
+    const ui = await open($, surface)
+    for (const choice of ['off', 'short', 'full']) {
+      expect((await ui.find({ key: `set-desktop_line-${choice}` }))?.text.trim()).toBe(choice)
+    }
+    expect((await labelOf(ui, 'set-desktop_line-full')).backgroundColor).toBe('claude')
+    await ui.press({ key: 'set-desktop_line-short' })
+    expect(settingsRuns(seen).slice(1)).toEqual([[...PREFIX, 'set', 'modules.desktop_line', 'short'], [...PREFIX, 'show', '--json']])
+    expect((await labelOf(ui, 'set-desktop_line-short')).backgroundColor).toBe('claude')
+    await ui.unmount()
+  })
+}
+
 test('desktop: the head of a card is the name and its state as a small label in capitals', async ($, on) => {
   world(on)
   const ui = await open($, 'desktop')
@@ -554,6 +570,7 @@ test('desktop: the head of a card is the name and its state as a small label in 
   }
   expect(await state('statusline')).toBeUndefined()
   expect(await state('usage_clock')).toEqual(['ON', LOOK.accent, 'caption'])
+  expect(await state('desktop_line')).toEqual(['FULL', LOOK.accent, 'caption'])
   expect(await state('context_reporter')).toEqual(['ON', LOOK.accent, 'caption'])
   expect(await state('spawn_gate')).toEqual(['SHADOW', LOOK.warning, 'caption'])
   expect(await state('soft_stop')).toEqual(['NOT INSTALLED', LOOK.muted, 'caption'])
@@ -569,6 +586,10 @@ test('desktop: the head of a card is the name and its state as a small label in 
   expect(await state('sync')).toEqual(['ON', LOOK.accent, 'caption'])
   await ui.press({ key: 'set-spawn_gate-off' })
   await ui.press({ key: 'set-sync-off' })
+  await ui.press({ key: 'set-desktop_line-short' })
+  expect(await state('desktop_line')).toEqual(['SHORT', LOOK.accent, 'caption'])
+  await ui.press({ key: 'set-desktop_line-off' })
+  expect(await state('desktop_line')).toEqual(['OFF', LOOK.muted, 'caption'])
   expect(await state('spawn_gate')).toEqual(['OFF', LOOK.muted, 'caption'])
   expect(await state('sync')).toEqual(['OFF', LOOK.muted, 'caption'])
   await ui.unmount()

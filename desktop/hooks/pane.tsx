@@ -477,7 +477,8 @@ export function registerReport(on: On): void {
         // a part acts, the warning colour where it only watches, muted where it is off
         const badgeOf = (choice: string) => ({
           text: choiceLabel(choice).toUpperCase(),
-          color: choice === 'shadow' ? LOOK.warning : choice === 'true' || choice === 'on' || choice === 'enforce' ? LOOK.accent : LOOK.muted,
+          color: choice === 'shadow' ? LOOK.warning
+            : ['true', 'on', 'enforce', 'short', 'full'].includes(choice) ? LOOK.accent : LOOK.muted,
         })
         // A row: the name on a line of its own, below it one indented block with the sentence, the buttons and what
         // they unfold. Every row has this shape, so its buttons start in the same column

@@ -49,6 +49,8 @@ SYNC_SUMMARY = ('Puts the usage of each computer into a private GitHub repositor
 SUMMARY = {
     'statusline': 'Shows the model, the 5-hour and weekly usage and the context below the prompt, and measures the '
                   'usage the other parts read.',
+    'desktop-line': 'Shows the line of the status line in the desktop app: full above the prompt, short in its footer, '
+                    'or off.',
     'usage-clock': 'Gives the model the usage and the local time with every prompt you send.',
     'context-reporter': 'Says how full the context window is, as the status line measured it.',
     'spawn-gate': 'Checks every start of an agent, workflow or skill against the usage and the model rules.',
@@ -66,6 +68,11 @@ INFO = {
         '  It is the part that measures: it writes the usage file (usage_file) the other parts read.',
         '  Writes: statusLine in settings.json.',
         f'  More: {DOCS}statusline.md#what-the-status-line-shows'),
+    'desktop-line': (
+        '  The desktop app shows no status line; its plugin draws the same parts. Full: a row of its own above the prompt,',
+        '  in colour. Short: in the footer beside the model, cut where the footer ends. Off: none. The terminal keeps its',
+        '  own status line. Writes: modules.desktop_line in config.json.',
+        '  More: https://github.com/inoX-Network/claude-code-usage-clock/blob/main/desktop/README.md#where-the-line-stands'),
     'replace': (
         '  Yes puts our status line in place of the other one (statusLine in settings.json). The other one is not',
         '  restored on uninstall: copy it back from the backup the installer names. No keeps it, and nothing measures.',
@@ -121,6 +128,8 @@ INFO = {
 # the assistant also writes the hook entries)
 TAB = {
     'statusline': 'The status line cannot be switched off here: the other parts read its measurement.',
+    'desktop-line': 'Here the buttons set modules.desktop_line in config.json; the app redraws the line with the next '
+                    'measurement.',
     'usage-clock': 'Here the switch is modules.usage_clock in config.json: off, the hook stays and adds nothing.',
     'context-reporter': 'Here the switch is modules.context_reporter in config.json: off, the hook stays and says '
                         'nothing.',

@@ -2,8 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { DEFAULTS, LOG_DIR, expandHome, parseConfig, parseLogDir } from './config'
+import type { DesktopLine } from './config'
 import { recordContext } from './context'
 import { gateMarkers, parts } from './line'
+import type { Part } from './line'
 import { registerReport, registerReportCommand } from './pane'
 import { statusInput, statuslineArgv } from './record'
 
@@ -33,11 +35,24 @@ async function settle($: EngineInterface, configFile: string) {
   await update($, isSettled, () => true)
 }
 
-// config.json read again: the Settings tab, the installer or a command may switch a gate while the session runs
-async function renewMarkers($: EngineInterface, configFile: string, settings: unknown) {
+// config.json read again: the Settings tab, the installer or a command may switch a gate or the place of the line while
+// the session runs
+async function renewConfig($: EngineInterface, configFile: string, settings: unknown) {
   const path = expandHome(configFile, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')))
   const text = path === '' ? undefined : await $.fs.read(path).catch(() => undefined)
+  await update($, config, () => parseConfig(text))
   await update($, markers, () => gateMarkers(text, settings))
+}
+
+// The parts of the line for a site of the app: none on the terminal, which has the status line, none before the first
+// measurement, and none where modules.desktop_line puts it elsewhere
+async function lineParts($: EngineInterface, surface: string, site: DesktopLine): Promise<Part[]> {
+  if (surface === 'terminal') return []
+  const measured = await read($, usage)
+  const cfg = await read($, config)
+  if (measured === null || cfg.desktopLine !== site) return []
+  await read($, tick)
+  return parts(measured, cfg, await read($, lastAnswer), await $.clock.now(), undefined, await read($, markers))
 }
 
 export const register: Register = (on, options) => {
@@ -63,7 +78,7 @@ export const register: Register = (on, options) => {
     // The terminal runs the status line itself, with the cache clock the app does not have
     if (!(await $.session.surfaces()).includes('terminal')) {
       const settings = await $.settings.read()
-      await renewMarkers($, configFile, settings)
+      await renewConfig($, configFile, settings)
       const line = settings.statusLine
       const argv = statuslineArgv(typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined)
       if (argv !== null) {
@@ -91,14 +106,32 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // full: a row of its own above the prompt, coloured below the thresholds too, over what other plugins draw there; it
+  // gives way to a survey
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const list = await lineParts($, e.surface, 'full')
+    if (list.length === 0) return next(e)
+
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Box>
+          {list.map((part, i) => (
+            <Text key={`p${i}`} color={part.color ?? part.calm} dimColor={part.color === undefined && part.calm === undefined}>
+              {i === 0 ? '' : part.attached ? ' ' : ' | '}
+              {part.text}
+            </Text>
+          ))}
+        </Box>
+        {await next(e)}
+      </Box>
+    )
+  })
+
+  // short: in the footer beside the model, which a narrow window cuts
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    // The terminal has the status line already
-    if (e.surface === 'terminal') return next(e)
-    const measured = await read($, usage)
-    if (measured === null) return next(e)
-    await read($, tick)
-    const list = parts(measured, await read($, config), await read($, lastAnswer), await $.clock.now(), undefined,
-      await read($, markers))
+    const list = await lineParts($, e.surface, 'short')
     if (list.length === 0) return next(e)
 
     const { Box, Text } = $.ui.resolve(e)

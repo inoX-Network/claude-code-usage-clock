@@ -1,17 +1,27 @@
 # usage-clock in the Claude desktop app
 
 The desktop app does not show the `statusLine` from `settings.json`. This folder is a Claude Code plugin (a mod with
-a hooks module) that draws the usage-clock line under the prompt instead, and that adds `/report`, a pane with the
-usage report ([below](#the-usage-report-report)):
+a hooks module) that draws the usage-clock line in a row of its own above the prompt instead, and that adds `/report`,
+a pane with the usage report ([below](#the-usage-report-report)):
 
 ```
 5h 17% ↻12:50 | week 76% ↻Mon 15:00 <- week gate: agents warn | ctx 340k/1000k 34% | cache ~54m | $3.50
 ```
 
-![The line under the prompt of the desktop app, cut off after the week](../docs/images/desktop-footer.png)
+## Where the line stands
 
-The footer is shared with the permission mode and the model, so a narrow window cuts the line. Pointing at it shows
-all of it:
+`modules.desktop_line` in the usage-clock `config.json` says where, and the Settings tab of `/report` sets it
+(`off`/`short`/`full`). The plugin reads it again with every measurement, so a change shows after the next answer.
+
+- **`full`** (the default): a row of its own above the prompt, as wide as the transcript. Below their thresholds the
+  parts have a colour each: the 5h window and the week green, the context blue, the cache clock orange, the cost grey;
+  from `yellow_from` and `red_from` on they turn yellow and red as in the status line. The app puts its `[-]` beside
+  the row, which folds it away; the row gives way to a survey, and what other plugins draw there stands below it.
+- **`short`**: in the footer beside the permission mode and the model, dim below the thresholds. The footer is
+  shared, so a narrow window cuts the line; pointing at it shows all of it.
+- **`off`**: no line. The plugin still measures for the hooks and still has `/report`.
+
+![The line under the prompt of the desktop app (short), cut off after the week](../docs/images/desktop-footer.png)
 
 ![The whole line as a tooltip: 5h 24 %, week 77 % with the stop marker, ctx 760k/1000k 76 %, cache ~59m, $43.15](../docs/images/desktop-footer-hover.png)
 
