@@ -26,7 +26,7 @@ const part = (id: string, label: string, installed: boolean, key: string | null,
 function shown(values: Record<string, unknown> = {}, sync: Record<string, unknown> = {}, info?: string) {
   return {
     modules: [
-      part('statusline', 'Status line', true, null, null, []),
+      part('statusline', 'Status line', values.statusline !== false, null, null, []),
       part('desktop_line', 'Desktop line', true, 'modules.desktop_line', values.desktop_line ?? 'full', ['off', 'short', 'full']),
       part('usage_clock', 'Usage clock', true, 'modules.usage_clock', values.usage_clock ?? true, ['true', 'false']),
       part('context_reporter', 'Context reporter', true, 'modules.context_reporter', true, ['true', 'false']),
@@ -46,8 +46,9 @@ function shown(values: Record<string, unknown> = {}, sync: Record<string, unknow
 /** Holds every show --json from the `from`-th on: `asked` is called when one comes, it answers once `until` settles. */
 type Hold = { from: number; asked: () => void; until: Promise<void> }
 
-function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; info?: string; hold?: Hold } = {}) {
-  const seen = { runs: [] as (readonly string[])[], values: {} as Record<string, unknown>, asked: [] as string[], shows: 0 }
+function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; info?: string; hold?: Hold;
+  values?: Record<string, unknown> } = {}) {
+  const seen = { runs: [] as (readonly string[])[], values: { ...options.values } as Record<string, unknown>, asked: [] as string[], shows: 0 }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] } }))
@@ -214,9 +215,25 @@ for (const surface of SURFACES) {
     for (const key of ['set-soft_stop-off', 'set-soft_stop-shadow', 'set-soft_stop-enforce', 'info-soft_stop']) {
       expect(await ui.find({ key })).toBeUndefined()
     }
-    // The status line has no switch: the reason stands in its place
+    await ui.unmount()
+  })
+
+  test(`${surface}: the status line has no card while it is installed: there is nothing to switch`, async ($, on) => {
+    world(on)
+    const ui = await open($, surface)
+    expect(await ui.find({ key: 'row-statusline' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Status line/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`${surface}: a missing status line is a warning: nothing measures for the other parts`, async ($, on) => {
+    world(on, { values: { statusline: false } })
+    const ui = await open($, surface)
+    // The engine finds a Text by its text only
+    const warning = await ui.find({ type: 'Text', text: /In the tab Status line works so\./ })
     expect(await rowText(ui, 'statusline')).toContain('In the tab Status line works so.')
-    expect(await ui.find({ key: 'set-statusline-true' })).toBeUndefined()
+    expect(warning?.props.color).toBe(surface === 'desktop' ? LOOK.warning : 'warning')
+    expect(await ui.find({ key: 'info-statusline' })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -393,7 +410,7 @@ for (const surface of SURFACES) {
 test('terminal: a row is the name on its own line and one block indented by a Box', async ($, on) => {
   world(on)
   const ui = await open($, 'terminal')
-  for (const [id, label] of [['statusline', 'Status line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'],
+  for (const [id, label] of [['desktop_line', 'Desktop line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'],
     ['soft_stop', 'Soft stop'], ['sync', 'Sync'], ['repo', 'Sync repository']] as const) {
     const name = await exact(ui, label)
     expect([id, name?.text, name?.props.weight]).toEqual([id, label, 'bold'])
@@ -409,11 +426,11 @@ test('terminal: a row is the name on its own line and one block indented by a Bo
 test('terminal: every row of buttons is in the block and starts in the same column', async ($, on) => {
   world(on)
   const ui = await open($, 'terminal')
-  for (const id of ['statusline', 'usage_clock', 'spawn_gate', 'sync', 'repo']) {
+  for (const id of ['desktop_line', 'usage_clock', 'spawn_gate', 'sync', 'repo']) {
     expect([id, (await ui.find({ key: `body-${id}` }))?.text]).toEqual([id, expect.stringContaining((await ui.find({ key: `controls-${id}` }))?.text ?? '-')])
   }
   // The first button of a row has no space in front unless it stands on the plate of the marked choice
-  for (const key of ['set-usage_clock-true', 'set-spawn_gate-off', 'set-sync-off', 'info-statusline']) {
+  for (const key of ['set-usage_clock-true', 'set-spawn_gate-off', 'set-sync-off', 'set-desktop_line-off']) {
     const text = (await ui.find({ key }))?.text ?? ''
     const plate = (await labelOf(ui, key)).backgroundColor
     expect([key, text.startsWith(' ') ? plate : 'no space']).toEqual([key, text.startsWith(' ') ? 'claude' : 'no space'])
@@ -439,15 +456,6 @@ test('terminal: the info is a block indented deeper, a line per line, the link o
   await ui.unmount()
 })
 
-test('terminal: the status line has its reason under its sentence and a row with i alone', async ($, on) => {
-  world(on)
-  const ui = await open($, 'terminal')
-  const body = (await ui.find({ key: 'body-statusline' }))?.text ?? ''
-  expect(body.indexOf('What Status line does.')).toBeLessThan(body.indexOf('In the tab Status line works so.'))
-  expect((await ui.find({ key: 'controls-statusline' }))?.text.trim()).toBe('i')
-  await ui.unmount()
-})
-
 test('terminal: the repository is a framed field, Check and Save stand on a plate', async ($, on) => {
   world(on)
   const ui = await open($, 'terminal')
@@ -466,7 +474,7 @@ test('terminal: the tab as text, top to bottom', async ($, on) => {
   const ui = await open($, 'terminal')
   const shownText = (await ui.findAll({ type: 'Text' })).map(found => found.text).join('\n')
   let at = 0
-  for (const line of ['Status line', 'What Status line does.', 'In the tab Status line works so.',
+  for (const line of ['Desktop line', 'What Desktop line does.', 'off', 'short', ' full ',
     'Usage clock', 'What Usage clock does.', ' on ', 'off',
     'Spawn gate', 'What Spawn gate does.', 'off', ' shadow (installed) ', 'enforce',
     'Soft stop', 'What Soft stop does.', 'not installed: install.py',
@@ -564,11 +572,10 @@ test('desktop: the head of a card is the name and its state as a small label in 
     const label = (await head(id))[1]
     return label === undefined ? undefined : [label.children.join(''), label.props.color, label.props.size]
   }
-  for (const [id, name] of [['statusline', 'Status line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'], ['sync', 'Sync']]) {
+  for (const [id, name] of [['desktop_line', 'Desktop line'], ['usage_clock', 'Usage clock'], ['spawn_gate', 'Spawn gate'], ['sync', 'Sync']]) {
     const [text] = await head(id)
     expect([id, text?.type, text?.children.join(''), text?.props.weight, text?.props.color]).toEqual([id, 'Text', name, 'semibold', LOOK.text])
   }
-  expect(await state('statusline')).toBeUndefined()
   expect(await state('usage_clock')).toEqual(['ON', LOOK.accent, 'caption'])
   expect(await state('desktop_line')).toEqual(['FULL', LOOK.accent, 'caption'])
   expect(await state('context_reporter')).toEqual(['ON', LOOK.accent, 'caption'])
@@ -598,7 +605,7 @@ test('desktop: the head of a card is the name and its state as a small label in 
 test('desktop: the sentence and the texts beside it are muted, as the footnotes of the tiles', async ($, on) => {
   world(on, { sync: { last_success: '2026-10-21T12:33:45Z', last_error: null } })
   const ui = await open($, 'desktop')
-  for (const text of ['What Usage clock does.', 'What Soft stop does.', 'What the sync does.', 'In the tab Status line works so.',
+  for (const text of ['What Usage clock does.', 'What Soft stop does.', 'What the sync does.',
     'not installed: install.py', `last success ${localTime('2026-10-21T12:33:45Z')}`]) {
     const found = await exact(ui, text)
     expect([text, found?.props.color, found?.props.size]).toEqual([text, LOOK.muted, 'footnote'])
@@ -610,7 +617,7 @@ test('desktop: the cards of the parts stand side by side, at most two; Sync and 
   world(on)
   for (const [columns, width] of [[100, '49%'], [140, '49%'], [40, '100%']] as const) {
     const ui = await open($, 'desktop', columns)
-    for (const id of ['statusline', 'usage_clock', 'context_reporter', 'spawn_gate', 'soft_stop']) {
+    for (const id of ['desktop_line', 'usage_clock', 'context_reporter', 'spawn_gate', 'soft_stop']) {
       expect([columns, id, (await ui.find({ key: `row-${id}` }))?.props.width]).toEqual([columns, id, width])
     }
     expect((await ui.find({ key: 'row-sync' }))?.props.width).toBe('100%')

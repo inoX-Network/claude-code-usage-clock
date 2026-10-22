@@ -15,6 +15,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Changed
 
+- The Settings tab (plugin 0.10.1) shows no card for the status line while it is installed: it has no switch, and the
+  card only said so. Without the status line a warning card says that nothing measures. The card of the desktop line
+  says that the line moves after Claude's next answer.
 - The Settings tab in the desktop app (plugin 0.9.3) draws its parts as the cards of the other views, two side by side
   where the pane is wide enough, the sync and its repository across the width. The app draws its own buttons and
   ignored the colour of the marked choice, so nothing showed which one was active: now the active choice of every
