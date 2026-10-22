@@ -1098,7 +1098,7 @@ def test_a_sync_switched_off_before_is_current_on_a_first_install(machine):
 # --- v6: step counter and the info with i or ? --------------------------------------------------------------------
 
 STEP = re.compile(r'^Step (\d)/8 - (.*)$')
-INFO_KEYS = ('statusline', 'replace', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop', 'enforce',
+INFO_KEYS = ('statusline', 'desktop-line', 'replace', 'usage-clock', 'context-reporter', 'spawn-gate', 'soft-stop', 'enforce',
              'auto-continue', 'sync', 'repo', 'name')
 
 
@@ -1530,13 +1530,14 @@ def test_v8_off_and_on_leave_settings_json_alone_with_one_backup_per_run(machine
     settings = machine.settings.read_bytes()
     code, out = machine.cli('--off', 'usage-clock,context-reporter,spawn-gate,soft-stop')
     assert code == 0, out
-    assert modules(machine) == {'usage_clock': 'false', 'context_reporter': 'false', 'spawn_gate': '"off"',
-                                'soft_stop': '"off"'}
+    assert modules(machine) == {'desktop_line': '"full"', 'usage_clock': 'false', 'context_reporter': 'false',
+                                'spawn_gate': '"off"', 'soft_stop': '"off"'}
     assert "modules.usage_clock True -> False" in out and "modules.spawn_gate '' -> 'off'" in out
     assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 1
     code, out = machine.cli('--on', 'usage-clock,context-reporter,spawn-gate,soft-stop')
     assert code == 0, out
-    assert modules(machine) == {'usage_clock': 'true', 'context_reporter': 'true', 'spawn_gate': '""', 'soft_stop': '""'}
+    assert modules(machine) == {'desktop_line': '"full"', 'usage_clock': 'true', 'context_reporter': 'true',
+                                'spawn_gate': '""', 'soft_stop': '""'}
     assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 2
     assert machine.settings.read_bytes() == settings and 'settings.json is already up to date' in out
     before, backups = written(machine), machine.backups()

@@ -19,11 +19,11 @@ const usage = {
 
 test('the whole line, as the status line writes it', () => {
   expect(parts(usage, DEFAULTS, NOW - 6 * 60_000, NOW, ZONE)).toEqual([
-    { text: '5h 17% ↻12:50', color: undefined },
-    { text: 'week 76% ↻Mon 15:00', color: 'error' },
+    { text: '5h 17% ↻12:50', color: undefined, calm: 'success' },
+    { text: 'week 76% ↻Mon 15:00', color: 'error', calm: 'success' },
     { text: '<- week gate: agents warn', color: 'error', attached: true },
-    { text: 'ctx 340k/1000k 34%', color: 'warning' },
-    { text: 'cache ~54m', color: undefined },
+    { text: 'ctx 340k/1000k 34%', color: 'warning', calm: 'suggestion' },
+    { text: 'cache ~54m', color: undefined, calm: 'claude' },
     { text: '$3.50', color: undefined },
   ])
 })
@@ -70,9 +70,9 @@ test('the gate marker says what the spawn gate does (week_action)', () => {
 test('the context before the first answer, and without a usable window', () => {
   const ctx = (context: { tokens?: number; window: number; percent?: number }) =>
     parts({ startedAt: 0, context, rateLimits: [] }, DEFAULTS, null, NOW, ZONE)
-  expect(ctx({ tokens: 0, window: 1_000_000 })).toEqual([{ text: 'ctx –/1000k', color: undefined }])
-  expect(ctx({ window: 200_000 })).toEqual([{ text: 'ctx –/200k', color: undefined }])
-  expect(ctx({ tokens: 1500, window: 200_000 })).toEqual([{ text: 'ctx 1k/200k', color: undefined }])
+  expect(ctx({ tokens: 0, window: 1_000_000 })).toEqual([{ text: 'ctx –/1000k', color: undefined, calm: 'suggestion' }])
+  expect(ctx({ window: 200_000 })).toEqual([{ text: 'ctx –/200k', color: undefined, calm: 'suggestion' }])
+  expect(ctx({ tokens: 1500, window: 200_000 })).toEqual([{ text: 'ctx 1k/200k', color: undefined, calm: 'suggestion' }])
   expect(ctx({ tokens: 5000, window: 999 })).toEqual([])
   expect(ctx({ tokens: 5000, window: NaN })).toEqual([])
 })
@@ -80,10 +80,10 @@ test('the context before the first answer, and without a usable window', () => {
 test('the cache clock: an estimate, yellow below the config value, cold when past', () => {
   const cache = (minutesAgo: number, cfg = DEFAULTS) =>
     parts({ startedAt: 0, context: { window: 0 }, rateLimits: [] }, cfg, NOW - minutesAgo * 60_000, NOW, ZONE)
-  expect(cache(0)).toEqual([{ text: 'cache ~60m', color: undefined }])
-  expect(cache(55)).toEqual([{ text: 'cache ~5m', color: undefined }])
-  expect(cache(56)).toEqual([{ text: 'cache ~4m', color: 'warning' }])
-  expect(cache(51, { ...DEFAULTS, cacheYellowBelowMin: 10 })).toEqual([{ text: 'cache ~9m', color: 'warning' }])
+  expect(cache(0)).toEqual([{ text: 'cache ~60m', color: undefined, calm: 'claude' }])
+  expect(cache(55)).toEqual([{ text: 'cache ~5m', color: undefined, calm: 'claude' }])
+  expect(cache(56)).toEqual([{ text: 'cache ~4m', color: 'warning', calm: 'claude' }])
+  expect(cache(51, { ...DEFAULTS, cacheYellowBelowMin: 10 })).toEqual([{ text: 'cache ~9m', color: 'warning', calm: 'claude' }])
   expect(cache(CACHE_TTL_MS / 60_000)).toEqual([{ text: 'cache cold', color: 'error' }])
   expect(cache(90)).toEqual([{ text: 'cache cold', color: 'error' }])
 })

@@ -88,8 +88,10 @@ def test_show_lists_each_part_installed_or_not_with_its_switch(machine):
     code, shown = machine.cli('show', '--json')
     assert code == 0
     found = modules(shown)
-    assert list(found) == ['statusline', 'usage_clock', 'context_reporter', 'spawn_gate', 'soft_stop']
+    assert list(found) == ['statusline', 'desktop_line', 'usage_clock', 'context_reporter', 'spawn_gate', 'soft_stop']
     assert found['statusline']['installed'] and found['statusline']['choices'] == []
+    assert found['desktop_line'] == dict(found['desktop_line'], installed=True, key='modules.desktop_line',
+                                         value='full', choices=['off', 'short', 'full'])
     assert found['usage_clock'] == dict(found['usage_clock'], installed=True, key='modules.usage_clock', value=True,
                                         choices=['true', 'false'])
     assert not found['context_reporter']['installed'] and not found['soft_stop']['installed']
@@ -109,7 +111,7 @@ def test_show_carries_the_texts_of_the_assistant_byte_for_byte_and_a_sentence_fo
     machine.install('--components', 'statusline,usage-clock,context-reporter,spawn-gate,soft-stop')
     shown = machine.cli('show', '--json')[1]
     info = machine.install_module.INFO
-    for module_id, key in (('statusline', 'statusline'), ('usage_clock', 'usage-clock'),
+    for module_id, key in (('statusline', 'statusline'), ('desktop_line', 'desktop-line'), ('usage_clock', 'usage-clock'),
                            ('context_reporter', 'context-reporter'), ('spawn_gate', 'spawn-gate'),
                            ('soft_stop', 'soft-stop')):
         assert modules(shown)[module_id]['info'] == '\n'.join(info[key])
@@ -189,9 +191,11 @@ def test_a_repository_name_with_control_characters_is_answered_without_them(mach
                                               ('modules.context_reporter', 'false', False),
                                               ('modules.spawn_gate', 'off', 'off'),
                                               ('modules.soft_stop', 'enforce', 'enforce'),
-                                              ('modules.spawn_gate', '', '')])
+                                              ('modules.spawn_gate', '', ''),
+                                              ('modules.desktop_line', 'short', 'short'),
+                                              ('modules.desktop_line', 'off', 'off')])
 def test_set_writes_only_that_key_with_a_backup(machine, key, value, stored):
-    machine.install('--components', 'usage-clock,context-reporter,spawn-gate,soft-stop', '--mode', 'shadow')
+    machine.install('--components', 'statusline,usage-clock,context-reporter,spawn-gate,soft-stop', '--mode', 'shadow')
     before = machine.config_data()
     code, done = machine.cli('set', key, value)
     assert code == 0 and done == dict(done, key=key, value=stored)
@@ -227,7 +231,8 @@ def test_set_sync_mode_on_writes_what_the_installer_writes(machine):
 
 @pytest.mark.parametrize('key,value', [('modules.usage_clock', 'yes'), ('modules.spawn_gate', 'on'),
                                        ('modules.statusline', 'false'), ('sync.repo', 'a/b'), ('thresholds.warn', '1'),
-                                       ('sync.mode', 'loud'), ('modules', 'x')])
+                                       ('sync.mode', 'loud'), ('modules', 'x'), ('modules.desktop_line', 'true'),
+                                       ('modules.desktop_line', 'Full')])
 def test_set_refuses_a_key_or_value_outside_the_table(machine, key, value):
     machine.install('--components', 'usage-clock,spawn-gate,sync', '--sync-repo', REPO)
     before = machine.tree()
@@ -243,6 +248,15 @@ def test_set_needs_the_part_installed(machine, key, value):
     before = machine.tree()
     code, done = machine.cli('set', key, value)
     assert code == 2 and 'install.py' in done['error'] and machine.tree() == before
+
+
+def test_the_desktop_line_needs_the_status_line_installed(machine):
+    # The plugin finds the tab's script next to statusline.py: without the status line there is no tab to switch it
+    machine.install('--components', 'usage-clock')
+    assert not modules(machine.cli('show', '--json')[1])['desktop_line']['installed']
+    before = machine.tree()
+    code, done = machine.cli('set', 'modules.desktop_line', 'short')
+    assert code == 2 and 'statusline' in done['error'] and machine.tree() == before
 
 
 def test_set_with_a_config_json_that_cannot_be_read_changes_nothing(machine):

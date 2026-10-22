@@ -103,8 +103,9 @@ message: [`desktop/README.md`](../desktop/README.md#the-usage-report-report).
 and sets the sync repository, without a restart and without changing `settings.json`:
 
 - One row per part: its name, and below it, indented, what it does and its buttons: `on`/`off` for the usage clock and
-  the context reporter, `off`/`shadow`/`enforce` for the spawn gate and the soft stop, `off`/`shadow`/`on` for the
-  sync. The active choice is marked; a gate without a mode of its own shows the mode of its hook entry with
+  the context reporter, `off`/`short`/`full` for the line of the desktop app
+  ([where it stands](../desktop/README.md#where-the-line-stands)), `off`/`shadow`/`enforce` for the spawn gate and the
+  soft stop, `off`/`shadow`/`on` for the sync. The active choice is marked; a gate without a mode of its own shows the mode of its hook entry with
   `(installed)`. These are the keys [`modules`](configuration.md#modules-switch-parts-off) and `sync.mode` of
   `config.json`; every hook reads them on its next run. The sync also shows its last success in local time and the
   category of its last error. After a button the tab stays as it is while it reads the settings again.

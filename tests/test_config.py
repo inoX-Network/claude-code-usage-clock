@@ -177,6 +177,17 @@ def test_week_action_accepts_its_values_and_falls_back_on_others(tmp_path):
     assert 'thresholds.week_action: must be one of warn|ask|deny' in log_lines(tmp_path)[0]['reason']
 
 
+def test_desktop_line_accepts_off_short_full_and_falls_back_to_full(tmp_path):
+    assert _config.DEFAULTS['modules']['desktop_line'] == 'full'
+    for value in ('off', 'short', 'full'):
+        write_config(tmp_path, {'modules': {'desktop_line': value}})
+        assert _config.load()['modules']['desktop_line'] == value
+    assert log_lines(tmp_path) == []
+    write_config(tmp_path, {'modules': {'desktop_line': 'wide'}})
+    assert _config.load()['modules']['desktop_line'] == 'full'
+    assert 'modules.desktop_line: must be one of off|short|full' in log_lines(tmp_path)[0]['reason']
+
+
 def test_ask_verified_in_bypass_must_be_a_boolean(tmp_path):
     write_config(tmp_path, {'thresholds': {'ask_verified_in_bypass': 'yes'}})
     assert _config.load()['thresholds']['ask_verified_in_bypass'] is False

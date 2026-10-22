@@ -19,8 +19,11 @@ const WEEK_MARKERS: Record<WeekAction, string> = {
 }
 
 export type Color = 'warning' | 'error' | undefined
+// The colour of a part below its thresholds in the band above the prompt, which has the room for colour; the footer
+// leaves it dim
+export type Calm = 'success' | 'suggestion' | 'claude'
 // attached: follows the part before it with a space, not with ' | ' (the weekly gate marker)
-export type Part = { text: string; color: Color; attached?: true }
+export type Part = { text: string; color: Color; calm?: Calm; attached?: true }
 
 /** Half to even, like '%.0f' in the status line: 74.5 → 74, 75.5 → 76. */
 export function rounded(value: number): number {
@@ -94,14 +97,14 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
   if (five !== undefined) {
     const number = rounded(five.percentUsed)
     const reset = cfg.showReset ? resetText(five.resetsAt, now, false, timeZone) : ''
-    result.push({ text: `5h ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom) })
+    result.push({ text: `5h ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom), calm: 'success' })
   }
   const week = limit('seven_day')
   if (week !== undefined) {
     const number = rounded(week.percentUsed)
     // the weekly reset only from yellow on: below that it is days away and only takes room
     const reset = cfg.showReset && number >= cfg.yellowFrom ? resetText(week.resetsAt, now, true, timeZone) : ''
-    result.push({ text: `week ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom) })
+    result.push({ text: `week ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom), calm: 'success' })
     if (cfg.weekStopMarker && number >= cfg.startBlockWeek) {
       result.push({ text: WEEK_MARKERS[cfg.weekAction], color: 'error', attached: true })
     }
@@ -112,12 +115,13 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
   if (window >= 1000) {
     const size = `${Math.floor(window / 1000)}k`
     if (tokens === undefined || !(tokens > 0)) {
-      result.push({ text: `ctx –/${size}`, color: undefined })
+      result.push({ text: `ctx –/${size}`, color: undefined, calm: 'suggestion' })
     } else {
       const share = percent === undefined ? '' : ` ${rounded(percent)}%`
       result.push({
         text: `ctx ${Math.floor(tokens / 1000)}k/${size}${share}`,
         color: level(tokens, cfg.contextYellowFromK * 1000, cfg.contextRedFromK * 1000),
+        calm: 'suggestion',
       })
     }
   }
@@ -126,7 +130,7 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
     const minutes = Math.ceil((lastAnswer + CACHE_TTL_MS - now) / 60_000)
     result.push(minutes <= 0
       ? { text: 'cache cold', color: 'error' }
-      : { text: `cache ~${minutes}m`, color: minutes < cfg.cacheYellowBelowMin ? 'warning' : undefined })
+      : { text: `cache ~${minutes}m`, color: minutes < cfg.cacheYellowBelowMin ? 'warning' : undefined, calm: 'claude' })
   }
 
   if (usage.cost !== undefined) {
