@@ -453,12 +453,20 @@ export function registerReport(on: On): void {
           await setSettings($, { note: noteOf(run) })
           await loadSettings($)
         }
-        // The active choice is marked: the desktop draws it as its own primary button, as large as the others (a plate
-        // as the open tab has would not fit three choices into a card); the terminal as the open tab, on the accent
+        // The active choice is marked: the desktop draws it without chrome on a plate of the accent, the others as its
+        // own buttons. The plate has no frame and the label no spaces: the open tab's plate has both and is twice as high,
+        // too high for three choices in a card. The app's primary button would be white. The terminal marks it as the
+        // open tab, on the accent
         const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => (isDesktop
-          ? <Button key={`set-${id}-${choice}`} {...(choice === active ? { variant: 'primary' as const } : {})} onPress={choose(key, choice)}>
-              <Text key={`label-set-${id}-${choice}`}>{`${choiceLabel(choice)}${choice === active ? suffix : ''}`}</Text>
-            </Button>
+          ? choice === active
+            ? <Box key={`plate-${id}-${choice}`} backgroundColor={LOOK.accent}>
+                <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
+                  <Text key={`label-set-${id}-${choice}`}>{`${choiceLabel(choice)}${suffix}`}</Text>
+                </Button>
+              </Box>
+            : <Button key={`set-${id}-${choice}`} onPress={choose(key, choice)}>
+                <Text key={`label-set-${id}-${choice}`}>{choiceLabel(choice)}</Text>
+              </Button>
           : <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
               {choice === active
                 ? <Text key={`label-set-${id}-${choice}`} backgroundColor="claude" color="inverseText" weight="bold">{` ${choiceLabel(choice)}${suffix} `}</Text>
