@@ -454,12 +454,12 @@ export function registerReport(on: On): void {
           await loadSettings($)
         }
         // The active choice is marked: the desktop draws it without chrome on a plate of the accent, the others as its
-        // own buttons. The plate has no frame and the label no spaces: the open tab's plate has both and is twice as high,
-        // too high for three choices in a card. The app's primary button would be white. The terminal marks it as the
-        // open tab, on the accent
+        // own buttons. A Box has no radius: the round frame in the accent rounds the plate like the app's buttons, and no
+        // padding and no spaces around the label keep it as high as they are (the open tab's plate, with spaces, is twice
+        // as high). The app's primary button would be white. The terminal marks it as the open tab, on the accent
         const choiceButton = (id: string, key: string, choice: string, active: string, suffix: string) => (isDesktop
           ? choice === active
-            ? <Box key={`plate-${id}-${choice}`} backgroundColor={LOOK.accent}>
+            ? <Box key={`plate-${id}-${choice}`} backgroundColor={LOOK.accent} borderStyle="round" borderColor={LOOK.accent} padding={0}>
                 <Button key={`set-${id}-${choice}`} plain onPress={choose(key, choice)}>
                   <Text key={`label-set-${id}-${choice}`}>{`${choiceLabel(choice)}${suffix}`}</Text>
                 </Button>

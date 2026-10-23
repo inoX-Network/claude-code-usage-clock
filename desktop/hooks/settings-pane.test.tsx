@@ -524,16 +524,18 @@ test('terminal: the link of the info stays a line of its own after More:', async
   await ui.unmount()
 })
 
-test('desktop: the active choice of every group stands on a plate of the accent without a frame; the others are the app buttons', async ($, on) => {
+test('desktop: the active choice of every group stands on a round plate of the accent; the others are the app buttons', async ($, on) => {
   world(on)
   const ui = await open($, 'desktop')
   const buttons = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
   const marked = async () => choices(await onPlate(ui))
   expect(await marked()).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
   expect(choices(await buttons())).toHaveLength(13)
-  // The plate of a choice has no frame and no padding: the frame of the open tab's plate made it twice as high
+  // The plate of a choice is round like the app's buttons, through a frame of the accent, and has no padding, so that
+  // the frame does not make it higher than the other choices
   for (const plate of (await plates(ui)).filter(box => choices(buttonsIn(box)).length > 0)) {
-    expect([plate.key, plate.props.borderStyle, plate.props.padding, plate.props.paddingX]).toEqual([plate.key, undefined, undefined, undefined])
+    expect([plate.key, plate.props.borderStyle, plate.props.borderColor, plate.props.padding])
+      .toEqual([plate.key, 'round', plate.props.backgroundColor, 0])
   }
   // On the plate the button is drawn without chrome, so that the accent shows; its label has no spaces around it.
   // Every other choice is the app's own button. None is the app's primary button, which is white
