@@ -21,6 +21,8 @@ a pane with the usage report ([below](#the-usage-report-report)):
   shared, so a narrow window cuts the line; pointing at it shows all of it.
 - **`off`**: no line. The plugin still measures for the hooks and still has `/report`.
 
+![The line above the prompt of the desktop app (full): 5h 5 % in green, week 64 % in yellow, ctx 219k/1000k 22 % in blue, cache ~59m in orange, $6.47 in grey](../docs/images/desktop-line.png)
+
 ![The line under the prompt of the desktop app (short), cut off after the week](../docs/images/desktop-footer.png)
 
 ![The whole line as a tooltip: 5h 24 %, week 77 % with the stop marker, ctx 760k/1000k 76 %, cache ~59m, $43.15](../docs/images/desktop-footer-hover.png)
