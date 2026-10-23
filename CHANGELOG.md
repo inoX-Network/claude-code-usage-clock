@@ -15,6 +15,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Changed
 
+- The active choice in the cards of the Settings tab (plugin 0.10.3) stands on a plate of the accent colour again, as
+  the open tab does, but without its frame and without spaces around the label, so that it stays as high as the other
+  choices. The app's primary button, which marked it in 0.10.2, is white.
 - The cards of the Settings tab in the desktop app (plugin 0.10.2) mark the active choice with the app's own primary
   button instead of the plate of the open tab, which made it twice as large: three choices reached past the edge of a
   half-width card. The frame of the choices wraps inside the card, and `i` stands in the head beside the state, where

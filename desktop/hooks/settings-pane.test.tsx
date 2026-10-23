@@ -158,13 +158,6 @@ function elementsIn(node: { children: unknown[] } | undefined): Drawn[] {
   return (node?.children ?? []).filter((child): child is Drawn => typeof child === 'object' && child !== null)
 }
 
-/** Whether a choice is marked as its surface shows it: the desktop's primary button, the terminal's label on the accent. */
-async function isMarked(ui: Pane, surface: Surface, key: string): Promise<boolean> {
-  return surface === 'desktop'
-    ? (await ui.find({ key }))?.props.variant === 'primary'
-    : (await labelOf(ui, key)).backgroundColor === 'claude'
-}
-
 /** The plates of the accent colour: what the desktop shows of a marked button, as its own label colours do not show. */
 async function plates(ui: Pane) {
   return (await ui.findAll({ type: 'Box' })).filter(box => box.props.backgroundColor === LOOK.accent)
@@ -173,6 +166,13 @@ async function plates(ui: Pane) {
 /** The Buttons that stand on such a plate. */
 async function onPlate(ui: Pane): Promise<string[]> {
   return [...new Set((await plates(ui)).flatMap(buttonsIn))]
+}
+
+/** Whether a choice is marked as its surface shows it: on a plate on the desktop, its label on the accent in the terminal. */
+async function isMarked(ui: Pane, surface: Surface, key: string): Promise<boolean> {
+  return surface === 'desktop'
+    ? (await onPlate(ui)).includes(key)
+    : (await labelOf(ui, key)).backgroundColor === 'claude'
 }
 
 const choices = (keys: (string | undefined)[]) => keys.filter((key): key is string => key?.startsWith('set-') === true)
@@ -524,22 +524,28 @@ test('terminal: the link of the info stays a line of its own after More:', async
   await ui.unmount()
 })
 
-test('desktop: the active choice of every group is the primary button of the app, as large as the others; none stands on a plate', async ($, on) => {
+test('desktop: the active choice of every group stands on a plate of the accent without a frame; the others are the app buttons', async ($, on) => {
   world(on)
   const ui = await open($, 'desktop')
   const buttons = async () => (await ui.findAll({ type: 'Button' })).map(button => button.key)
-  const primary = async () => choices((await ui.findAll({ type: 'Button' })).filter(button => button.props.variant === 'primary').map(button => button.key))
-  expect(await primary()).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
-  expect(choices(await onPlate(ui))).toEqual([])
+  const marked = async () => choices(await onPlate(ui))
+  expect(await marked()).toEqual(['set-desktop_line-full', 'set-usage_clock-true', 'set-context_reporter-true', 'set-spawn_gate-shadow', 'set-sync-shadow'])
   expect(choices(await buttons())).toHaveLength(13)
-  // A choice is the app's own button, not one drawn without chrome
-  for (const button of (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('set-'))) {
-    expect([button.key, button.props.plain]).toEqual([button.key, undefined])
+  // The plate of a choice has no frame and no padding: the frame of the open tab's plate made it twice as high
+  for (const plate of (await plates(ui)).filter(box => choices(buttonsIn(box)).length > 0)) {
+    expect([plate.key, plate.props.borderStyle, plate.props.padding, plate.props.paddingX]).toEqual([plate.key, undefined, undefined, undefined])
   }
+  // On the plate the button is drawn without chrome, so that the accent shows; its label has no spaces around it.
+  // Every other choice is the app's own button. None is the app's primary button, which is white
+  for (const button of (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('set-'))) {
+    const isOnPlate = (await marked()).includes(String(button.key))
+    expect([button.key, button.props.plain, button.props.variant]).toEqual([button.key, isOnPlate ? true : undefined, undefined])
+  }
+  expect((await ui.find({ key: 'set-desktop_line-full' }))?.text).toBe('full')
   await ui.press({ key: 'set-spawn_gate-enforce' })
   await ui.press({ key: 'set-usage_clock-false' })
   await ui.press({ key: 'set-sync-on' })
-  expect(await primary()).toEqual(['set-desktop_line-full', 'set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
+  expect(await marked()).toEqual(['set-desktop_line-full', 'set-usage_clock-false', 'set-context_reporter-true', 'set-spawn_gate-enforce', 'set-sync-on'])
   await ui.unmount()
 })
 
