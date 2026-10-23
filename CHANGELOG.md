@@ -15,6 +15,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Changed
 
+- The plate of the active choice in the Settings tab (plugin 0.10.4) is round like the app's buttons: a frame in the
+  accent colour with no padding, so that it stays as high as the other choices.
 - The active choice in the cards of the Settings tab (plugin 0.10.3) stands on a plate of the accent colour again, as
   the open tab does, but without its frame and without spaces around the label, so that it stays as high as the other
   choices. The app's primary button, which marked it in 0.10.2, is white.
