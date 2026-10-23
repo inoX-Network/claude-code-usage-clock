@@ -42,7 +42,7 @@ On top of these there are two optional helpers that need no settings entry: the 
 watcher](docs/statusline.md#the-wake-up-watcher), off by default, and the plugin in [`desktop/`](desktop/README.md), which draws the
 status line in the Claude desktop app and adds [`/report`](docs/reports.md#the-report-pane), a pane with the usage report.
 
-![/report in the Claude desktop app: the week at 96 % of the weekly limit, the five-hour windows, the cost at API prices, the cache, the projects, the models and the agents](docs/images/report-desktop-overview.png)
+![/report in the Claude desktop app: the week at 64 % of the weekly limit, the five-hour windows, the cost at API prices, the cache, the projects, the models, the agents and what is notable](docs/images/report-desktop-overview.png)
 
 `/report` in the Claude desktop app: where the week's usage went, by project, model and agent. Every view of the pane
 is described in [Usage reports](docs/reports.md#the-report-pane).

@@ -81,7 +81,7 @@ The plugin in [`desktop/`](../desktop/README.md) (install it as in [In the Claud
 adds `/report`, in the desktop app and in the terminal. It opens a pane with the same numbers, read from the report
 script that `tools/install.py` installs.
 
-![/report in the Claude desktop app: the week at 96 % of the weekly limit, the five-hour windows, the cost at API prices, the cache, the projects, the models and the agents](images/report-desktop-overview.png)
+![/report in the Claude desktop app: the week at 64 % of the weekly limit, the five-hour windows, the cost at API prices, the cache, the projects, the models, the agents and what is notable](images/report-desktop-overview.png)
 
 - `/report month` opens it on that period (`day`, `week`, `month` or `year`; the default is the week).
 - Seven views, each on a key: `a` Overview, `b` Agents, `c` Models, `d` Cache/Thinking, `e` Tokens, `f` Projects,
@@ -129,6 +129,8 @@ and sets the sync repository, without a restart and without changing `settings.j
   starts only at `Writes:` and `More:`. In the desktop app `More:` is a link named by the file of the documentation
   (`Docs: sync.md#what-it-does`). The sentence of the sync leaves out what a first install does: the tab installs
   nothing.
+
+![The Settings tab in the desktop app: a card per part with its state in the head, the active choice on a round plate of the accent colour, the sync with its last success, and the sync repository with Check](images/report-desktop-settings.png)
 
 The tab writes only through `settings_cli.py`, which the installer puts next to the hooks: it checks every value, keeps
 a backup (`config.json.bak-usage-clock-<timestamp>`; the ten newest stay, older ones of that name are removed) and
