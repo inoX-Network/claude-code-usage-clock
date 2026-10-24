@@ -694,6 +694,30 @@ def test_path_tricks_reach_no_fork_outside_the_skill_folders(tmp_path, env):
     assert gate_log(tmp_path) == []
 
 
+def test_a_fork_whose_name_has_a_dot_or_a_letter_beyond_ascii_is_checked(tmp_path, env):
+    # Claude Code starts these by their folder or file name; a name the gate did not parse went through unchecked
+    usage(tmp_path, 80)
+    fork = 'context: fork\nagent: full-def'
+    env = setup_skills(tmp_path, env, personal={'my.skill': f'name: x\n{fork}', 'über': f'name: y\n{fork}'},
+                       commands={'cmd.v2': f'name: z\n{fork}'})
+    for name in ('my.skill', 'über', 'cmd.v2', '/my.skill some args'):
+        out = run(skill(name, tmp_path), env, '--mode=enforce')
+        assert is_deny(out) and '5h' in reason(out), name
+
+
+def test_dot_parts_of_a_skill_name_reach_no_fork_outside_the_skill_folders(tmp_path, env):
+    usage(tmp_path, 80)
+    env = setup_skills(tmp_path, env, project={'foreign': 'name: foreign\ncontext: fork'})
+    env['CCUC_SKILL_DIRS'] = str(tmp_path / 'skills' / 'personal')      # project/ is outside
+    (tmp_path / 'skills' / 'personal').mkdir(parents=True, exist_ok=True)
+    # Forks a dot part would reach: <personal>/../SKILL.md and <cwd>/x/../.claude/skills/up/SKILL.md
+    skill_file(tmp_path / 'skills' / 'SKILL.md', 'name: up\ncontext: fork')
+    skill_file(tmp_path / '.claude' / 'skills' / 'up' / 'SKILL.md', 'name: up\ncontext: fork')
+    (tmp_path / 'x').mkdir()
+    for name in ('..', 'x/..:up', '.:up', './x', '../project:foreign', '../project/foreign'):
+        assert run(skill(name, tmp_path), env, '--mode=enforce') is None, name
+
+
 def test_personal_skill_before_project_skill(tmp_path, env):
     usage(tmp_path, 10)
     env = setup_skills(tmp_path, env, personal={'deploy': 'name: deploy\ndescription: inline'},
@@ -1108,3 +1132,52 @@ def test_shadow_mode_hints_at_the_usage_block_with_its_numbers(tmp_path, env):
     out = run(agent('full-def'), env)
     assert is_shadow_note(out, 'would have been denied') and '80' in context(out)
 
+
+
+# --- A planted special file never hangs the gate (L1) ---------------------------------------------------------------
+# Claude Code ends a hook after the timeout of its entry (5 s) and, without onFailure "block", lets the call
+# through: a gate that hangs on a named pipe allows. Each case must still deny, well within those 5 s.
+
+def denies_in_time(tmp_path, env):
+    usage(tmp_path, 80)
+    started = time.monotonic()
+    out = run(agent('full-def'), env, '--mode=enforce')
+    assert is_deny(out) and '5h' in reason(out)
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_log_does_not_hang_the_deny(tmp_path, env):
+    (tmp_path / 'log').mkdir()
+    os.mkfifo(tmp_path / 'log' / 'log.jsonl')
+    denies_in_time(tmp_path, env)
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_config_does_not_hang_the_deny(tmp_path, env):
+    os.mkfifo(tmp_path / 'fifo-config.json')
+    denies_in_time(tmp_path, dict(env, CCUC_CONFIG=str(tmp_path / 'fifo-config.json')))
+
+
+@pytest.mark.posix_only
+@pytest.mark.parametrize('kind', ['fifo', 'zero'])
+def test_claude_codes_settings_as_a_named_pipe_or_an_endless_source_do_not_hang_the_deny(tmp_path, env, kind):
+    settings = tmp_path / 'home' / '.claude' / 'settings.json'
+    settings.parent.mkdir(parents=True)
+    os.mkfifo(settings) if kind == 'fifo' else settings.symlink_to('/dev/zero')
+    denies_in_time(tmp_path, env)
+    assert spawn_gate.ui_language(str(settings)) == 'en'
+
+
+def test_ui_language_of_a_settings_file_above_the_size_limit_is_english(tmp_path):
+    path = tmp_path / 'settings.json'
+    path.write_text('{"language": "German"}' + ' ' * _config.MAX_READ_BYTES, encoding='utf-8')
+    assert spawn_gate.ui_language(str(path)) == 'en'
+
+
+@pytest.mark.posix_only
+def test_ui_language_follows_a_link_to_a_regular_settings_file(tmp_path):
+    real = tmp_path / 'dotfiles.json'
+    real.write_text('{"language": "German"}', encoding='utf-8')
+    (tmp_path / 'settings.json').symlink_to(real)
+    assert spawn_gate.ui_language(str(tmp_path / 'settings.json')) == 'de'

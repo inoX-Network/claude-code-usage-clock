@@ -786,3 +786,37 @@ def test_main_in_process_fails_open_on_import_and_output_errors(tmp_path, monkey
     monkeypatch.setattr(_hookio, 'emit_deny', boom)
     assert soft_stop.main() == 0
     assert capsys.readouterr().out == ''
+
+
+# --- A planted special file never hangs the soft stop (L1, point 6) -------------------------------------------------
+
+@pytest.mark.posix_only
+@pytest.mark.parametrize('kind', ['fifo', 'zero'])
+def test_a_counter_that_is_a_named_pipe_or_an_endless_source_reads_as_zero_without_waiting(tmp_path, kind):
+    path = tmp_path / 'agent-1.json'
+    os.mkfifo(path) if kind == 'fifo' else path.symlink_to('/dev/zero')
+    assert soft_stop.Counter(str(tmp_path)).read('agent-1') == (0, False)
+
+
+@pytest.mark.parametrize('content', ['{"since": Infinity}', '{"since": 1e999}', '{"since": NaN}', '[]',
+                                     '{"since": 3}' + ' ' * 5000],
+                         ids=['infinity', 'overflow', 'nan', 'list', 'too-big'])
+def test_a_counter_that_holds_no_count_reads_as_zero(tmp_path, content):
+    (tmp_path / 'agent-1.json').write_text(content, encoding='utf-8')
+    assert soft_stop.Counter(str(tmp_path)).read('agent-1') == (0, False)
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_log_does_not_hang_the_deny(tmp_path):
+    write_usage(tmp_path, 96)
+    (tmp_path / 'log').mkdir()
+    os.mkfifo(tmp_path / 'log' / 'log.jsonl')
+    assert is_deny(run(call(), ENFORCE))
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_counter_does_not_hang_the_call(tmp_path):
+    write_usage(tmp_path, 10)
+    (tmp_path / 'log' / 'counters').mkdir(parents=True)
+    os.mkfifo(tmp_path / 'log' / 'counters' / 'agent-1.json')
+    assert run(call(), ENFORCE) is None

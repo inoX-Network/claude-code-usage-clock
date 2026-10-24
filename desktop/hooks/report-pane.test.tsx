@@ -26,6 +26,7 @@ function world(on: On, options: {
   run?: (argv: readonly string[], count: number) => Outcome | Promise<Outcome>
   denyRun?: string
   own?: string
+  project?: Record<string, unknown>
 } = {}) {
   const seen = { runs: [] as Run[], opened: [] as unknown[], registered: [] as unknown[], focused: [] as unknown[] }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
@@ -36,9 +37,9 @@ function world(on: On, options: {
   if (own !== undefined) on('session.id', () => ({ value: own }))
   on('fs.read', () => ({ deny: 'ENOENT' }))
   on('fs.exists', () => ({ value: options.isInstalled ?? true }))
-  on('settings.read', () => ({
-    value: options.statusLine === null ? {} : { statusLine: options.statusLine ?? { type: 'command', command: COMMAND } },
-  }))
+  // The user's settings.json alone, or merged with what the project's settings set
+  const user = options.statusLine === null ? {} : { statusLine: options.statusLine ?? { type: 'command', command: COMMAND } }
+  on('settings.read', ($, e) => ({ value: e.source === 'user' ? user : { ...user, ...options.project } }))
   on('command.register', ($, e) => {
     seen.registered.push(e)
     return { value: { command: e.name } }
@@ -433,6 +434,16 @@ for (const surface of SURFACES) {
       await ui.unmount()
     })
   }
+
+  test(`${surface}: a status line only in the settings of the project: no process, the pane points to install.py`, async ($, on) => {
+    const seen = world(on, { statusLine: null, project: { statusLine: { type: 'command', command: COMMAND } } })
+    await start($)
+    await report($)
+    const ui = await mountPane($, surface)
+    expect(seen.runs).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /status line.*install\.py/ })).toBeDefined()
+    await ui.unmount()
+  })
 
   test(`${surface}: a report script that is not installed: no process, the pane points to install.py`, async ($, on) => {
     const seen = world(on, { isInstalled: false })

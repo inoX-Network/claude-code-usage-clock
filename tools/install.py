@@ -269,9 +269,13 @@ def core_command(target: str, script: str, *extra: str) -> str:
     return _plat.script_command(os.path.join(target, script), *extra)
 
 
-def fallback(component: str, mode: str | None) -> str:
+def fails_closed(component: str, mode: str | None) -> bool:
     """Only the spawn gate in enforce fails closed. In shadow nothing may block, not even a broken installation."""
-    return SPAWN_BROKEN if component == 'spawn-gate' and mode == 'enforce' else NEVER_BLOCK
+    return component == 'spawn-gate' and mode == 'enforce'
+
+
+def fallback(component: str, mode: str | None) -> str:
+    return SPAWN_BROKEN if fails_closed(component, mode) else NEVER_BLOCK
 
 
 def hook_command(target: str, component: str, mode: str | None, week_ok_until: str | None,
@@ -313,8 +317,12 @@ def foreign_notes(groups: list, event: str, script: str, path: str) -> list[str]
     return notes
 
 
-def upsert_hook(hooks: dict, event: str, matcher: str | None, command: str, script: str, path: str) -> list[str]:
-    """Adds or updates OUR entry (the one that runs `path`). Returns the messages."""
+def upsert_hook(hooks: dict, event: str, matcher: str | None, command: str, script: str, path: str,
+                block_on_failure: bool = False) -> list[str]:
+    """Adds or updates OUR entry (the one that runs `path`). Returns the messages.
+
+    `block_on_failure` sets `onFailure: "block"` (Claude Code blocks the call when the hook times out, cannot start
+    or crashes; the default lets it through), False removes ours; an `onFailure` of another value stays."""
     groups = hooks.setdefault(event, [])
     notes = foreign_notes(groups, event, script, path)
     for group in groups:
@@ -322,9 +330,17 @@ def upsert_hook(hooks: dict, event: str, matcher: str | None, command: str, scri
             if not points_to(entry.get('command'), path):
                 continue
             wrong_matcher = matcher is not None and group.get('matcher') != matcher
-            if entry.get('command') == command and not wrong_matcher:
+            wrong_failure = (entry.get('onFailure') == 'block') != block_on_failure
+            if entry.get('command') == command and not wrong_matcher and not wrong_failure:
                 return [f'{event}: {script} already installed - unchanged'] + notes
             note = f'{event}: {script} updated'
+            if wrong_failure:
+                if block_on_failure:
+                    entry['onFailure'] = 'block'
+                    note += ' (onFailure block)'
+                else:
+                    del entry['onFailure']
+                    note += ' (onFailure removed)'
             if wrong_matcher:
                 note += f' (matcher {group.get("matcher")} -> {matcher})'
                 if len(group['hooks']) == 1:
@@ -336,6 +352,8 @@ def upsert_hook(hooks: dict, event: str, matcher: str | None, command: str, scri
             entry['command'] = command
             return [f'{note} -> {command}'] + notes
     entry = {'type': 'command', 'command': command, 'timeout': TIMEOUT_S}
+    if block_on_failure:
+        entry['onFailure'] = 'block'
     groups.append({'matcher': matcher, 'hooks': [entry]} if matcher is not None else {'hooks': [entry]})
     return [f'{event}: {script} added' + (f' (matcher {matcher})' if matcher is not None else '') + f' -> {command}'] + notes
 
@@ -405,7 +423,7 @@ def plan_install(data: dict, args: argparse.Namespace, target: str, modes: dict[
         for event, matcher in HOOKS[component]:
             command = hook_command(target, component, mode, args.week_ok_until, event=event)
             messages += upsert_hook(hooks, event, matcher, command, SCRIPTS[component],
-                                    os.path.join(target, SCRIPTS[component]))
+                                    os.path.join(target, SCRIPTS[component]), fails_closed(component, mode))
         if component == 'spawn-gate' and earlier and not args.week_ok_until:
             shown = re.sub(r'[^0-9A-Za-z-]', '?', earlier)[:20]
             messages.append(f'{SCRIPTS[component]}: the weekly approval --week-ok-until={shown} is removed, this run '
@@ -811,6 +829,14 @@ def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) 
                 configured = cfg['modules'][component.replace('-', '_')]
                 entry_mode = 'enforce' if option_value(entry.get('command'), 'mode') == 'enforce' else 'shadow'
                 details.append(f'mode {configured} from config' if configured else f'mode {entry_mode} from settings.json')
+                closed = fails_closed(component, entry_mode)
+                if (entry.get('onFailure') == 'block') != closed:
+                    results.append(('FIX', f'{event}: {script} ' + (
+                        'runs in enforce without onFailure "block": a hook that does not answer in time lets the '
+                        'call through.' if closed else
+                        f'runs in {entry_mode} with onFailure "block": a hook that does not answer in time blocks '
+                        'the call.') + ' Run install.py again.'))
+                    continue
             results.append(('OK', f'{event}: {script}' + (f' ({", ".join(details)})' if details else '')))
             installed = entry
         if installed is not None:

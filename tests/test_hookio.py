@@ -373,3 +373,28 @@ def test_the_reason_in_the_shadow_note_always_ends_a_sentence(reason, shown):
     note = _hookio.shadow_note('Soft stop', 'this call', 'deny', reason, 'Mention it.')
     assert f'Reason: {shown} Nothing was blocked.' in note
 
+
+
+# --- A planted named pipe never hangs a hook (L1) ------------------------------------------------------------------
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_log_is_passed_over_without_waiting_for_a_reader(tmp_path):
+    # Both gates log before they deny: an open that waited for a reader would hang them into Claude Code's timeout
+    (tmp_path / 'log').mkdir()
+    fifo = tmp_path / 'log' / 'log.jsonl'
+    os.mkfifo(fifo)
+    _hookio.write_log_line({'n': 1})
+    assert stat.S_ISFIFO(fifo.lstat().st_mode)
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_log_gets_no_line_even_with_a_reader(tmp_path):
+    (tmp_path / 'log').mkdir()
+    fifo = tmp_path / 'log' / 'log.jsonl'
+    os.mkfifo(fifo)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        _hookio.write_log_line({'n': 1})
+        assert os.read(reader, 100) == b''
+    finally:
+        os.close(reader)

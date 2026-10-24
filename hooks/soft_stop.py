@@ -218,6 +218,9 @@ def decide(usage, tool_name: str, tool_input: dict, calls_since_checkpoint: int,
     return Decision('allow')
 
 
+COUNTER_MAX_BYTES = 4096      # a counter file is about 40 bytes
+
+
 class Counter:
     """Calls since the last checkpoint, per agent_id, in a small JSON file below <log_dir>/counters/."""
 
@@ -230,11 +233,12 @@ class Counter:
         return os.path.join(self.directory, f'{safe}.json')
 
     def read(self, agent_id: str) -> tuple[int, bool]:
+        import _config      # here, like the imports in main(): a failed import must let the call through
         try:
-            with open(self._path(agent_id), encoding='utf-8') as f:
-                data = json.load(f)
+            # Not a bare open(): a named pipe would hang every call of the agent, a link to /dev/zero fill the memory
+            data = json.loads(_config.read_regular(self._path(agent_id), COUNTER_MAX_BYTES).decode('utf-8'))
             return int(data.get('since', 0)), bool(data.get('has_checkpoint', False))
-        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        except (OSError, ValueError, TypeError, AttributeError, RecursionError, OverflowError):      # Infinity
             return 0, False
 
     def book(self, agent_id: str, was_checkpoint: bool) -> None:

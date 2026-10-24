@@ -191,7 +191,11 @@ protected against the model, the model cannot switch itself free.
 same command, and each is found, updated and removed on its own), keeps the mode of an installed entry when `--mode` is left out, and drops an
 earlier `--week-ok-until` when it is left out (and says so). The command of the spawn gate ends with
 `|| { echo …; exit 2; }` in `enforce` (a broken installation denies) and with `|| true` in `shadow` (nothing
-may block); the other hooks always end with `|| true`. Every hook entry gets a timeout of 5 s. The status line
+may block); the other hooks always end with `|| true`. Every hook entry gets a timeout of 5 s. Claude Code ends a hook
+after its timeout and by default lets the call through, so the spawn gate in `enforce` also gets `onFailure: "block"`
+(Claude Code 2.1.295 or newer): a gate that does not answer in time, cannot start or crashes denies, a Skill included.
+In `shadow` the installer removes it again, and `--check` names an entry whose `onFailure` does not match its mode. The
+soft stop never gets it (fail open). The status line
 entry gets `refreshInterval: 60`; an update of our own entry adds it only if it is missing, and
 `--replace-statusline` keeps the `refreshInterval` of the replaced status line.
 

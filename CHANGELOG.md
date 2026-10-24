@@ -35,6 +35,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   the button of the field (the app drew its own beside ours); the info is in normal type with `Docs: <file>#<anchor>`
   as a link. The terminal keeps its look.
 
+### Security
+
+- A named pipe planted as the log, `config.json`, Claude Code's `settings.json` or a soft-stop counter hung the gates
+  until Claude Code's timeout, which lets the call through: a planted pipe switched the spawn gate off. Every file
+  the gates read is opened without waiting and read only as a regular file below a size limit, the log is written
+  only if it is a regular file, and a counter holding `Infinity` reads as zero. The installer gives the spawn gate in
+  enforce `onFailure: "block"` (Claude Code 2.1.295 or newer), so a gate that still does not answer in time denies;
+  `--check` names an entry without it. Run `install.py` again to add it.
+- The desktop plugin (0.10.5) ran the `statusLine` of the settings merged with the project's: a project's
+  `.claude/settings.json` could hand it a command, which it ran after every answer, in `/report` and in the Settings
+  tab, even with `disableAllHooks`. It now takes the `statusLine` from your own `settings.json` only, runs nothing
+  while `disableAllHooks` is set, and only an interpreter by a bare name or an absolute path with `statusline.py` by
+  its absolute path.
+- The spawn gate looked for agent definitions where Claude Code does not: always in the folder a `cd` had moved to,
+  never in the parents of the project root, and not in linked subfolders. A definition planted there let the built-in
+  `general-purpose` start without an effort, and an incomplete one in a parent folder went unseen. It now reads them as
+  Claude Code does: from the project root and each parent up to the repo root (without one up to the home folder),
+  the deepest first, linked subfolders included.
+- A skill with `context: fork` whose name has a dot or a letter beyond ASCII (`my.skill`, `über`, a command
+  `cmd.v2.md`) started unchecked: the gate took the name for one it does not handle. It now checks every name Claude
+  Code accepts; the parts `.` and `..` stay out.
+
 ### Fixed
 
 - The info that `i` unfolds in the Settings tab broke mid-sentence, as it took the lines the installer's assistant
