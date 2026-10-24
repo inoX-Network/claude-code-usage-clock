@@ -770,3 +770,10 @@ def test_the_installed_status_line_shows_the_marker_of_a_gate_switched_off(tmp_p
     (tmp_path / 'no-config.json').write_text(json.dumps({'modules': {'spawn_gate': 'off'}}), encoding='utf-8')
     done = run({'model': {'display_name': 'M'}}, tmp_path)
     assert done.returncode == 0 and 'spawn gate off' in plain(done.stdout), done.stdout + done.stderr
+
+
+def test_model_name_strips_control_characters():
+    # An escape in the model display name would otherwise spoof the status line.
+    assert '\x1b' not in statusline._model_name({'model': {'display_name': 'Op\x1b[31mus'}})
+    assert statusline._model_name({'model': {'display_name': '\x1b\x07\x9b'}}) == 'Claude'  # nothing printable left
+    assert statusline._model_name({'model': {'display_name': 'Opus'}}) == 'Opus'

@@ -401,3 +401,12 @@ def test_the_section_reads_what_a_hook_switched_off_writes(tmp_path, monkeypatch
     _hookio.log_disabled('soft_stop', 'soft_stop', {'session_id': 's1'})
     code, out = run(tmp_path / 'log' / 'log.jsonl')
     assert code == 0 and re.search(r'\n  soft_stop      1 session, last \d{4}-\d\d-\d\dT', out), out
+
+
+def test_control_characters_in_fields_do_not_reach_the_terminal(tmp_path):
+    hostile = [line('2026-01-14T09:00:00+00:00', 'spawn_gate', 'deny', reason='clean\x1b[2Jreason',
+                    subagent_type='evil\x1b]0;x\x07', tool_name='Agent', tool_input_keys=['prompt'])]
+    code, out = run(write_log(tmp_path, hostile))
+    assert code == 0, out
+    assert '\x1b' not in out and '\x07' not in out
+    assert 'evil' in out      # the harmless remainder is kept, only the control bytes are gone

@@ -4,6 +4,8 @@ import json
 import os
 import sys
 
+import pytest
+
 import _transcripts
 from conftest import HOOKS, ROOT
 
@@ -67,3 +69,32 @@ def test_a_request_read_for_the_report_carries_the_ids_that_tell_it_apart(tmp_pa
     # the export keys the line without a message id by the same offset
     found, _, _ = _transcripts.read_requests_from(str(folder / 's.jsonl'), 0, 's', False)
     assert (None, offset) in found
+
+
+def test_agent_type_from_a_regular_meta_file(tmp_path):
+    t = tmp_path / 'agent-1.jsonl'
+    t.write_text('', encoding='utf-8')
+    (tmp_path / 'agent-1.meta.json').write_text(json.dumps({'spawnedAgentType': 'reviewer'}), encoding='utf-8')
+    assert _transcripts.agent_type_of(str(t)) == 'reviewer'
+
+
+def test_agent_type_without_a_meta_file_is_unknown(tmp_path):
+    t = tmp_path / 'agent-2.jsonl'
+    t.write_text('', encoding='utf-8')
+    assert _transcripts.agent_type_of(str(t)) == 'unknown'
+
+
+@pytest.mark.posix_only
+def test_agent_type_meta_as_a_fifo_does_not_block(tmp_path):
+    t = tmp_path / 'agent-3.jsonl'
+    t.write_text('', encoding='utf-8')
+    os.mkfifo(tmp_path / 'agent-3.meta.json')
+    assert _transcripts.agent_type_of(str(t)) == 'unknown'
+
+
+@pytest.mark.posix_only
+def test_agent_type_meta_as_a_symlink_is_unknown(tmp_path):
+    t = tmp_path / 'agent-4.jsonl'
+    t.write_text('', encoding='utf-8')
+    os.symlink('/dev/zero', tmp_path / 'agent-4.meta.json')
+    assert _transcripts.agent_type_of(str(t)) == 'unknown'

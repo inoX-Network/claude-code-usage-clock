@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -206,10 +207,14 @@ def render(model: str, five: float | None, week: float | None, cfg: dict, status
     return line
 
 
+_CONTROL = re.compile('[\x00-\x1f\x7f-\x9f]')   # C0, DEL and C1: an escape in the name would spoof the line
+
+
 def _model_name(status_input: dict) -> str:
     model = status_input.get('model')
     name = model.get('display_name') if isinstance(model, dict) else None
-    return name if isinstance(name, str) and name else 'Claude'
+    name = _CONTROL.sub('', name) if isinstance(name, str) else ''
+    return name if name else 'Claude'
 
 
 def _save_context(status_input: dict, now: float) -> None:
