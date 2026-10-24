@@ -307,8 +307,12 @@ def check_agent(tool_input: dict, directories: list[str], rules: Rules = DEFAULT
 
 # --- Skills with context: fork ------------------------------------------------------
 
-# Command names: name, cmd-subfolder:name (commands/a/b.md), path/to/folder:name (nested skill)
-SKILL_COMMAND = re.compile(r'(?:[A-Za-z0-9_-]{1,100}/)*[A-Za-z0-9_-]{1,100}(?::[A-Za-z0-9_-]{1,100})*')
+# Command names: name, cmd-subfolder:name (commands/a/b.md), path/to/folder:name (nested skill). A part is any
+# folder or file name Claude Code accepts (it refuses only hidden or direction-changing characters, < and >): a dot or
+# a letter beyond ASCII is a name like any other (my.skill, über), and a name the gate does not read is a fork it does
+# not check. Never white space, a separator, ':' or the parts '.' and '..', which would lead out of the folder.
+_NAME_PART = r'(?!\.{1,2}(?:[/:]|$))[^\s/\\:<>\x00-\x1f\x7f]{1,100}'
+SKILL_COMMAND = re.compile(rf'(?:{_NAME_PART}/)*{_NAME_PART}(?::{_NAME_PART})*')
 # context: fork in YAML spellings the simple frontmatter parser does not resolve (block scalar, tags, anchors,
 # quoted key, flow map, continuation line, comments before the value). When in doubt it counts as a fork: warned
 # and counted, not missed. Between the colon and fork: white space, line breaks, comments up to the line end,

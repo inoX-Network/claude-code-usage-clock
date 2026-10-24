@@ -618,6 +618,30 @@ def test_path_tricks_reach_no_fork_outside_the_skill_folders(tmp_path, env):
     assert gate_log(tmp_path) == []
 
 
+def test_a_fork_whose_name_has_a_dot_or_a_letter_beyond_ascii_is_checked(tmp_path, env):
+    # Claude Code starts these by their folder or file name; a name the gate did not parse went through unchecked
+    usage(tmp_path, 80)
+    fork = 'context: fork\nagent: full-def'
+    env = setup_skills(tmp_path, env, personal={'my.skill': f'name: x\n{fork}', 'über': f'name: y\n{fork}'},
+                       commands={'cmd.v2': f'name: z\n{fork}'})
+    for name in ('my.skill', 'über', 'cmd.v2', '/my.skill some args'):
+        out = run(skill(name, tmp_path), env, '--mode=enforce')
+        assert is_deny(out) and '5h' in reason(out), name
+
+
+def test_dot_parts_of_a_skill_name_reach_no_fork_outside_the_skill_folders(tmp_path, env):
+    usage(tmp_path, 80)
+    env = setup_skills(tmp_path, env, project={'foreign': 'name: foreign\ncontext: fork'})
+    env['CCUC_SKILL_DIRS'] = str(tmp_path / 'skills' / 'personal')      # project/ is outside
+    (tmp_path / 'skills' / 'personal').mkdir(parents=True, exist_ok=True)
+    # Forks a dot part would reach: <personal>/../SKILL.md and <cwd>/x/../.claude/skills/up/SKILL.md
+    skill_file(tmp_path / 'skills' / 'SKILL.md', 'name: up\ncontext: fork')
+    skill_file(tmp_path / '.claude' / 'skills' / 'up' / 'SKILL.md', 'name: up\ncontext: fork')
+    (tmp_path / 'x').mkdir()
+    for name in ('..', 'x/..:up', '.:up', './x', '../project:foreign', '../project/foreign'):
+        assert run(skill(name, tmp_path), env, '--mode=enforce') is None, name
+
+
 def test_personal_skill_before_project_skill(tmp_path, env):
     usage(tmp_path, 10)
     env = setup_skills(tmp_path, env, personal={'deploy': 'name: deploy\ndescription: inline'},
