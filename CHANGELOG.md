@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-24 — security fixes and the desktop line
+
 ### Added
 
 - The line of the desktop app (plugin 0.10.0) stands in a row of its own above the prompt, as wide as the transcript
@@ -222,7 +224,8 @@ The installer, the Settings tab and `modules` (part B of the security review aft
 
 ## [1.0.0] — 2026-10-13 — first release
 
-[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.8.0
 [1.7.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.7.0
 [1.6.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.6.0
 [1.5.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.5.0
