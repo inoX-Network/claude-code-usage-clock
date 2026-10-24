@@ -11,13 +11,15 @@ type Run = { argv: readonly string[]; stdin?: string; timeoutMs?: number }
 
 function world(on: Parameters<Parameters<typeof test>[1]>[1], runs: Run[],
                { surfaces = ['desktop'], statusLine = { type: 'command', command: COMMAND } as unknown,
-                 fails = false } = {}) {
+                 fails = false, project = {} as Record<string, unknown> } = {}) {
   mock.clock(on, { now: Date.parse('2026-10-17T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
   on('session.usage', () => ({ value: USAGE }))
   on('session.id', () => ({ value: 'desk-1' }))
   on('session.surfaces', () => ({ value: surfaces }))
-  on('settings.read', () => ({ value: statusLine === null ? {} : { statusLine } }))
+  // The user's settings.json alone, or merged with what the project's settings set (`project`)
+  const user = statusLine === null ? {} : { statusLine }
+  on('settings.read', ($, e) => ({ value: e.source === 'user' ? user : { ...user, ...project } }))
   on('session.start', ($, e) => e)
   on('session.measure', ($, e) => ({ changed: e.changed }))
   on('fs.read', () => ({ deny: 'ENOENT' }))
@@ -80,4 +82,29 @@ test('a status line that cannot start leaves the measurement alone', async ($, o
   const result = await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
   expect(runs).toHaveLength(1)
   expect(result).toEqual({ changed: ['context', 'rateLimits'] })
+})
+
+test('a status line only in the settings of the project is not run: the plugin runs the user\'s own', async ($, on) => {
+  const runs: Run[] = []
+  world(on, runs, { statusLine: null, project: { statusLine: { type: 'command', command: COMMAND } } })
+  await $.session.start({ cwd: 'C:/proj' })
+  await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
+  expect(runs).toEqual([])
+})
+
+test('a project\'s status line does not take the place of the user\'s', async ($, on) => {
+  const runs: Run[] = []
+  world(on, runs, { project: { statusLine: { type: 'command', command: '/usr/bin/python3 /proj/statusline.py' } } })
+  await $.session.start({ cwd: 'C:/proj' })
+  await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
+  expect(runs.map(run => run.argv))
+    .toEqual([['C:/Python314/python.exe', '-X', 'utf8', 'C:/Users/you/.claude/hooks/usage-clock/statusline.py']])
+})
+
+test('with disableAllHooks nothing is run, as Claude Code runs no status line then', async ($, on) => {
+  const runs: Run[] = []
+  world(on, runs, { project: { disableAllHooks: true } })
+  await $.session.start({ cwd: 'C:/proj' })
+  await $.session.measure({ ...USAGE, changed: ['context', 'rateLimits'] })
+  expect(runs).toEqual([])
 })

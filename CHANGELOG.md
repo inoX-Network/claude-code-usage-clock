@@ -43,6 +43,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   only if it is a regular file, and a counter holding `Infinity` reads as zero. The installer gives the spawn gate in
   enforce `onFailure: "block"` (Claude Code 2.1.295 or newer), so a gate that still does not answer in time denies;
   `--check` names an entry without it. Run `install.py` again to add it.
+- The desktop plugin (0.10.5) ran the `statusLine` of the settings merged with the project's: a project's
+  `.claude/settings.json` could hand it a command, which it ran after every answer, in `/report` and in the Settings
+  tab, even with `disableAllHooks`. It now takes the `statusLine` from your own `settings.json` only, runs nothing
+  while `disableAllHooks` is set, and only an interpreter by a bare name or an absolute path with `statusline.py` by
+  its absolute path.
 
 ### Fixed
 

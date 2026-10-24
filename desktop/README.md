@@ -96,9 +96,9 @@ app the parts are cards like the tiles of the other views, the active choice on 
 `config.json` only, through `settings_cli.py` next to the hooks, which the plugin runs with a fixed list of arguments
 (never a shell); without that script (an older installation) it shows one line with the update command. A repository
 name that is no owner/name as `sync.repo` takes it starts no process at all, and every text of the script's answers
-reaches the tab without control characters. Not checked: which level of the settings `$.settings.read()` gives the
-plugin (the user's `settings.json`, or the settings merged with those of the project); the `statusLine` it takes the
-Python and the folder of the hooks from, for the tab, the report and the gate markers, comes from there. All of it:
+reaches the tab without control characters. The `statusLine` the plugin takes the Python and the folder of the hooks
+from, for the tab, the report and the gate markers, comes from your own `settings.json` only
+(`$.settings.read({ source: 'user' })`): a project's `.claude/settings.json` cannot hand the plugin a command. All of it:
 [The Settings tab](../docs/reports.md#the-settings-tab).
 
 **In the desktop app the report is drawn as tiles** (the terminal keeps the text). The Overview shows four key
@@ -164,9 +164,12 @@ them with what other sessions wrote, under the same lock, adds at most one line 
 the context state of the session for the context reporter. A terminal session and a desktop session can run side by
 side.
 
-- The command is the `statusLine` from `settings.json` that `tools/install.py` writes. It runs only if it starts an
-  interpreter with exactly one `statusline.py` and contains no shell syntax (`|`, `;`, `&&`, `$`, ...), so another
-  status line is never run. Without it the plugin still draws its line, and the hooks keep seeing `unknown`.
+- The command is the `statusLine` from your own `settings.json` that `tools/install.py` writes, never one a project's
+  settings set. It runs only if it starts an interpreter (a bare name or an absolute path) with exactly one
+  `statusline.py` by its absolute path and contains no shell syntax (`|`, `;`, `&&`, `$`, ...), so another status line,
+  or a script the open project holds, is never run. Without it the plugin still draws its line, and the hooks keep
+  seeing `unknown`.
+- Nothing runs while the settings set `disableAllHooks`, as Claude Code runs no status line then.
 - A session with a terminal attached runs nothing: the status line writes there, with the exact cache clock.
 - The app tells a plugin no cache expiry, so a desktop session saves no cache clock: the wake-up watcher has nothing to
   wake there.
