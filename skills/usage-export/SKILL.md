@@ -43,3 +43,4 @@ the usage of this one session into the sync repository, so that the usage report
 - Never edit `visibility.json`, `config.json`, the clone or the log folder to get past a check. If the installer stops
   (a public repository, a visibility that cannot be told, a clone that fails), report its message and stop.
 - Never push to the sync repository with git yourself: only the push of the sync writes there.
+- Never run it with `on` unless the user typed `on` in this request.

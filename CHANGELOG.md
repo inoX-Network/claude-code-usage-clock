@@ -59,6 +59,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ### Fixed
 
+- `/usage-export` (the skill for Claude Code on the web) says under Never that it runs with `on` only when the
+  user typed `on` in this very request.
 - The info that `i` unfolds in the Settings tab broke mid-sentence, as it took the lines the installer's assistant
   breaks for a terminal: it is joined into paragraphs again, a new line only at `Writes:` and `More:` (terminal and
   desktop app; the assistant prints it as before).
