@@ -53,10 +53,10 @@ GERMAN = ('german', 'deutsch', 'de')
 def ui_language(path: str | None = None) -> str:
     """'de' when `language` in Claude Code's settings.json names German, else 'en': missing file or key,
     unreadable file and any other language."""
+    import _config
     path = path or os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
     try:
-        with open(path, encoding='utf-8') as f:
-            settings = json.load(f)
+        settings = json.loads(_config.read_regular(path).decode('utf-8'))      # a named pipe must not hang the gate
     except (OSError, ValueError, RecursionError):
         return 'en'
     value = settings.get('language') if isinstance(settings, dict) else None

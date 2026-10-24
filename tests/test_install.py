@@ -1687,3 +1687,81 @@ def test_points_to_ignores_our_path_as_an_option_value():
     assert _setup.points_to(script, script)
     assert not _setup.points_to(f'python3 /their/tool.py --config {script}', script)
     assert not _setup.points_to(f'tool --settings {script}', script)
+
+
+# --- onFailure: a spawn gate in enforce that does not answer blocks (L1) --------------------------------------------
+# Claude Code ends a hook after its timeout and, by default, lets the call through. Only the spawn gate in enforce
+# fails closed (like its `exit 2` tail); in shadow nothing may block, and the soft stop is fail open by design.
+
+def gate_entries(settings):
+    return {script: h for g in read(settings)['hooks']['PreToolUse'] for h in g['hooks']
+            for script in ('spawn_gate.py', 'soft_stop.py') if script in h['command']}
+
+
+def test_only_the_spawn_gate_in_enforce_gets_on_failure_block(tmp_path):
+    settings = write_settings(tmp_path)
+    target = tmp_path / 'target'
+    assert run('--settings', settings, '--target', target).returncode == 0
+    assert all('onFailure' not in entry for entry in gate_entries(settings).values())
+    assert run('--settings', settings, '--target', target, '--mode', 'enforce').returncode == 0
+    entries = gate_entries(settings)
+    assert entries['spawn_gate.py']['onFailure'] == 'block' and 'onFailure' not in entries['soft_stop.py']
+    r = run('--settings', settings, '--target', target, '--mode', 'shadow')
+    assert r.returncode == 0 and 'spawn_gate.py updated (onFailure removed)' in r.stdout, r.stdout
+    assert all('onFailure' not in entry for entry in gate_entries(settings).values())
+
+
+def test_an_enforce_entry_of_an_earlier_version_gets_on_failure_block_and_says_so(tmp_path):
+    settings = installed(tmp_path, '--mode', 'enforce')
+    data = read(settings)
+    for group in data['hooks']['PreToolUse']:
+        for entry in group['hooks']:
+            entry.pop('onFailure', None)
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = run('--settings', settings, '--target', tmp_path / 'target')
+    assert r.returncode == 0 and 'PreToolUse: spawn_gate.py updated (onFailure block)' in r.stdout, r.stdout
+    assert gate_entries(settings)['spawn_gate.py']['onFailure'] == 'block'
+    again = run('--settings', settings, '--target', tmp_path / 'target')
+    assert 'PreToolUse: spawn_gate.py already installed - unchanged' in again.stdout, again.stdout
+
+
+def test_an_on_failure_continue_set_by_hand_on_the_soft_stop_stays(tmp_path):
+    settings = installed(tmp_path, '--mode', 'enforce')
+    data = read(settings)
+    for group in data['hooks']['PreToolUse']:
+        for entry in group['hooks']:
+            if 'soft_stop.py' in entry['command']:
+                entry['onFailure'] = 'continue'
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    assert run('--settings', settings, '--target', tmp_path / 'target').returncode == 0
+    assert gate_entries(settings)['soft_stop.py']['onFailure'] == 'continue'
+
+
+def test_check_names_a_spawn_gate_whose_on_failure_does_not_match_its_mode(tmp_path):
+    settings = installed(tmp_path, '--mode', 'enforce')
+    assert 'onFailure' not in check(tmp_path).stdout
+    data = read(settings)
+    for group in data['hooks']['PreToolUse']:
+        for entry in group['hooks']:
+            entry.pop('onFailure', None)
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    r = check(tmp_path)
+    assert r.returncode == 1
+    assert ('FIX  PreToolUse: spawn_gate.py runs in enforce without onFailure "block": a hook that does not answer '
+            'in time lets the call through. Run install.py again.') in r.stdout, r.stdout
+
+
+def test_an_on_failure_block_set_by_hand_on_the_soft_stop_is_named_and_removed(tmp_path):
+    # the soft stop is fail open by design: a timeout must not stop every call of a subagent
+    settings = installed(tmp_path, '--mode', 'enforce')
+    data = read(settings)
+    for group in data['hooks']['PreToolUse']:
+        for entry in group['hooks']:
+            if 'soft_stop.py' in entry['command']:
+                entry['onFailure'] = 'block'
+    settings.write_text(json.dumps(data), encoding='utf-8')
+    assert ('FIX  PreToolUse: soft_stop.py runs in enforce with onFailure "block": a hook that does not answer in time '
+            'blocks the call. Run install.py again.') in check(tmp_path).stdout
+    r = run('--settings', settings, '--target', tmp_path / 'target')
+    assert r.returncode == 0 and 'PreToolUse: soft_stop.py updated (onFailure removed)' in r.stdout, r.stdout
+    assert 'onFailure' not in gate_entries(settings)['soft_stop.py']

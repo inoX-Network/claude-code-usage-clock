@@ -57,6 +57,8 @@ in its report. Run them that way for a while, read the log, then switch to `enfo
 - Claude Code on a **Pro or Max** subscription. The usage numbers come from the `rate_limits` field that
   Claude Code passes to the status line; API key, Bedrock and Vertex sessions do not get it, and neither does
   a session before its first response. Without it everything reports usage as `unknown`.
+- Claude Code 2.1.295 or newer for a spawn gate in enforce that denies when it does not answer in time
+  (`onFailure`, [security](docs/security.md#limits-and-threat-model)).
 - Python 3.10 or newer as `python3` (the macOS system Python 3.9 is too old; install a current one).
 - Linux, macOS, or Windows 11 with [Git for Windows](https://git-scm.com/downloads/win) (Claude Code runs hooks in Git
   Bash there). Windows has its own folder, [`windows/`](windows/README.md): the commands, the differences and the

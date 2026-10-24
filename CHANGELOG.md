@@ -35,6 +35,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   the button of the field (the app drew its own beside ours); the info is in normal type with `Docs: <file>#<anchor>`
   as a link. The terminal keeps its look.
 
+### Security
+
+- A named pipe planted as the log, `config.json`, Claude Code's `settings.json` or a soft-stop counter hung the gates
+  until Claude Code's timeout, which lets the call through: a planted pipe switched the spawn gate off. Every file
+  the gates read is opened without waiting and read only as a regular file below a size limit, the log is written
+  only if it is a regular file, and a counter holding `Infinity` reads as zero. The installer gives the spawn gate in
+  enforce `onFailure: "block"` (Claude Code 2.1.295 or newer), so a gate that still does not answer in time denies;
+  `--check` names an entry without it. Run `install.py` again to add it.
+
 ### Fixed
 
 - The info that `i` unfolds in the Settings tab broke mid-sentence, as it took the lines the installer's assistant
