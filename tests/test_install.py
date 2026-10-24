@@ -1665,6 +1665,20 @@ def test_check_takes_no_option_that_would_change_something(tmp_path, extra):
     assert r.returncode == 2 and '--check' in r.stderr
 
 
+def test_a_gate_shadowed_by_modules_is_noted_whatever_the_entry_says():
+    # After install.py --mode shadow (modules=shadow, entry=shadow) the status line and --check must still show it:
+    # modules takes the teeth, so the gate blocks nothing. Earlier the note was hidden unless the entry said enforce.
+    module = load_module()
+    cfg = {'modules': {'spawn_gate': 'shadow'}}
+    expected = ('NOTE', 'spawn_gate.py: runs in shadow mode from config.json (modules.spawn_gate "shadow"): '
+                        'it blocks nothing.')
+    assert module.switched_off('spawn-gate', cfg, 'python3 /t/spawn_gate.py --mode=shadow') == [expected]
+    assert module.switched_off('spawn-gate', cfg, 'python3 /t/spawn_gate.py --mode=enforce') == [expected]
+    # A gate that modules does not touch (shadow only from its own entry) still gets no note.
+    assert module.switched_off('spawn-gate', {'modules': {'spawn_gate': ''}},
+                               'python3 /t/spawn_gate.py --mode=shadow') == []
+
+
 def test_points_to_ignores_our_path_as_an_option_value():
     # points_to claims an entry as ours only if our script is in script position, not merely named as an option value.
     script = '/t/statusline.py'

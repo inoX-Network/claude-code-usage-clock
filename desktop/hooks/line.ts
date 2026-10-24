@@ -80,9 +80,8 @@ export function gateMarkers(configText: string | undefined, settings: unknown): 
     if (value !== 'off' && value !== 'shadow') continue
     const path = spelling(`${folder}${key}.py`)
     const entry = entries.find(found => found.some(word => spelling(word) === path))
-    // The last --mode counts, and only exactly enforce is enforce (_hookio.parse_args)
-    const mode = entry?.filter(word => word.startsWith('--mode=')).pop()
-    if (entry !== undefined && (value === 'off' || mode === '--mode=enforce')) result.push(`${label} ${value}`)
+    // modules takes the teeth; the entry's own --mode no longer hides it
+    if (entry !== undefined) result.push(`${label} ${value}`)
   }
   return result
 }

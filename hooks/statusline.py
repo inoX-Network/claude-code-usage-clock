@@ -162,9 +162,9 @@ def _cache_part(status_input: dict, line_cfg: dict, now: float) -> str:
 
 def gate_markers(cfg: dict, settings: str | None = None, folder: str | None = None) -> list[str]:
     """`spawn gate off`, `soft stop shadow`: a gate installed next to this script (its entry in `settings`, the
-    settings.json of the user) that modules of config.json switches off, or sets to shadow while its entry says
-    --mode=enforce. A gate in shadow from its own entry gets none. settings.json is read only when modules sets a gate
-    to off or shadow; one that cannot be read gives none."""
+    settings.json of the user) that modules of config.json switches off or sets to shadow -- whatever the entry\'s
+    own --mode says, because modules takes the teeth. A gate in shadow only from its own --mode entry (modules not
+    set) gets none. settings.json is read only when modules sets a gate to off or shadow; an unreadable one gives none."""
     wanted = [(key, component, label) for key, component, label in GATE_MARKERS if cfg['modules'][key] in ('off', 'shadow')]
     if not wanted:
         return []
@@ -175,9 +175,8 @@ def gate_markers(cfg: dict, settings: str | None = None, folder: str | None = No
         found = []
         for key, component, label in wanted:
             command = _setup.installed_command(data, component, folder or os.path.dirname(os.path.abspath(__file__)))
-            value = cfg['modules'][key]
-            if command is not None and (value == 'off' or _setup.option_value(command, 'mode') == 'enforce'):
-                found.append(f'{label} {value}')
+            if command is not None:      # modules takes the teeth; the entry's own --mode no longer hides it
+                found.append(f"{label} {cfg['modules'][key]}")
         return found
     except Exception:      # no or a broken settings.json: no marker, the line matters more
         return []

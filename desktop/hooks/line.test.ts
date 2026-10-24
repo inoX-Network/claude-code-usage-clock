@@ -145,7 +145,7 @@ test('a gate installed elsewhere, or a missing or broken file, gives no marker',
 test('the path of the entry counts in any spelling of Windows, and the last --mode', () => {
   const settings = { ...gateSettings(), hooks: { PreToolUse: [{ hooks: [{ command: `python 'c:\\users\\you\\.claude\\hooks\\usage-clock\\spawn_gate.py' --mode=enforce --mode=shadow` }] }] } }
   expect(gateMarkers(gates({ spawn_gate: 'off' }), settings)).toEqual(['spawn gate off'])
-  expect(gateMarkers(gates({ spawn_gate: 'shadow' }), settings)).toEqual([])
+  expect(gateMarkers(gates({ spawn_gate: 'shadow' }), settings)).toEqual(['spawn gate shadow'])
 })
 
 test('the markers follow the week in red, attached to it', () => {
