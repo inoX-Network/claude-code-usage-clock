@@ -92,6 +92,7 @@ def test_the_level_decides_the_wording_and_the_exit_code(tmp_path, agents, monke
 def test_without_config_the_defaults_apply_and_the_project_is_searched_first(tmp_path, monkeypatch):
     monkeypatch.setenv('CCUC_CONFIG', str(tmp_path / 'missing.json'))
     project = tmp_path / 'repo'
+    (project / '.git').mkdir(parents=True)      # the search ends at the repo root, as Claude Code's does
     agent_file(project / '.claude' / 'agents' / 'local.md', 'name: local\nmodel: opus')
     code, out = run('--project', project)
     home_agents = os.path.join(os.environ['HOME'], '.claude', 'agents')

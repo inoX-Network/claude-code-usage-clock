@@ -48,6 +48,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
   tab, even with `disableAllHooks`. It now takes the `statusLine` from your own `settings.json` only, runs nothing
   while `disableAllHooks` is set, and only an interpreter by a bare name or an absolute path with `statusline.py` by
   its absolute path.
+- The spawn gate looked for agent definitions where Claude Code does not: always in the folder a `cd` had moved to,
+  never in the parents of the project root, and not in linked subfolders. A definition planted there let the built-in
+  `general-purpose` start without an effort, and an incomplete one in a parent folder went unseen. It now reads them as
+  Claude Code does: from the project root and each parent up to the repo root (without one up to the home folder),
+  the deepest first, linked subfolders included.
+- A skill with `context: fork` whose name has a dot or a letter beyond ASCII (`my.skill`, `über`, a command
+  `cmd.v2.md`) started unchecked: the gate took the name for one it does not handle. It now checks every name Claude
+  Code accepts; the parts `.` and `..` stay out.
 
 ### Fixed
 

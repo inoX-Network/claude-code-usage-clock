@@ -674,7 +674,7 @@ def test_definition_search_symlinks_and_limits(tmp_path, agents):
     (base / 'link-folder').symlink_to(foreign)
     os.mkfifo(base / 'fifo.md')
     start = time.monotonic()
-    assert sc.find_definition('via-link', [str(base)]) is None               # symlinked subfolder not entered
+    assert sc.find_definition('via-link', [str(base)]) is not None           # linked subfolder entered, as by Claude Code
     assert sc.find_definition('large', [str(base)]) is None                  # > 256 KB not read
     assert sc.find_definition('full-def', [str(base)]) is not None
     assert time.monotonic() - start < 1.0                                    # the FIFO does not block

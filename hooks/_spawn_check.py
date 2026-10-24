@@ -220,8 +220,9 @@ def _build_index(directories: list[str], deadline: float) -> dict[str, dict[str,
         if not os.path.isdir(base):
             continue
         count = 0
-        # without followlinks: the root itself may be a symlink, symlinked subfolders are not entered
-        for root, folders, files in os.walk(base):
+        # Into linked subfolders as well, as Claude Code (rg --follow): a definition it loads must not escape the
+        # check. A loop of links ends at MAX_FILES or the time budget: not determinable, denied.
+        for root, folders, files in os.walk(base, followlinks=True):
             _check_deadline(deadline)
             folders.sort()
             count += len(files)

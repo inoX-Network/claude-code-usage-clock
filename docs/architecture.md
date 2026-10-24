@@ -404,8 +404,8 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE
    unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
    deny for more than `unknown_usage_max_agents`.
 2. Model rules (unless `model_effort_action` is `off`): the agent type must resolve to a definition with `model:`
-   and `effort:` in its frontmatter (project `.claude/agents` before user `~/.claude/agents`, matched by the
-   frontmatter `name`). Workflow scripts: every `agent(...)` call needs literal `model` and `effort` options
+   and `effort:` in its frontmatter (project `.claude/agents`, the deepest folder first, before user
+   `~/.claude/agents`, linked subfolders included, matched by the frontmatter `name`). Workflow scripts: every `agent(...)` call needs literal `model` and `effort` options
    or an `agentType` with a complete definition; a value may be `'x'` or `cond ? 'x' : 'y'` with two literals.
    Anything not statically checkable is a finding, and its agents count as unknown. Skill forks (`context: fork`) are checked like agents;
    a missing agent definition only warns (`skill_fork_missing_agent`).
@@ -428,7 +428,9 @@ not determinable. Limits (`_spawn_check.py`), beyond which a definition or scrip
 therefore a finding: 1 s per search or script check, 5000 entries per agent or skill folder, 256 KB per
 definition file, 1 MB (characters) per workflow script.
 
-Discovery: agents as above; skills and commands from `~` and from the start folder (`CLAUDE_PROJECT_DIR`, else
+Discovery: agents as Claude Code reads them, from the project root (`CLAUDE_PROJECT_DIR`, else `cwd`) and each parent
+up to the repo root, without one up to the home folder, which is never a project folder itself; never from the `cwd` of
+the input, which follows every `cd` while Claude Code keeps reading the project root. Skills and commands from `~` and from the start folder (`CLAUDE_PROJECT_DIR`, else
 `cwd`) and its parents up to the repo root; a worktree without its own `.claude/skills` is followed by its
 main checkout. Not covered: plugins,
 managed skills, `--add-dir` and folders below the start folder. `CCUC_AGENT_DIRS`, `CCUC_SKILL_DIRS` and
