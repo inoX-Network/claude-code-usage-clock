@@ -519,7 +519,83 @@ def test_project_agent_found_when_cwd_is_a_subfolder(tmp_path, env):
     hook_input = agent('probe', cwd=sub)
     assert run(hook_input, env, '--mode=enforce') is None
     env.pop('CLAUDE_PROJECT_DIR')
-    assert is_deny(run(hook_input, env, '--mode=enforce'))  # without the root: only the cwd
+    assert run(hook_input, env, '--mode=enforce') is None  # without the root: the cwd and its parents
+
+
+# --- The gate reads the agents Claude Code starts (C-7) -------------------------------------------------------------
+# Claude Code reads project agents from the project root and its parents up to the repo root, never from the cwd,
+# the deepest folder winning, and it follows linked folders (rg --follow). A definition the gate reads but Claude
+# Code does not, or the other way round, lets an agent through that would otherwise be denied.
+
+def agent_def(path, name, head):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'---\nname: {name}\ndescription: Test\n{head}\n---\nText\n', encoding='utf-8')
+
+
+def repo_world(tmp_path, env):
+    """A repo with .git and a session in repo/app; the user's agents in the test home."""
+    usage(tmp_path, 10)
+    repo = tmp_path / 'repo'
+    (repo / '.git').mkdir(parents=True)
+    (repo / 'app' / 'sub').mkdir(parents=True)
+    env = {k: v for k, v in env.items() if k != 'CCUC_AGENT_DIRS'}
+    env.update(HOME=str(tmp_path / 'home'), USERPROFILE=str(tmp_path / 'home'), CLAUDE_PROJECT_DIR=str(repo / 'app'))
+    return repo, tmp_path / 'home' / '.claude' / 'agents', env
+
+
+def test_a_definition_planted_in_the_cwd_is_not_what_claude_code_starts(tmp_path, env):
+    repo, _, env = repo_world(tmp_path, env)
+    for cwd in (repo / 'app' / 'sub', tmp_path / 'elsewhere'):      # 2g: a folder in the project, 2b: outside it
+        agent_def(cwd / '.claude' / 'agents' / 'x.md', 'general-purpose', 'model: sonnet\neffort: low')
+        out = run(agent('general-purpose', cwd=cwd), env, '--mode=enforce')
+        assert is_deny(out) and 'no definition' in reason(out), cwd
+
+
+def test_a_complete_copy_in_the_cwd_does_not_cover_an_incomplete_user_definition(tmp_path, env):
+    repo, user, env = repo_world(tmp_path, env)      # 2d
+    agent_def(user / 'helper.md', 'helper', 'model: opus')
+    agent_def(repo / 'app' / 'sub' / '.claude' / 'agents' / 'helper.md', 'helper', 'model: opus\neffort: high')
+    assert is_deny(run(agent('helper', cwd=repo / 'app' / 'sub'), env, '--mode=enforce'))
+
+
+def test_a_definition_in_a_parent_of_the_project_root_is_read(tmp_path, env):
+    repo, user, env = repo_world(tmp_path, env)      # case 10: Claude Code starts repo's, ahead of the user's
+    agent_def(repo / '.claude' / 'agents' / 'helper2.md', 'helper2', 'model: opus')
+    agent_def(user / 'helper2.md', 'helper2', 'model: opus\neffort: high')
+    assert is_deny(run(agent('helper2', cwd=repo / 'app'), env, '--mode=enforce'))
+
+
+@pytest.mark.parametrize('deep,upper,allowed', [('model: opus', 'model: opus\neffort: high', False),
+                                                ('model: opus\neffort: high', 'model: opus', True)],
+                         ids=['deep-incomplete', 'deep-complete'])
+def test_the_deepest_project_folder_wins(tmp_path, env, deep, upper, allowed):
+    repo, _, env = repo_world(tmp_path, env)
+    agent_def(repo / 'app' / '.claude' / 'agents' / 'h.md', 'h', deep)
+    agent_def(repo / '.claude' / 'agents' / 'h.md', 'h', upper)
+    out = run(agent('h', cwd=repo / 'app'), env, '--mode=enforce')
+    assert (out is None) if allowed else is_deny(out)
+
+
+@pytest.mark.posix_only
+def test_a_definition_in_a_linked_folder_is_read(tmp_path, env):
+    repo, user, env = repo_world(tmp_path, env)
+    agent_def(tmp_path / 'outside' / 'helper3.md', 'helper3', 'model: opus')
+    (repo / 'app' / '.claude' / 'agents').mkdir(parents=True)
+    (repo / 'app' / '.claude' / 'agents' / 'linked').symlink_to(tmp_path / 'outside')
+    agent_def(user / 'helper3.md', 'helper3', 'model: opus\neffort: high')
+    assert is_deny(run(agent('helper3', cwd=repo / 'app'), env, '--mode=enforce'))
+
+
+@pytest.mark.posix_only
+def test_a_loop_of_linked_folders_ends_the_search_without_hanging(tmp_path, env):
+    # The walk stops where the system refuses the path (ELOOP), as ripgrep skips a loop: the loop adds nothing
+    repo, _, env = repo_world(tmp_path, env)
+    folder = repo / 'app' / '.claude' / 'agents'
+    agent_def(folder / 'helper4.md', 'helper4', 'model: opus')
+    (folder / 'loop').symlink_to(folder)
+    started = time.monotonic()
+    assert is_deny(run(agent('helper4', cwd=repo / 'app'), env, '--mode=enforce'))
+    assert time.monotonic() - started < 5
 
 
 # --- Skills with context: fork ----------------------------------------------------------------------------------

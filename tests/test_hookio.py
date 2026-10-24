@@ -70,26 +70,43 @@ def test_read_input_survives_a_broken_stdin(monkeypatch):
 
 # --- Agent directories ---------------------------------------------------------------------
 
-def test_agent_dirs_env_override(monkeypatch):
+def test_agent_dirs_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv('CCUC_AGENT_DIRS', os.pathsep.join(['/a', '', '/b']))
     assert _hookio.agent_dirs({'cwd': '/ignored'}) == ['/a', '/b']
     monkeypatch.setenv('CCUC_AGENT_DIRS', '')
-    assert _hookio.agent_dirs({'cwd': '/proj'})[0] == agents_in('/proj')   # empty value = no override
+    assert _hookio.agent_dirs({'cwd': str(tmp_path)})[0] == agents_in(str(tmp_path))   # empty value = no override
 
 
-def test_agent_dirs_project_root_before_cwd_before_user(tmp_path, monkeypatch):
-    # The agent lives in the project root, but the cwd of the input has wandered into a subfolder.
+def test_agent_dirs_are_the_project_root_and_its_parents_up_to_the_repo_root_never_the_cwd(tmp_path, monkeypatch):
+    # As Claude Code reads project agents: the cwd of the input moves with every cd, Claude Code stays at the root
+    repo = tmp_path / 'repo'
+    (repo / '.git').mkdir(parents=True)
+    (repo / 'app' / 'sub').mkdir(parents=True)
     home = str(tmp_path / 'home')
-    monkeypatch.setenv('CLAUDE_PROJECT_DIR', '/proj')
-    assert _hookio.agent_dirs({'cwd': '/proj/sub/dir'}) == [agents_in('/proj'), agents_in('/proj/sub/dir'),
-                                                            agents_in(home)]
-    monkeypatch.delenv('CLAUDE_PROJECT_DIR')   # without the root only the cwd remains
-    assert _hookio.agent_dirs({'cwd': '/proj/sub/dir'}) == [agents_in('/proj/sub/dir'), agents_in(home)]
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(repo / 'app'))
+    assert _hookio.agent_dirs({'cwd': str(repo / 'app' / 'sub')}) == [agents_in(str(repo / 'app')), agents_in(str(repo)),
+                                                                      agents_in(home)]
+    assert _hookio.agent_dirs({'cwd': str(tmp_path / 'elsewhere')}) == [agents_in(str(repo / 'app')), agents_in(str(repo)),
+                                                                        agents_in(home)]
+    monkeypatch.delenv('CLAUDE_PROJECT_DIR')   # without the root the cwd stands in for it
+    assert _hookio.agent_dirs({'cwd': str(repo / 'app' / 'sub')}) == [
+        agents_in(str(repo / 'app' / 'sub')), agents_in(str(repo / 'app')), agents_in(str(repo)), agents_in(home)]
+
+
+def test_agent_dirs_without_a_repo_go_up_to_the_home_folder_but_not_into_it(tmp_path, monkeypatch):
+    project = tmp_path / 'home' / 'work' / 'proj'
+    project.mkdir(parents=True)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(project))
+    home = str(tmp_path / 'home')
+    assert _hookio.agent_dirs({}) == [agents_in(str(project)), agents_in(str(project.parent)), agents_in(home)]
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', home)      # a session in the home folder has no project agents
+    assert _hookio.agent_dirs({}) == [agents_in(home)]
 
 
 def test_agent_dirs_same_root_and_cwd_appear_once_and_missing_cwd_falls_back(tmp_path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_PROJECT_DIR', '/proj')
-    assert _hookio.agent_dirs({'cwd': '/proj'}).count(agents_in('/proj')) == 1
+    (tmp_path / 'proj' / '.git').mkdir(parents=True)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(tmp_path / 'proj'))
+    assert _hookio.agent_dirs({'cwd': str(tmp_path / 'proj')}).count(agents_in(str(tmp_path / 'proj'))) == 1
     monkeypatch.delenv('CLAUDE_PROJECT_DIR')
     monkeypatch.chdir(tmp_path)
     for bad in ({}, {'cwd': ''}, {'cwd': 5}, {'cwd': None}):

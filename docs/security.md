@@ -15,8 +15,8 @@
 - The usage file and the counters are ordinary files. A model that can write them can fake them, and a model
   that can edit `settings.json` or the config can switch the gates off. On their own these tools are a
   seatbelt, not a lock. See [Working with a guard hook](#working-with-a-guard-hook).
-- Agent discovery covers project agents (`.claude/agents`) and user agents (`~/.claude/agents`), not plugin or
-  managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
+- Agent discovery covers project agents (`.claude/agents` of the project root and its parents up to the repo root,
+  as Claude Code reads them) and user agents (`~/.claude/agents`), not plugin or managed agents; the model rule reports or denies those unless they are listed in `spawn_rules.exceptions`.
   Skill discovery covers your personal skills and the project folders from the start folder up to the repo
   root, not plugin or managed skills or folders added with `--add-dir`.
 - The usage report counts the requests in the transcripts below `~/.claude/projects`. A session in print mode

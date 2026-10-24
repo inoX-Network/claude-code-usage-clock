@@ -62,18 +62,27 @@ def _paths_from_env(name: str) -> list[str] | None:
 
 
 def agent_dirs(hook_input: dict) -> list[str]:
-    """Search order = precedence: project agents before user agents.
+    """Search order = precedence: project agents, the deepest folder first, before user agents.
 
-    Project agents live in the project root (CLAUDE_PROJECT_DIR). The cwd from the input moves with every cd
-    and stays only as a fallback if the variable is missing.
+    As Claude Code reads them: from the project root (CLAUDE_PROJECT_DIR) and each parent up to the repo root (a
+    folder with .git), without one up to the home folder, which is never a project folder itself. Never from the cwd
+    of the input, which moves with every cd while Claude Code keeps reading the project root; it stands in for the
+    root only if the variable is missing.
     """
     override = _paths_from_env('CCUC_AGENT_DIRS')
     if override:
         return override
     cwd = hook_input.get('cwd')
-    roots = [os.environ.get('CLAUDE_PROJECT_DIR'), cwd if isinstance(cwd, str) and cwd else os.getcwd()]
-    project = [os.path.join(r, '.claude', 'agents') for r in dict.fromkeys(r for r in roots if r)]
-    return project + [os.path.join(os.path.expanduser('~'), '.claude', 'agents')]
+    start = os.environ.get('CLAUDE_PROJECT_DIR') or (cwd if isinstance(cwd, str) and cwd else os.getcwd())
+    home = os.path.expanduser('~')
+    chain, folder = [], os.path.abspath(start)
+    while os.path.normcase(folder) != os.path.normcase(os.path.abspath(home)):
+        chain.append(os.path.join(folder, '.claude', 'agents'))
+        parent = os.path.dirname(folder)
+        if os.path.exists(os.path.join(folder, '.git')) or parent == folder:
+            break
+        folder = parent
+    return chain + [os.path.join(home, '.claude', 'agents')]
 
 
 def _project_roots(start: str) -> list[str]:
