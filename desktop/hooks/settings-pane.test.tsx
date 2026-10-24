@@ -47,7 +47,7 @@ function shown(values: Record<string, unknown> = {}, sync: Record<string, unknow
 type Hold = { from: number; asked: () => void; until: Promise<void> }
 
 function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; info?: string; hold?: Hold;
-  values?: Record<string, unknown> } = {}) {
+  values?: Record<string, unknown>; isProjectOnly?: boolean } = {}) {
   const seen = { runs: [] as (readonly string[])[], values: { ...options.values } as Record<string, unknown>, asked: [] as string[], shows: 0 }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
@@ -59,7 +59,10 @@ function world(on: On, options: { hasCli?: boolean; check?: string; save?: strin
     seen.asked.push(e.path)
     return { value: /[\\/]settings_cli\.py$/.test(e.path) ? (options.hasCli ?? true) : true }
   })
-  on('settings.read', () => ({ value: { statusLine: { type: 'command', command: COMMAND } } }))
+  // isProjectOnly: the status line is in the project's settings, the user's settings.json has none
+  on('settings.read', ($, e) => ({
+    value: options.isProjectOnly === true && e.source === 'user' ? {} : { statusLine: { type: 'command', command: COMMAND } },
+  }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.focus', () => ({}))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -329,6 +332,14 @@ for (const surface of SURFACES) {
     expect(await ui.find({ key: 'row-usage_clock' })).toBeUndefined()
     expect(await ui.find({ key: 'repo' })).toBeUndefined()
     expect(settingsRuns(seen)).toEqual([])
+    await ui.unmount()
+  })
+
+  test(`${surface}: a status line only in the settings of the project starts no process, the tab points to install.py`, async ($, on) => {
+    const seen = world(on, { isProjectOnly: true })
+    const ui = await open($, surface)
+    expect(seen.runs).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /status line.*install\.py/ })).toBeDefined()
     await ui.unmount()
   })
 

@@ -36,7 +36,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 async function fetchReport($: EngineInterface, period: Period): Promise<ReportSlot> {
   let command: unknown
   try {
-    const line = (await $.settings.read()).statusLine
+    const line = (await $.settings.read({ source: 'user' })).statusLine      // never a project's command
     command = typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined
   } catch (error) {
     return { status: 'error', message: `Could not read settings.json: ${messageOf(error)}` }
@@ -77,7 +77,7 @@ type SettingsRun = { status: 'ok'; answer: Record<string, unknown> } | { status:
 async function runSettings($: EngineInterface, args: string[], timeoutMs = SETTINGS_TIMEOUT_MS): Promise<SettingsRun> {
   let command: unknown
   try {
-    const line = (await $.settings.read()).statusLine
+    const line = (await $.settings.read({ source: 'user' })).statusLine      // never a project's command
     command = typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined
   } catch (error) {
     return { status: 'error', message: `Could not read settings.json: ${messageOf(error)}` }

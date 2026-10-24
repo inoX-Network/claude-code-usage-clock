@@ -77,11 +77,13 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // The terminal runs the status line itself, with the cache clock the app does not have
     if (!(await $.session.surfaces()).includes('terminal')) {
-      const settings = await $.settings.read()
+      // The user's own settings.json, as install.py writes it: a project cannot hand the plugin a command to run
+      const settings = await $.settings.read({ source: 'user' })
       await renewConfig($, configFile, settings)
       const line = settings.statusLine
       const argv = statuslineArgv(typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined)
-      if (argv !== null) {
+      // Claude Code runs no status line while the merged settings say disableAllHooks; neither does the plugin
+      if (argv !== null && (await $.settings.read({ key: 'disableAllHooks' })) !== true) {
         const stdin = JSON.stringify(statusInput(e, await $.session.id()))
         // The line comes from the plugin; a status line that fails only means no new numbers for the hooks
         await $.process.run(argv, { stdin, timeoutMs: 10_000 }).catch(() => undefined)
