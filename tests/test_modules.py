@@ -276,8 +276,8 @@ def test_a_dry_run_with_mode_writes_no_config(setup):
 
 GATE_OFF = ('NOTE spawn_gate.py: switched off in config.json (modules.spawn_gate "off"), it lets every start through. '
             'Switch it on with install.py --on spawn-gate or in the Settings tab of /report.')
-GATE_SHADOW = ('NOTE spawn_gate.py: runs in shadow mode from config.json (modules.spawn_gate "shadow") although its entry '
-               'has --mode=enforce: it blocks nothing.')
+GATE_SHADOW = ('NOTE spawn_gate.py: runs in shadow mode from config.json (modules.spawn_gate "shadow"): '
+               'it blocks nothing.')
 
 
 @pytest.mark.parametrize('value,expected,note', [('', 'mode enforce from settings.json', None),
@@ -296,8 +296,18 @@ def test_check_names_where_the_mode_comes_from_and_notes_a_gate_switched_off(set
 
 
 def test_check_notes_no_gate_in_shadow_mode_from_its_own_entry(setup):
-    assert setup('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    # A default install shadows via the entry's own --mode=shadow; modules does not set it, so --check stays quiet.
+    assert setup('--components', 'soft-stop')[0] == 0
     assert 'NOTE soft_stop' not in setup('--check', '--components', 'soft-stop')[1]
+
+
+def test_check_notes_a_gate_set_to_shadow_by_install_mode_shadow(setup):
+    # install.py --mode shadow writes modules=shadow AND the entry --mode=shadow; --check must now say so, because
+    # modules takes the teeth. Earlier this stayed silent (the gate was shadowed invisibly).
+    assert setup('--components', 'soft-stop', '--mode', 'shadow')[0] == 0
+    out = setup('--check', '--components', 'soft-stop')[1]
+    assert ('NOTE soft_stop.py: runs in shadow mode from config.json (modules.soft_stop "shadow"): '
+            'it blocks nothing.') in out
 
 
 @pytest.mark.parametrize('component,script,key', [('usage-clock', 'usage_clock.py', 'usage_clock'),

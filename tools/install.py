@@ -774,8 +774,8 @@ LETS_THROUGH = {'spawn-gate': 'every start', 'soft-stop': 'every call'}
 
 
 def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
-    """A NOTE for an installed part that modules of config.json switches off, or whose gate it sets to shadow while
-    the entry says enforce (as the status line marks it); a gate in shadow from its own entry gets none."""
+    """A NOTE for an installed part that modules of config.json switches off, or sets to shadow -- whatever the
+    entry's own --mode says, as the status line marks it; a gate in shadow only from its own --mode entry gets none."""
     if component not in SWITCHES:      # the sync has its mode in sync.mode
         return []
     key, script = component.replace('-', '_'), SCRIPTS[component]
@@ -786,9 +786,9 @@ def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
     if value == 'off':
         return [('NOTE', f'{script}: switched off in config.json (modules.{key} "off"), it lets '
                          f'{LETS_THROUGH[component]} through. {again}')]
-    if value == 'shadow' and option_value(command, 'mode') == 'enforce':
-        return [('NOTE', f'{script}: runs in shadow mode from config.json (modules.{key} "shadow") although its entry '
-                         'has --mode=enforce: it blocks nothing.')]
+    if value == 'shadow':
+        return [('NOTE', f'{script}: runs in shadow mode from config.json (modules.{key} "shadow"): it blocks '
+                         'nothing.')]
     return []
 
 
