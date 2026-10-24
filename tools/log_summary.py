@@ -78,6 +78,9 @@ def _denials(entries: list[dict], mode: str) -> dict[str, Counter]:
     return found
 
 
+_CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f]')
+
+
 def summarise(entries: list[dict]) -> list[str]:
     first, last = entries[0].get('time'), entries[-1].get('time')
     count = f'{len(entries)} entr' + ('y' if len(entries) == 1 else 'ies')
@@ -111,7 +114,9 @@ def summarise(entries: list[dict]) -> list[str]:
     types = Counter(str(e.get('agent_type') or '-') for e in stops if e.get('agent_id'))
     lines += ['', f'Soft stop calls with agent_id: {sum(types.values())} of {len(stops)} - agent_type: '
                   f'{dict(types.most_common(8))}']
-    return lines + sync_section([e for e in entries if e.get('hook') == 'sync'])
+    produced = lines + sync_section([e for e in entries if e.get('hook') == 'sync'])
+    # Fields from the log (subagent_type, reason, agent_type) are foreign; no escape reaches the terminal.
+    return [_CONTROL.sub('?', line) for line in produced]
 
 
 def _count(value) -> int:

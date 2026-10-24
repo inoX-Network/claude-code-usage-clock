@@ -14,12 +14,16 @@ import json
 import math
 import os
 import re
+import stat
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 KINDS = ('input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output')   # also the order of the prices
 MAX_COUNT = 10 ** 12        # a larger token count or percentage is not a measurement: the line is not read
 FRESH_MAX_MIN = 1           # a usage line counts as a measurement only if it says "measured 1 min ago" at most
+NO_FOLLOW = getattr(os, 'O_NOFOLLOW', 0)
+O_NONBLOCK = getattr(os, 'O_NONBLOCK', 0)      # a named pipe planted as the meta file must not block
+O_BINARY = getattr(os, 'O_BINARY', 0)
 NUMBER = r'(\d+(?:\.\d+)?)'
 USAGE_LINES = (re.compile(rf'Usage: 5h {NUMBER} %[^·]*· week {NUMBER} %[^·]*· measured (\d+) min ago'),
                re.compile(rf'Nutzung: 5h {NUMBER} %[^·]*· 7T {NUMBER} %[^·]*· Messung vor (\d+) min'))
@@ -148,10 +152,22 @@ def parse_usage_line(raw: str) -> tuple | None:
 def agent_type_of(transcript: str) -> str:
     """The type of a subagent from agent-<id>.meta.json next to its transcript: `spawnedAgentType`, else
     `customAgentType`, else `agentType`, which for a named subagent is only its name: then the type is unknown."""
+    meta = transcript[:-len('.jsonl')] + '.meta.json'
     try:
-        with open(transcript[:-len('.jsonl')] + '.meta.json', encoding='utf-8') as f:
-            data = json.loads(f.read(65536))
-    except (OSError, ValueError, RecursionError):
+        descriptor = os.open(meta, os.O_RDONLY | NO_FOLLOW | O_NONBLOCK | O_BINARY)
+    except OSError:
+        return 'unknown'
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return 'unknown'      # a link or pipe planted next to the transcript is not our meta file
+        raw = os.read(descriptor, 65536)
+    except OSError:
+        return 'unknown'
+    finally:
+        os.close(descriptor)
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except (ValueError, RecursionError, UnicodeDecodeError):
         return 'unknown'
     data = data if isinstance(data, dict) else {}
     key = next((key for key in AGENT_TYPE_KEYS if data.get(key) is not None), None)
