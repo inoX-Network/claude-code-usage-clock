@@ -158,9 +158,16 @@ def _tokens(command) -> list[str]:
 
 
 def points_to(command, path: str) -> bool:
-    """Does the command run exactly this file?"""
+    """Does the command run exactly this file -- in script position, not merely named as the value of an option?"""
     wanted = os.path.normcase(os.path.normpath(path))      # normcase: C:\x and c:/x are the same file on Windows
-    return any(os.path.normcase(os.path.normpath(os.path.expanduser(token))) == wanted for token in _tokens(command))
+    tokens = _tokens(command)
+    for i, token in enumerate(tokens):
+        if os.path.normcase(os.path.normpath(os.path.expanduser(token))) == wanted:
+            # Our own command always puts the script before any option; a path after an option (--config <path>)
+            # is that option's value, so a foreign hook that merely names our path is not ours.
+            if i == 0 or not tokens[i - 1].startswith('-'):
+                return True
+    return False
 
 
 def load_settings(path: str) -> tuple[dict, bool]:

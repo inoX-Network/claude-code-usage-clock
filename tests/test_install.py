@@ -1663,3 +1663,13 @@ def test_check_takes_no_option_that_would_change_something(tmp_path, extra):
     write_settings(tmp_path)
     r = check(tmp_path, *extra)
     assert r.returncode == 2 and '--check' in r.stderr
+
+
+def test_points_to_ignores_our_path_as_an_option_value():
+    # points_to claims an entry as ours only if our script is in script position, not merely named as an option value.
+    script = '/t/statusline.py'
+    assert _setup.points_to(f'python3 {script} --mode=enforce', script)
+    assert _setup.points_to(f'uv run {script}', script)
+    assert _setup.points_to(script, script)
+    assert not _setup.points_to(f'python3 /their/tool.py --config {script}', script)
+    assert not _setup.points_to(f'tool --settings {script}', script)
