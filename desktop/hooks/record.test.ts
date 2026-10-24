@@ -51,7 +51,7 @@ test('the command of install.py, Windows and POSIX spelling', () => {
     .toEqual(['/usr/bin/python3', '/home/you/.claude/hooks/usage-clock/statusline.py'])
 })
 
-test('a path the open project could answer is not run: a relative script or interpreter, the script not last', () => {
+test('a path the open project could answer is not run: a relative script or interpreter', () => {
   for (const command of [
     'python3 ./statusline.py',
     'python3 statusline.py',
@@ -60,7 +60,6 @@ test('a path the open project could answer is not run: a relative script or inte
     './venv/bin/python /home/you/.claude/hooks/usage-clock/statusline.py',
     "bash -c 'id > /tmp/pwned' statusline.py",
     'node evil.js statusline.py',
-    'python3 /home/you/.claude/hooks/usage-clock/statusline.py --report',
   ]) {
     expect(statuslineArgv(command)).toBeNull()
   }

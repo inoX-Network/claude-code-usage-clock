@@ -75,16 +75,16 @@ export function words(command: string, plain = false): string[] | null {
 /** A path that does not depend on the folder the app has open: `/…`, `C:/…`, `C:\…` or a UNC path. */
 const isAbsolute = (path: string): boolean => /^(?:[A-Za-z]:)?[\\/]/.test(path)
 
-/** The argument vector of the usage-clock status line: an interpreter, its options and exactly one statusline.py, the
- *  last word, by its absolute path; the interpreter a bare name for the PATH or an absolute path. null for any other
- *  command: a relative path would be found in the project the app has open. */
+/** The argument vector of the usage-clock status line: an interpreter, its options and exactly one statusline.py by
+ *  its absolute path; the interpreter a bare name for the PATH or an absolute path. null for any other command: a
+ *  relative path would be found in the project the app has open. */
 export function statuslineArgv(command: unknown): string[] | null {
   if (typeof command !== 'string') return null
   const argv = words(command)
   if (argv === null || argv.length < 2) return null
   const scripts = argv.filter(word => word.split(/[\\/]/).pop() === SCRIPT)
   const interpreter = argv[0] as string
-  const last = argv[argv.length - 1] as string
   const isInterpreterOutsideProject = isAbsolute(interpreter) || !/[\\/]/.test(interpreter)
-  return scripts.length === 1 && scripts[0] === last && isAbsolute(last) && isInterpreterOutsideProject ? argv : null
+  return scripts.length === 1 && interpreter !== scripts[0] && isAbsolute(scripts[0] as string) && isInterpreterOutsideProject
+    ? argv : null
 }

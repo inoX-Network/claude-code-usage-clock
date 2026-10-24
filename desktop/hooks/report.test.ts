@@ -81,8 +81,8 @@ describe('reportArgv', () => {
     ])
   })
 
-  test('a script without a folder stays without one', async () => {
-    expect(reportArgv('python3 statusline.py', 'day')?.argv).toEqual(['python3', 'usage_report.py', '--day', '--json'])
+  test('a script without a folder is not run: it would be found in the project the app has open', async () => {
+    expect(reportArgv('python3 statusline.py', 'day')).toBeNull()
   })
 
   for (const [name, command] of [

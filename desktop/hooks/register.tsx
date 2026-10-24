@@ -83,7 +83,7 @@ export const register: Register = (on, options) => {
       const line = settings.statusLine
       const argv = statuslineArgv(typeof line === 'object' && line !== null ? (line as { command?: unknown }).command : undefined)
       // Claude Code runs no status line while the merged settings say disableAllHooks; neither does the plugin
-      if (argv !== null && (await $.settings.read({ key: 'disableAllHooks' })) !== true) {
+      if (argv !== null && (await $.settings.read()).disableAllHooks !== true) {
         const stdin = JSON.stringify(statusInput(e, await $.session.id()))
         // The line comes from the plugin; a status line that fails only means no new numbers for the hooks
         await $.process.run(argv, { stdin, timeoutMs: 10_000 }).catch(() => undefined)
