@@ -24,6 +24,7 @@ import contextlib
 import json
 import math
 import os
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -35,6 +36,9 @@ else:
     import fcntl
 
 NO_FOLLOW = getattr(os, 'O_NOFOLLOW', 0)
+O_NONBLOCK = getattr(os, 'O_NONBLOCK', 0)      # a named pipe must not block the open
+O_BINARY = getattr(os, 'O_BINARY', 0)          # Windows opens in text mode otherwise
+MAX_USAGE_BYTES = 1 << 20   # our file is a few hundred bytes; anything this big is never ours
 SAME_WINDOW_S = 60
 MIN_AGE_MIN = -1.0  # a timestamp from the future counts as stale, not as permanently fresh
 
@@ -103,12 +107,29 @@ def merge(old: dict, status_input: dict, now: float) -> dict:
 
 
 def _read_dict(path: str) -> dict:
+    """The usage file as a dict; any problem yields {} (never an exception).
+
+    Opened like every other read in the tool, not with a bare open(): O_NOFOLLOW so a planted link cannot
+    redirect the read, O_NONBLOCK so a named pipe cannot hang the (locked) read, then S_ISREG and a size cap so a
+    link to an endless source such as /dev/zero cannot exhaust memory. A regular file this big is never ours."""
     try:
-        with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, RecursionError):
+        descriptor = os.open(path, os.O_RDONLY | NO_FOLLOW | O_NONBLOCK | O_BINARY)
+    except OSError:
         return {}
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_USAGE_BYTES:
+            return {}
+        raw = os.read(descriptor, MAX_USAGE_BYTES)
+    except OSError:
+        return {}
+    finally:
+        os.close(descriptor)
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except (ValueError, RecursionError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def update_file(path: str, status_input: dict, now: float, lock_dir: str, after_merge=None) -> dict:

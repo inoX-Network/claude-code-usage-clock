@@ -412,3 +412,35 @@ def test_read_usage_uses_the_env_path_by_default(tmp_path):
     u = _usage.read_usage(now=NOW_DT)
     assert u.five_hour == 42.0 and u.state == 'ok'
     assert _usage.read_usage().state in ('stale', 'unknown')   # real clock: the synthetic timestamp is long past
+
+
+# --- B3: a planted link, pipe or giant file must not hang or exhaust memory (read like every other file) ---
+
+@pytest.mark.skipif(os.name == 'nt', reason='O_NOFOLLOW/mkfifo/dev-zero are POSIX')
+def test_usage_file_as_symlink_to_endless_source_is_unknown(tmp_path):
+    # The crash of 2026-10-23: usage.json symlinked to /dev/zero made json.load read forever (OOM).
+    # O_NOFOLLOW refuses the link, so nothing is read at all.
+    path = tmp_path / 'usage.json'
+    os.symlink('/dev/zero', path)
+    assert _usage.read_usage(str(path), NOW_DT).state == 'unknown'
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='mkfifo is POSIX')
+def test_usage_file_as_fifo_does_not_block(tmp_path):
+    # A named pipe planted as the file would block a bare open() under the write lock; O_NONBLOCK + S_ISREG skip it.
+    path = tmp_path / 'usage.json'
+    os.mkfifo(path)
+    assert _usage.read_usage(str(path), NOW_DT).state == 'unknown'
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='char device path is POSIX')
+def test_usage_file_that_is_a_char_device_is_unknown(tmp_path):
+    # Not a symlink but the real thing: a non-regular file is skipped by S_ISREG before any read.
+    assert _usage.read_usage('/dev/zero', NOW_DT).state == 'unknown'
+
+
+def test_oversized_usage_file_is_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(_usage, 'MAX_USAGE_BYTES', 64)
+    path = write_json(tmp_path / 'usage.json', {'five_hour': b(42, WINDOW_5H),
+                                                'measured_at': iso(NOW_DT), 'pad': 'x' * 200})
+    assert _usage.read_usage(path, NOW_DT).state == 'unknown'
