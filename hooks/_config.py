@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import stat
 
 DEFAULTS: dict = {
     'usage_file': '~/.claude/rate-limit.json',
@@ -133,6 +134,30 @@ def gate_mode(cfg: dict, key: str, argument: str) -> str:
     return cfg['modules'][key] or argument
 
 
+MAX_READ_BYTES = 1 << 20      # config.json, Claude Code's settings.json: a regular file this big is never one of them
+
+
+def read_regular(path: str, limit: int = MAX_READ_BYTES) -> bytes:
+    """The content of the regular file at `path`, at most `limit` bytes; OSError otherwise (FileNotFoundError if
+    there is none).
+
+    For every file a gate reads: O_NONBLOCK so a planted named pipe cannot hang the hook into Claude Code's timeout,
+    which would let the call through; then S_ISREG and the size on the file opened, so a link to an endless source
+    such as /dev/zero cannot exhaust memory. A link to a regular file is followed (a config kept with the dotfiles).
+    """
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f'not a regular file: {path}')
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if info.st_size > limit or len(raw) > limit:
+        raise OSError(f'larger than {limit} bytes: {path}')
+    return raw
+
+
 def config_path() -> str:
     return os.environ.get('CCUC_CONFIG') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
 
@@ -194,11 +219,10 @@ def load(log_problems: bool = True, path: str | None = None, problems: list[str]
     problems = [] if problems is None else problems
     given = _MISSING
     try:
-        with open(path or config_path(), encoding='utf-8') as f:
-            given = json.load(f)
+        given = json.loads(read_regular(path or config_path()).decode('utf-8'))
     except FileNotFoundError:
         pass
-    except (OSError, ValueError, RecursionError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:      # UnicodeDecodeError is a ValueError
         problems.append(f'config file unreadable ({type(exc).__name__}), using defaults')
     cfg = copy.deepcopy(DEFAULTS) if given is _MISSING else _merge_section(DEFAULTS, given, '', problems)
     rules = cfg['spawn_rules']

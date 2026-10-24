@@ -356,3 +356,12 @@ def test_check_notes_nothing_when_the_env_of_settings_json_names_the_same_config
         monkeypatch.setenv('CCUC_CONFIG', path)
     env_config(setup, tmp_path, path)
     assert 'CCUC_CONFIG' not in setup('--check', '--components', 'usage-clock')[1]
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_as_the_list_of_sessions_logs_without_waiting(tmp_path):
+    folder = tmp_path / 'log' / 'disabled'
+    folder.mkdir(parents=True)
+    os.mkfifo(folder / 'spawn_gate.json')
+    _hookio.log_disabled('spawn_gate', 'spawn_gate', {'session_id': 's'})
+    assert len(log(tmp_path, 'spawn_gate')) == 1

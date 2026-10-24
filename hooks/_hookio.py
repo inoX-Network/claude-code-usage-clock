@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 from datetime import date, datetime, timezone
 
@@ -167,7 +168,8 @@ def write_log_line(record: dict, directory: str | None = None) -> None:
     """Appends one JSON line to <log_dir>/log.jsonl, rotating to log.jsonl.1 above 5 MB.
 
     Folder 0700, file 0600 whatever the umask, and never written through a link. A log left readable by an
-    earlier version is made private on the next write. Errors while logging must never disturb a hook.
+    earlier version is made private on the next write, a named pipe or any other non-regular file gets no line.
+    Errors while logging must never disturb a hook.
     """
     try:
         line = json.dumps(record, ensure_ascii=False) + '\n'
@@ -176,8 +178,14 @@ def write_log_line(record: dict, directory: str | None = None) -> None:
         path = os.path.join(directory, 'log.jsonl')
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
             (_plat.replace if os.name == 'nt' else os.replace)(path, path + '.1')      # Windows: tried again for a moment
-        # O_NOFOLLOW here rather than from _usage: logging must not depend on the module it may have to report
-        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        # O_NOFOLLOW here rather than from _usage: logging must not depend on the module it may have to report.
+        # O_NONBLOCK: a named pipe planted as the log must not hang the gate (it logs before it denies) into Claude
+        # Code's timeout, which lets the call through; without a reader the open fails, with one S_ISREG skips it.
+        descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0)
+                             | getattr(os, 'O_NONBLOCK', 0), 0o600)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            return
         with os.fdopen(descriptor, 'a', encoding='utf-8', newline='\n') as f:      # no CRLF on Windows
             if os.name != 'nt':      # Windows has no file modes
                 os.fchmod(descriptor, 0o600)
@@ -197,8 +205,7 @@ def log_disabled(hook: str, key: str, hook_input: dict) -> None:
     folder = os.path.join(log_dir(), 'disabled')
     path = os.path.join(folder, f'{hook}.json')
     try:
-        with open(path, encoding='utf-8') as f:
-            seen = json.loads(f.read(DISABLED_MAX_BYTES))
+        seen = json.loads(_config.read_regular(path, DISABLED_MAX_BYTES).decode('utf-8'))
         seen = [str(item) for item in seen] if isinstance(seen, list) else []
     except (OSError, ValueError, RecursionError):
         seen = []

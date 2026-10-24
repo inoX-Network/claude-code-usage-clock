@@ -519,3 +519,46 @@ def test_an_unknown_sync_transport_falls_back_to_https_and_logs(tmp_path, value)
     write_config(tmp_path, {'sync': {'transport': value}})
     assert _config.load()['sync']['transport'] == 'https'
     assert 'sync.transport: must be one of https|ssh, using default' in log_lines(tmp_path)[0]['reason']
+
+
+# --- A planted special file never hangs a hook (L1) ----------------------------------------------------------------
+
+@pytest.mark.posix_only
+@pytest.mark.parametrize('kind', ['fifo', 'zero'])
+def test_a_config_that_is_a_named_pipe_or_an_endless_source_gives_defaults_without_waiting(tmp_path, kind):
+    path = tmp_path / 'config.json'
+    os.mkfifo(path) if kind == 'fifo' else path.symlink_to('/dev/zero')
+    os.environ['CCUC_CONFIG'] = str(path)
+    assert _config.load()['thresholds'] == _config.DEFAULTS['thresholds']
+    lines = log_lines(tmp_path)
+    assert len(lines) == 1 and 'unreadable' in lines[0]['reason']
+
+
+def test_a_config_above_the_size_limit_gives_defaults(tmp_path):
+    write_config(tmp_path, '{"thresholds": {"start_block_5h": 60}}' + ' ' * _config.MAX_READ_BYTES)
+    assert _config.load()['thresholds'] == _config.DEFAULTS['thresholds']
+    assert 'unreadable' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.posix_only
+def test_a_config_behind_a_link_is_still_read(tmp_path):
+    # a config kept with the dotfiles is a link to a regular file: the type check is on the file opened, not the name
+    real = tmp_path / 'dotfiles' / 'config.json'
+    real.parent.mkdir()
+    real.write_text(json.dumps({'thresholds': {'start_block_5h': 60}}), encoding='utf-8')
+    (tmp_path / 'config.json').symlink_to(real)
+    os.environ['CCUC_CONFIG'] = str(tmp_path / 'config.json')
+    assert _config.load()['thresholds']['start_block_5h'] == 60
+
+
+@pytest.mark.posix_only
+def test_a_named_pipe_that_holds_a_valid_config_is_still_not_read(tmp_path):
+    path = tmp_path / 'config.json'
+    os.mkfifo(path)
+    writer = os.open(path, os.O_RDWR | os.O_NONBLOCK)      # keeps the pipe open with a valid config waiting in it
+    try:
+        os.write(writer, json.dumps({'thresholds': {'start_block_5h': 60}}).encode('utf-8'))
+        os.environ['CCUC_CONFIG'] = str(path)
+        assert _config.load()['thresholds'] == _config.DEFAULTS['thresholds']
+    finally:
+        os.close(writer)
