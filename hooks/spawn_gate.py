@@ -137,9 +137,8 @@ def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until
     if usage.state != 'ok':
         limit = thresholds['unknown_usage_max_agents']
         action = thresholds['unknown_usage_action']
-        if action == 'off':
-            return 'allow', ''
-        if agent_count is None or agent_count > limit:
+        # off takes the brake away, not the note that the measurement is missing
+        if action != 'off' and (agent_count is None or agent_count > limit):
             subject = (f'Usage {usage.state} and '
                        f'{"an unknown number of" if agent_count is None else agent_count} agents in the block')
             if action == 'shadow':
@@ -180,8 +179,9 @@ def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until
             return 'deny', _unshown(five, permission_mode, 'no new block until the window resets.')
         else:
             return 'deny', f'{five}: no new block until the window resets.'
-    if labels:
-        return 'ask', QUESTIONS.get(language, QUESTIONS['en']).format(labels=' / '.join(labels), what=what)
+    if labels:      # the note of the other window stays, after the question, as the notes of the model rule do
+        question = QUESTIONS.get(language, QUESTIONS['en']).format(labels=' / '.join(labels), what=what)
+        return 'ask', ' '.join([question] + notes)
     return ('warn', ' '.join(notes)) if notes else ('allow', '')
 
 

@@ -468,7 +468,7 @@ for (const surface of SURFACES) {
     await ui.unmount()
   })
 
-  test(`${surface}: the soft stop shows its levels, each a field; a refused number names why`, async ($, on) => {
+  test(`${surface}: the soft stop shows its levels, each a field; a refused number names why and stays`, async ($, on) => {
     const seen = world(on, { hasBrakes: true, setError: 'thresholds.warn 96: the soft stop needs warn < checkpoint_only < deny' })
     const ui = await open($, surface)
     const row = await rowText(ui, 'soft_stop')
@@ -477,7 +477,7 @@ for (const surface of SURFACES) {
     await ui.input({ key: 'field-level-warn', text: '96' })
     expect(settingsRuns(seen).at(-2)).toEqual([...PREFIX, 'set', '--', 'thresholds.warn', '96'])
     expect(await hasText(ui, 'thresholds.warn 96: the soft stop needs warn < checkpoint_only < deny')).toBe(true)
-    expect((await ui.find({ key: 'field-level-warn' }))?.props.value).toBe('85')    // the field shows config.json again
+    expect((await ui.find({ key: 'field-level-warn' }))?.props.value).toBe('96')    // kept, to be corrected
     await ui.unmount()
   })
 

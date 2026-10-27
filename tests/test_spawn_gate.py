@@ -1157,6 +1157,15 @@ def test_the_strongest_brake_wins():
     assert decide('off', 'off') == 'allow'
 
 
+@pytest.mark.parametrize('week_action,week_ok_until,note', [
+    ('shadow', None, 'week_action shadow only logs it'), ('warn', None, '(week_action warn)'),
+    ('deny', DAY, 'start approved until 2026-01-14')])
+def test_a_5h_ask_keeps_the_note_of_the_week(week_action, week_ok_until, note):
+    limits = dict(THRESHOLDS, week_action=week_action, five_hour_action='ask')
+    action, text = spawn_gate.decide_start(measured(80, week=90), 1, limits, week_ok_until, DAY, 'default')
+    assert action == 'ask' and text.startswith('5H 80 % · start agent? ') and note in text
+
+
 def test_both_notes_reach_the_model_when_both_brakes_only_warn():
     limits = dict(THRESHOLDS, week_action='shadow', five_hour_action='warn')
     action, text = spawn_gate.decide_start(measured(80, week=85), 1, limits, None, DAY, 'default')
@@ -1179,7 +1188,7 @@ def test_week_action_off_ignores_the_approval_too():
 
 
 @pytest.mark.parametrize('unknown_usage_action,many,one', [
-    ('off', ('allow', ''), ('allow', '')),
+    ('off', ('warn', 'Usage unknown: start allowed (fail open), keep blocks small.'), None),
     ('shadow', ('warn', 'Usage unknown and 3 agents in the block: unknown_usage_action shadow only logs it, deny would '
                         'stop this start (up to 1 agent(s) while the usage is unknown).'), None),
     ('warn', ('warn', 'Usage unknown and 3 agents in the block: start allowed (unknown_usage_action warn); take a fresh '

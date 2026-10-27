@@ -463,12 +463,13 @@ export function registerReport(on: On): void {
           await setSettings($, { note: noteOf(run) })
           await loadSettings($)
         }
-        // A number typed into a field: the script checks it (range, the order of the levels) and names what is wrong.
-        // `--`: a typed -1 is a value, not an option of the script
+        // A number typed into a field: the script checks it (range, the order of the levels) and names what is wrong;
+        // the typed text then stays in the field to be corrected. `--`: a typed -1 is a value, not an option of the script
         const setNumber = async (key: string, typed: string) => {
           const run = await runSettings($, ['set', '--', key, typed.trim()])
-          await setDraft($, key, undefined)
-          await setSettings($, { note: noteOf(run) })
+          const note = noteOf(run)
+          if (note === null) await setDraft($, key, undefined)
+          await setSettings($, { note })
           await loadSettings($)
         }
         // The active choice is marked: the desktop draws it without chrome on a plate of the accent, the others as its

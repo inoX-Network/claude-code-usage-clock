@@ -187,12 +187,9 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
     if key in BRAKE_CHOICES and value in BRAKE_CHOICES[key]:
         section, component, stored = key.split('.')[0], 'spawn-gate', value
     elif key in PERCENT_KEYS + (AGENTS_KEY,):
-        section = 'thresholds'
+        section, stored = 'thresholds', None      # the number is checked once the gate is known to be installed
         component = 'spawn-gate' if key in ('thresholds.start_block_5h', 'thresholds.start_block_week', AGENTS_KEY) \
             else 'soft-stop'
-        if component not in parts:
-            raise not_installed(component)
-        stored = number(key, value, path)
     elif key == 'sync.mode' and value in SYNC_MODES:
         section, component, stored = 'sync', 'sync', value
     elif key in ('modules.usage_clock', 'modules.context_reporter') and value in SWITCH_VALUES:
@@ -208,6 +205,8 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
                                 'spawn gate to one of its choices, and the limits and levels to a number.')
     if component not in parts:
         raise not_installed(component)
+    if stored is None:
+        stored = number(key, value, path)
     if key == 'sync.mode' and value != 'off':      # off pushes nothing, wherever the log folder is
         _setup.sync_log_dir(_config.load(log_problems=False, path=path))
     current = _setup.read_config(path).get(section, {})
