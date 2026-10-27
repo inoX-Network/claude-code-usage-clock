@@ -1698,6 +1698,11 @@ def test_a_brake_set_to_off_or_shadow_is_noted_while_the_gate_acts(gate):
                  'every start it would brake. Set it in the Settings tab of /report.')]
 
 
+def test_check_knows_the_brakes_the_settings_tab_sets():
+    import settings_cli
+    assert load_module().BRAKE_KEYS == tuple(key for _, _, key, _, _ in settings_cli.BRAKES)
+
+
 def test_the_brakes_are_not_noted_when_the_whole_gate_is_off_or_in_shadow():
     module = load_module()
     cfg = json.loads(json.dumps(_config.DEFAULTS))
