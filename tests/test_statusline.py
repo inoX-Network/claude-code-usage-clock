@@ -99,11 +99,18 @@ def test_week_gate_marker_can_be_switched_off_and_follows_the_threshold():
 
 
 @pytest.mark.parametrize('action,marker', [('warn', '<- week gate: agents warn'), ('ask', '<- week gate: agents ask'),
-                                           ('deny', '<- week gate: agents blocked')])
+                                           ('deny', '<- week gate: agents blocked'),
+                                           ('shadow', '<- week gate: shadow only')])
 def test_week_gate_marker_says_what_the_spawn_gate_does(action, marker):
     cfg = json.loads(json.dumps(CFG))
     cfg['thresholds']['week_action'] = action
     assert statusline.render('M', 10, 80, cfg).endswith(f' {RED}{marker}{RESET}')
+
+
+def test_no_week_gate_marker_when_the_week_brake_is_off():
+    cfg = json.loads(json.dumps(CFG))
+    cfg['thresholds']['week_action'] = 'off'
+    assert 'week gate' not in statusline.render('M', 10, 80, cfg)
 
 
 @pytest.mark.parametrize('action,marker', [('ask', '<- week gate: agents ask'), ('later', '<- week gate: agents warn')])

@@ -35,9 +35,9 @@ def usage(five=40.0, week=61.0, age=0.0, five_reset=None, week_reset=None, max_a
     return _usage.Usage(five, week, age, five_reset, week_reset, max_age)
 
 
-def th(five=75, week=75, action='warn'):
+def th(five=75, week=75, action='warn', five_action='deny'):
     """The thresholds section as usage_text takes it."""
-    return {'start_block_5h': five, 'start_block_week': week, 'week_action': action}
+    return {'start_block_5h': five, 'start_block_week': week, 'week_action': action, 'five_hour_action': five_action}
 
 
 def write_usage(path, five=42, week=23, age_min=1, five_in_h=2, week_in_h=100, measured_at=None, five_block=True):
@@ -170,10 +170,23 @@ def test_threshold_note_comes_before_nothing_else_and_only_once():
 # --- Weekly note -----------------------------------------------------------------------------------
 
 WEEK_TEXT = {'warn': 'agents start with a warning', 'ask': "new agents need the user's approval",
-             'deny': 'no new agents without --week-ok-until'}
+             'deny': 'no new agents without --week-ok-until', 'shadow': 'agents start, the spawn gate only logs it'}
 
 
-@pytest.mark.parametrize('action', ['warn', 'ask', 'deny'])
+def test_no_weekly_note_when_the_week_brake_is_off():
+    assert usage_clock.usage_text(usage(10, 80, 0), th(action='off'), NOW) == 'Usage: 5h 10 % · week 80 % · measured 0 min ago'
+
+
+@pytest.mark.parametrize('action,text', [('deny', 'no new blocks'), ('ask', "new blocks need the user's approval"),
+                                         ('warn', 'blocks start with a warning'),
+                                         ('shadow', 'blocks start, the spawn gate only logs it')])
+def test_five_hour_note_per_five_hour_action(action, text):
+    line = usage_clock.usage_text(usage(80, 10, 0), th(five_action=action), NOW)
+    assert line == f'Usage: 5h 80 % · week 10 % · measured 0 min ago — from 75 % on, {text}'
+    assert usage_clock.usage_text(usage(80, 10, 0), th(five_action='off'), NOW).endswith('measured 0 min ago')
+
+
+@pytest.mark.parametrize('action', ['warn', 'ask', 'deny', 'shadow'])
 def test_weekly_note_per_week_action_at_the_threshold(action):
     line = usage_clock.usage_text(usage(10, 75, 0), th(week=75, action=action), NOW)
     assert line == f'Usage: 5h 10 % · week 75 % · measured 0 min ago — week at or above 75 %: {WEEK_TEXT[action]}'

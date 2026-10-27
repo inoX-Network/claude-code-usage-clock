@@ -20,7 +20,7 @@ export type LineConfig = {
   desktopLine: DesktopLine
 }
 
-export type WeekAction = 'warn' | 'ask' | 'deny'
+export type WeekAction = 'off' | 'shadow' | 'warn' | 'ask' | 'deny'
 export type DesktopLine = 'off' | 'short' | 'full'
 
 export type ReportPeriod = 'day' | 'week' | 'month' | 'year'

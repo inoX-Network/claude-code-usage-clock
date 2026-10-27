@@ -29,7 +29,8 @@ import _spawn_check  # noqa: E402
 STANDARD_CONFIG = '~/.claude/hooks/usage-clock/config.json'
 # Agent types built into Claude Code 2.1 that have no definition file.
 BUILT_IN = ('general-purpose', 'Explore', 'Plan', 'statusline-setup', 'claude-code-guide')
-EFFECT = {'deny': 'would be denied', 'warn': 'would start with a warning', 'off': 'are not checked (rule is off)'}
+EFFECT = {'deny': 'would be denied', 'warn': 'would start with a warning', 'shadow': 'would start, only logged (shadow)',
+          'off': 'are not checked (rule is off)'}
 
 
 def load_rules(config: str | None) -> _spawn_check.Rules:

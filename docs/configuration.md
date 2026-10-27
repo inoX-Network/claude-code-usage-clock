@@ -25,15 +25,17 @@ that key and writes one line to the log.
 | `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
 | `wake_watcher.lead_min` | `10` | Longest lead before the prompt cache expires at which the watcher fires, in minutes; never more than a fifth of the cache lifetime (10 min for the 1-hour cache, 1 min for the 5-minute cache). |
 | `wake_watcher.routine_file` | `""` | Path (`~` allowed) to a file with your session-end routine; when the watcher fires, the context reporter hands it to the model with the wake-up call. Empty: off. |
-| `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
+| `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate: the thresholds of the 5h and the weekly brake. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |
 | `thresholds.calls_without_checkpoint` | `15` | Soft stop checkpoint rhythm. |
 | `thresholds.unknown_usage_max_agents` | `1` | Block size allowed while usage is unknown. |
-| `thresholds.week_action` | `warn` | Above `start_block_week`: `warn`, `ask` (permission prompt) or `deny`. |
+| `thresholds.unknown_usage_action` | `deny` | A larger block while usage is unknown: `off`, `shadow` (starts, the note says what `deny` would do), `warn` or `deny`. |
+| `thresholds.five_hour_action` | `deny` | At or above `start_block_5h`: `off`, `shadow`, `warn`, `ask` (permission prompt) or `deny`. |
+| `thresholds.week_action` | `warn` | At or above `start_block_week`: `off`, `shadow`, `warn`, `ask` (permission prompt) or `deny`. |
 | `thresholds.ask_verified_in_bypass` | `false` | `true` lets `ask` prompt in modes such as `bypassPermissions`; set it only after you saw the prompt there. |
 | `checkpoint_dir_suffix` | `/agent-checkpoints` | What counts as a checkpoint directory. |
-| `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `deny` refuses the start, `off` keeps only the usage part. |
+| `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `shadow` reports that `deny` would refuse, `deny` refuses the start, `off` keeps only the usage part. |
 | `spawn_rules.model_pattern` | `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+` | Which `model` values are accepted, see below. |
 | `spawn_rules.effort_values` | `["low", "medium", "high", "xhigh", "max"]` | Which `effort` values are accepted, see below. |
 | `spawn_rules.suggested_agents` | `[]` | Agents named in the message of the model rule as alternatives. Empty: a general hint. |

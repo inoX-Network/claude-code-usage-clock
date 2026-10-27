@@ -3080,6 +3080,8 @@ def test_the_format_document_explains_every_json_field_and_every_line_of_the_ove
     ('WOCHE 92 % · arbeiter-mechanisch starten?', '7-day window at N %'),      # the ask dialog, one kind per language
     ('WEEK 93 % · start workflow review?', '7-day window at N %'),               # and whatever starts
     ('Week 93 % · start x?', 'week N % ? start x?'),                              # only the gate's own label
+    ('5H 80 % · start x?', '5h window at N %'),                                   # the 5h window asks too
+    ('WOCHE 92 % / 5H 80 % · x starten?', '7-day window at N %'),                # both: the kind of the first
     ('Agent "secret-name" has no model: x', 'agent … has no model'),
     ("Skill 'x y' forks: z", 'skill … forks'),
     ('Checkpoint due: 15 calls: since your last', 'checkpoint due'),          # only the text before the first colon

@@ -292,11 +292,15 @@ def test_the_status_line_sections_name_the_new_keys_the_state_file_and_the_clean
     assert '_context_state.py' in architecture_text()      # in the file layout
 
 
-def test_the_weekly_notes_of_the_usage_line_are_documented_word_for_word():
+def test_the_notes_of_the_usage_line_are_documented_word_for_word():
+    import statusline
     import usage_clock
-    assert set(usage_clock.WEEK_NOTES) == {'warn', 'ask', 'deny'}
-    for text in usage_clock.WEEK_NOTES.values():
+    actions = {'shadow', 'warn', 'ask', 'deny'}           # off has no note and no marker
+    assert set(usage_clock.WEEK_NOTES) == set(usage_clock.FIVE_HOUR_NOTES) == set(statusline.WEEK_MARKERS) == actions
+    for text in list(usage_clock.WEEK_NOTES.values()) + list(usage_clock.FIVE_HOUR_NOTES.values()):
         assert text in flat(statusline_text()) and text in flat(architecture_text()), text
+    for marker in statusline.WEEK_MARKERS.values():
+        assert marker in flat(statusline_text()), marker
 
 
 # --- Context reporter: the text must match the code ------------------------------------------------------------------

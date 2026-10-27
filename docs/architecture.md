@@ -250,10 +250,12 @@ means no output. The time part needs no usage file.
 Example: `Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago ·
 Now: Wed 14 Jan 2026 10:05`. Reset times today show only the time. The threshold note uses the configured
 value, not a fixed number. Notes are appended only for a fresh measurement (a stale one shows `STALE`
-instead): at or above `start_block_5h` ` — from N % on, no new blocks`; at or above `start_block_week` (needs a
-weekly value) ` — week at or above N %: <text>`, with the text chosen by `week_action`: `warn` "agents start with a
-warning", `ask` "new agents need the user's approval", `deny` "no new agents without --week-ok-until". Both
-notes can stand together, the 5h note first. The hook does not know `--week-ok-until`; the note names the action
+instead): at or above `start_block_5h` ` — from N % on, <text>`, with the text chosen by `five_hour_action`: `deny`
+"no new blocks", `ask` "new blocks need the user's approval", `warn` "blocks start with a warning", `shadow` "blocks
+start, the spawn gate only logs it"; at or above `start_block_week` (needs a weekly value) ` — week at or above N %:
+<text>`, with the text chosen by `week_action`: `warn` "agents start with a warning", `ask` "new agents need the
+user's approval", `deny` "no new agents without --week-ok-until", `shadow` "agents start, the spawn gate only logs
+it". A brake on `off` gets no note. Both notes can stand together, the 5h note first. The hook does not know `--week-ok-until`; the note names the action
 that applies without it.
 
 ### context_reporter.py
@@ -393,16 +395,20 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE
 
 ### spawn_gate.py
 
-1. Usage: 5h at or above `start_block_5h` → deny new agents/workflows. Week at or above `start_block_week`
-   → warn if `--week-ok-until` is today or later, else `week_action`: `warn`, `deny`, or `ask`
-   (`permissionDecision: "ask"`, reason for the user, no `additionalContext`: the model took an approved start for a block;
-   the reason is the short question `WEEK N % · start <what>?`, German when `language` in `~/.claude/settings.json` is
-   German, `<what>` cut to name characters because the model writes it). For an Agent start the ask also returns
-   `updatedInput`: the whole tool input as it came, with the question's number in front of `description`
-   (`dialog_input`), because Claude's phone app shows the description, not the reason. `ask` only where the
-   prompt is shown for sure (`permission_mode` default, acceptEdits, plan); any other or a missing mode denies
-   unless `ask_verified_in_bypass`. The 5h deny beats an ask. Unknown/stale usage → warn for a single agent,
-   deny for more than `unknown_usage_max_agents`.
+1. Usage, three brakes with an action each in `thresholds`: `off` (no note), `shadow` (the start goes through as
+   a warning whose note says that deny would stop it), `warn`, `ask` (not for unknown usage) or `deny`.
+   5h at or above `start_block_5h` → `five_hour_action` (default `deny`). Week at or above `start_block_week`
+   → warn if `--week-ok-until` is today or later (unless `week_action` is `off`), else `week_action` (default
+   `warn`). Unknown/stale usage → warn for a block of up to `unknown_usage_max_agents`, above it
+   `unknown_usage_action` (default `deny`). `ask` is `permissionDecision: "ask"`, reason for the user, no
+   `additionalContext` (the model took an approved start for a block); the reason is the short question
+   `WEEK N % · start <what>?` or `5H N % · start <what>?`, both numbers as `WEEK N % / 5H N % · start <what>?` when
+   both windows ask, German when `language` in `~/.claude/settings.json` is German, `<what>` cut to name characters
+   because the model writes it. For an Agent start the ask also returns `updatedInput`: the whole tool input as it
+   came, with the question's numbers in front of `description` (`dialog_input`), because Claude's phone app shows
+   the description, not the reason. `ask` only where the prompt is shown for sure (`permission_mode` default,
+   acceptEdits, plan); any other or a missing mode denies unless `ask_verified_in_bypass`. The strongest decision
+   wins: a deny of one window beats an ask of the other.
 2. Model rules (unless `model_effort_action` is `off`): the agent type must resolve to a definition with `model:`
    and `effort:` in its frontmatter (project `.claude/agents`, the deepest folder first, before user
    `~/.claude/agents`, linked subfolders included, matched by the frontmatter `name`). Workflow scripts: every `agent(...)` call needs literal `model` and `effort` options
@@ -417,7 +423,8 @@ Constants: `POLL_S` 60, `STALE_MIN` 2, `STALE_POLLS` 3, `MAX_RUN_MIN` 115, `IDLE
    skill the part up to the first line that starts with `---` counts, so `context: fork` behind an inner `---`
    is still treated as a fork (checked rather than missed).
    `_spawn_check.py` only judges; `spawn_gate.py` applies `model_effort_action`: `deny` refuses the start with
-   the finding, `warn` (default) starts and passes the same finding to the model as a warning. The usage part
+   the finding, `warn` (default) starts and passes the same finding to the model as a warning, `shadow` as well with
+   the note that deny would refuse it. The usage part
    then still counts the agents, an unanalysable script as an unknown number.
 3. `exceptions` start without the model check (Agent tool and Skill forks), with a short note. They do not
    apply to `agent(...)` calls inside workflow scripts.
@@ -441,7 +448,7 @@ Config switches:
 
 | Key | Effect |
 |---|---|
-| `model_effort_action` | `warn` (default): findings of the model rule are warnings. `deny`: they refuse the start. `off`: no model check; Agent and Skill fork count as one agent, workflow scripts are only counted for the usage part. |
+| `model_effort_action` | `warn` (default): findings of the model rule are warnings. `shadow`: warnings that say deny would refuse the start. `deny`: they refuse the start. `off`: no model check; Agent and Skill fork count as one agent, workflow scripts are only counted for the usage part. |
 | `apply_to_main_session: false` | Calls without `agent_id` are not checked at all (neither model nor usage) and not logged. |
 | `model_override_in_call` | `model` in an Agent call overrides the frontmatter: `allow`, `warn` (default) or `deny`. |
 | `skill_fork_missing_agent` | Fork without a complete agent definition: `warn` (default) or `deny`. |

@@ -18,7 +18,7 @@ export const DEFAULTS: LineConfig = {
   desktopLine: 'full',
 }
 
-const WEEK_ACTIONS: readonly WeekAction[] = ['warn', 'ask', 'deny']
+const WEEK_ACTIONS: readonly WeekAction[] = ['off', 'shadow', 'warn', 'ask', 'deny']
 const DESKTOP_LINES: readonly DesktopLine[] = ['off', 'short', 'full']
 
 // config.json key → field, per section
