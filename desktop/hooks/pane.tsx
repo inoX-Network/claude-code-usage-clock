@@ -468,7 +468,7 @@ export function registerReport(on: On): void {
         const setNumber = async (key: string, typed: string) => {
           const run = await runSettings($, ['set', '--', key, typed.trim()])
           const note = noteOf(run)
-          if (note === null) await setDraft($, key, undefined)
+          await setDraft($, key, note === null ? undefined : String(printable(typed)))
           await setSettings($, { note })
           await loadSettings($)
         }
