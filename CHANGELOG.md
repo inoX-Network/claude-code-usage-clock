@@ -6,6 +6,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+### Added
+
+- Each brake of the spawn gate on its own: `thresholds.five_hour_action` (`off`, `shadow`, `warn`, `ask`, `deny`;
+  default `deny`) for the 5h window, and `thresholds.unknown_usage_action` (`off`, `shadow`, `warn`, `deny`; default
+  `deny`) for a larger block while usage is unknown. `week_action` takes `off` and `shadow` too,
+  `spawn_rules.model_effort_action` takes `shadow`. `shadow` lets the start through and tells the model that `deny`
+  would have stopped it. The defaults are the behaviour of 1.8: an installation changes only when you set a key.
+- `five_hour_action: ask` asks as the weekly brake does (`5H 80 % · start x?`); when both windows ask, one question
+  names both numbers (`WEEK 85 % / 5H 80 % · start x?`). The strongest decision of the brakes wins.
+- The Settings tab of `/report` (plugin 0.11.0) lists the four brakes inside the card of the spawn gate, each with its
+  choices and a field for its limit, and the three levels of the soft stop as fields. `settings_cli.py set` checks
+  every value: a brake only with one of its choices, a limit from 0 to 100 (a whole number of agents for usage
+  unknown), a level only if warn < checkpoint_only < deny holds.
+
+### Changed
+
+- The usage line names what the spawn gate does at the 5h threshold by `five_hour_action` (`no new blocks`,
+  `new blocks need the user's approval`, `blocks start with a warning`, `blocks start, the spawn gate only logs it`)
+  and shows no note for a brake that is `off`; the weekly marker reads `<- week gate: shadow only` for `shadow` and
+  is gone for `off`.
+
 ## [1.8.0] — 2026-10-24 — security fixes and the desktop line
 
 ### Added
