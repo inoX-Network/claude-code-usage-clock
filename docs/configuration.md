@@ -82,11 +82,14 @@ without a restart and without touching `settings.json`:
 - The status line has no switch: the other parts read its measurement.
 
 The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through
-`settings_cli.py`, with the same check and backup as the installer. The installer sets them too: `install.py --off
+`settings_cli.py`, with the same check and backup as the installer; it also sets the brakes of the spawn gate
+(`five_hour_action`, `week_action`, `unknown_usage_action`, `model_effort_action`), their limits (`start_block_5h`,
+`start_block_week`, `unknown_usage_max_agents`) and the levels of the soft stop (`warn` < `checkpoint_only` < `deny`). The installer sets them too: `install.py --off
 spawn-gate` and `--on spawn-gate` write what the tab writes, and its assistant switches an installed part off this way
 when you answer no ([Install](install.md#install)). Like every key, `modules` is only as safe as
 your guard keeps the model from writing `config.json`, and from running the two programs that write it themselves:
-`settings_cli.py set` and `install.py --off`, `--on` or `--mode` (and `--uninstall`, `--sync-*`). A guard that checks
+`settings_cli.py set` (which also loosens a brake or a limit) and `install.py --off`, `--on` or `--mode` (and
+`--uninstall`, `--sync-*`). A guard that checks
 only paths and write commands does not see those; block them too, or make `config.json` read-only, which stops the tab
 as well ([Working with a guard hook](security.md#working-with-a-guard-hook)). While `modules` switches an installed gate
 off, or sets it to `shadow` while its entry says `--mode=enforce`, the status line shows `spawn gate off`,

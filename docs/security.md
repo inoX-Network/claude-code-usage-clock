@@ -81,7 +81,8 @@ The paths alone are not enough: two programs of this tool write `config.json` th
 paths and write commands does not see that. `settings_cli.py set` and `set-repo` (the Settings tab of `/report`, also
 as the installed copy `~/.claude/hooks/usage-clock/settings_cli.py`) and `tools/install.py` with `--off`, `--on`,
 `--mode`, `--uninstall` or a `--sync-*` option switch a gate off or to shadow with one plain command, and the next
-start runs ungated. For a lock, let your guard block these calls as well, or make `config.json` read-only for your
+start runs ungated; `settings_cli.py set` also sets a single brake of the spawn gate to `off` or `shadow` or raises its
+limit, which the status line does not mark (only the weekly marker disappears with `week_action: off`). For a lock, let your guard block these calls as well, or make `config.json` read-only for your
 user (then the Settings tab cannot switch anything either). Whichever you choose, the status line shows
 `spawn gate off`, `soft stop off` or `... shadow` while `modules` takes a gate's teeth
 ([What the status line shows](statusline.md#what-the-status-line-shows)), and `install.py --check` notes it.

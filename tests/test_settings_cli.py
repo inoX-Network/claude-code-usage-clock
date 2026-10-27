@@ -230,7 +230,8 @@ def test_set_sync_mode_on_writes_what_the_installer_writes(machine):
 
 
 @pytest.mark.parametrize('key,value', [('modules.usage_clock', 'yes'), ('modules.spawn_gate', 'on'),
-                                       ('modules.statusline', 'false'), ('sync.repo', 'a/b'), ('thresholds.warn', '1'),
+                                       ('modules.statusline', 'false'), ('sync.repo', 'a/b'), ('thresholds.max_age_min', '1'),
+                                       ('thresholds.ask_verified_in_bypass', 'true'), ('spawn_rules.exceptions', 'x'),
                                        ('sync.mode', 'loud'), ('modules', 'x'), ('modules.desktop_line', 'true'),
                                        ('modules.desktop_line', 'Full')])
 def test_set_refuses_a_key_or_value_outside_the_table(machine, key, value):
@@ -292,6 +293,128 @@ def test_an_unusable_settings_json_is_an_error_for_every_command(machine):
                  ['set-repo', REPO]):
         code, done = machine.cli(*args)
         assert code == 2 and 'JSON object' in done['error']
+
+
+# --- the brakes of the spawn gate and the levels of the soft stop -------------------------------------------------
+
+def test_show_gives_the_spawn_gate_its_brakes_and_the_soft_stop_its_levels(machine):
+    machine.install('--components', 'spawn-gate,soft-stop')
+    found = modules(machine.cli('show', '--json')[1])
+    brakes = {brake['id']: brake for brake in found['spawn_gate']['brakes']}
+    assert list(brakes) == ['five_hour', 'week', 'unknown_usage', 'model_effort']
+    assert brakes['five_hour'] == dict(brakes['five_hour'], key='thresholds.five_hour_action', value='deny',
+                                       choices=['off', 'shadow', 'warn', 'ask', 'deny'],
+                                       limit={'key': 'thresholds.start_block_5h', 'value': 75, 'unit': '%'})
+    assert brakes['week'] == dict(brakes['week'], key='thresholds.week_action', value='warn',
+                                  limit={'key': 'thresholds.start_block_week', 'value': 75, 'unit': '%'})
+    assert brakes['unknown_usage'] == dict(brakes['unknown_usage'], key='thresholds.unknown_usage_action', value='deny',
+                                           choices=['off', 'shadow', 'warn', 'deny'],
+                                           limit={'key': 'thresholds.unknown_usage_max_agents', 'value': 1,
+                                                  'unit': 'agents'})
+    assert brakes['model_effort'] == dict(brakes['model_effort'], key='spawn_rules.model_effort_action', value='warn',
+                                          choices=['off', 'shadow', 'warn', 'deny'], limit=None)
+    assert all(brake['label'] and brake['summary'] for brake in brakes.values())
+    assert found['soft_stop']['levels'] == [
+        dict(found['soft_stop']['levels'][0], key='thresholds.warn', value=85, unit='%'),
+        dict(found['soft_stop']['levels'][1], key='thresholds.checkpoint_only', value=92, unit='%'),
+        dict(found['soft_stop']['levels'][2], key='thresholds.deny', value=95, unit='%')]
+    assert all(level['label'] and level['summary'] for level in found['soft_stop']['levels'])
+    assert 'brakes' not in found['usage_clock'] and 'levels' not in found['spawn_gate']
+
+
+def test_show_gives_the_brakes_as_config_json_has_them(machine):
+    machine.install('--components', 'spawn-gate')
+    machine.config.write_text(json.dumps({'thresholds': {'five_hour_action': 'ask', 'start_block_5h': 80.5,
+                                                         'week_action': 'later'}}), encoding='utf-8')
+    shown = machine.cli('show', '--json')[1]
+    brakes = {brake['id']: brake for brake in modules(shown)['spawn_gate']['brakes']}
+    assert (brakes['five_hour']['value'], brakes['five_hour']['limit']['value']) == ('ask', 80.5)
+    assert brakes['week']['value'] == 'warn' and any('thresholds.week_action' in p for p in shown['problems'])
+
+
+@pytest.mark.parametrize('key,value,stored', [
+    ('thresholds.five_hour_action', 'ask', 'ask'), ('thresholds.five_hour_action', 'off', 'off'),
+    ('thresholds.week_action', 'shadow', 'shadow'), ('thresholds.unknown_usage_action', 'warn', 'warn'),
+    ('spawn_rules.model_effort_action', 'deny', 'deny'),
+    ('thresholds.start_block_5h', '80', 80), ('thresholds.start_block_week', '62.5', 62.5),
+    ('thresholds.start_block_5h', '0', 0), ('thresholds.start_block_week', '100', 100),
+    ('thresholds.unknown_usage_max_agents', '0', 0), ('thresholds.unknown_usage_max_agents', '3', 3)])
+def test_set_writes_a_brake_or_its_limit_with_a_backup(machine, key, value, stored):
+    machine.install('--components', 'spawn-gate')
+    before = machine.config_data()
+    code, done = machine.cli('set', key, value)
+    assert code == 0 and done == dict(done, key=key, value=stored, changed=True)
+    section, name = key.split('.')
+    expected = json.loads(json.dumps(before))
+    expected.setdefault(section, {})[name] = stored
+    assert machine.config_data() == expected and type(machine.config_data()[section][name]) is type(stored)
+    assert len(list(machine.target.glob('config.json.bak-usage-clock-*'))) == 1
+
+
+@pytest.mark.parametrize('key,value', [
+    ('thresholds.five_hour_action', 'enforce'), ('thresholds.unknown_usage_action', 'ask'),
+    ('spawn_rules.model_effort_action', 'ask'), ('thresholds.week_action', 'DENY'),
+    ('thresholds.start_block_5h', '101'), ('thresholds.start_block_5h', '-1'), ('thresholds.start_block_5h', 'nan'),
+    ('thresholds.start_block_week', '1e2'), ('thresholds.start_block_week', ''), ('thresholds.start_block_week', '75 '),
+    ('thresholds.start_block_week', '٧٥'), ('thresholds.unknown_usage_max_agents', '1.5'),
+    ('thresholds.unknown_usage_max_agents', '-1'), ('thresholds.unknown_usage_max_agents', '1000')])
+def test_set_refuses_a_brake_value_or_a_limit_out_of_range(machine, key, value):
+    machine.install('--components', 'spawn-gate')
+    before = machine.tree()
+    code, done = machine.cli('set', key, value)
+    assert code == 2 and 'error' in done and machine.tree() == before
+
+
+@pytest.mark.parametrize('key,value,stored', [('thresholds.warn', '80', 80), ('thresholds.checkpoint_only', '93', 93),
+                                              ('thresholds.deny', '99.5', 99.5), ('thresholds.warn', '91', 91)])
+def test_set_writes_a_level_of_the_soft_stop_that_keeps_the_order(machine, key, value, stored):
+    machine.install('--components', 'soft-stop')
+    code, done = machine.cli('set', key, value)
+    assert code == 0 and done['value'] == stored and machine.config_data()['thresholds'][key.split('.')[1]] == stored
+
+
+@pytest.mark.parametrize('key,value', [('thresholds.warn', '92'), ('thresholds.warn', '95'),
+                                       ('thresholds.checkpoint_only', '85'), ('thresholds.checkpoint_only', '95'),
+                                       ('thresholds.deny', '92'), ('thresholds.deny', '101')])
+def test_set_refuses_a_level_that_breaks_the_order_warn_checkpoint_deny(machine, key, value):
+    machine.install('--components', 'soft-stop')
+    before = machine.tree()
+    code, done = machine.cli('set', key, value)
+    assert code == 2 and machine.tree() == before
+    assert 'warn < checkpoint_only < deny' in done['error'] or '0 to 100' in done['error']
+
+
+def test_the_order_of_the_levels_is_checked_against_config_json(machine):
+    machine.install('--components', 'soft-stop')
+    machine.config.write_text(json.dumps({'thresholds': {'warn': 50, 'checkpoint_only': 60, 'deny': 70}}),
+                              encoding='utf-8')
+    assert machine.cli('set', 'thresholds.checkpoint_only', '65')[0] == 0
+    assert machine.cli('set', 'thresholds.checkpoint_only', '75')[0] == 2
+
+
+@pytest.mark.parametrize('key,value,component', [('thresholds.five_hour_action', 'warn', 'spawn-gate'),
+                                                 ('thresholds.start_block_5h', '80', 'spawn-gate'),
+                                                 ('spawn_rules.model_effort_action', 'off', 'spawn-gate'),
+                                                 ('thresholds.warn', '80', 'soft-stop')])
+def test_a_brake_or_a_level_needs_its_gate_installed(machine, key, value, component):
+    machine.install('--components', 'usage-clock')
+    before = machine.tree()
+    code, done = machine.cli('set', key, value)
+    assert code == 2 and component in done['error'] and machine.tree() == before
+
+
+def test_set_refuses_a_brake_when_its_section_in_config_json_is_no_object(machine):
+    machine.install('--components', 'spawn-gate')
+    machine.config.write_text('{"thresholds": [1]}', encoding='utf-8')
+    code, done = machine.cli('set', 'thresholds.five_hour_action', 'warn')
+    assert code == 2 and '"thresholds"' in done['error']
+    assert machine.config.read_text(encoding='utf-8') == '{"thresholds": [1]}'
+
+
+def test_every_brake_choice_the_tab_offers_is_one_config_json_keeps():
+    import _config
+    for key, choices in settings_cli.BRAKE_CHOICES.items():
+        assert tuple(choices) == _config._CHOICES[tuple(key.split('.'))], key
 
 
 # --- check-repo -------------------------------------------------------------------------------------------------

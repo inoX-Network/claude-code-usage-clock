@@ -205,7 +205,10 @@ with its own command (`sync.py session-start` / `session-end`, `|| true`). Its m
 config keys, so the installer writes `sync.mode`, `sync.repo` and `sync.machine_name` (`--sync-name`) into `config.json` (`CCUC_CONFIG`, else the one in `--target`), and with
 `--mode` also `modules.<gate>`, with a backup and only when they change; every other key of that file is never written.
 `hooks/_setup.py` holds what the installer and `hooks/settings_cli.py` (the Settings tab of `/report`) share: how an
-entry is recognised, the one way `config.json` is written, the clone and the texts of each part. `--sync-mode` sets the mode; without
+entry is recognised, the one way `config.json` is written, the clone and the texts of each part. `settings_cli.py set`
+writes a brake only with a value of `_config._CHOICES`, a limit only as a number from 0 to 100 (ASCII digits, at most
+two decimals; `unknown_usage_max_agents` whole), and a level of the soft stop only if `warn` < `checkpoint_only` <
+`deny` holds with the other two as `config.json` has them. `--sync-mode` sets the mode; without
 it an installed sync keeps the mode of the config and a first one gets `shadow`. `--sync-repo`, after the smoke test and
 before anything is written, under the sync lock: `probe_visibility` once (public or unclear: exit 1), the cache of a
 private result with its reason, then `_sync_git.make_clone` (a temporary folder in `sync/`, `clone --single-branch --no-checkout
