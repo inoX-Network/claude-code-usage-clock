@@ -13,7 +13,7 @@ import type { Line, Period, View } from './report'
 import { LOOK, gaugeSvg, overviewTiles, peakScale, peaksSvg, sessionCards, sessionTiles, tilesPerRow, toneColor, viewTiles } from './tiles'
 import type { Bar, Kpi, Tile } from './tiles'
 import { INVALID_REPO, UPDATE_LINE, activeChoice, choiceLabel, docsLabel, infoParagraphs, parseAnswer, parseShown, printable, settingsArgv, validRepo } from './settings'
-import type { Part, Shown } from './settings'
+import type { Brake, Level, Part, Shown } from './settings'
 
 const PANE = 'usage-report'
 const TIMEOUT_MS = 30_000
@@ -23,7 +23,7 @@ const TIMEOUT_MS = 30_000
 const SETTINGS_TIMEOUT_MS = 45_000
 const SAVE_TIMEOUT_MS = 360_000
 
-const CLOSED: SettingsState = { isOpen: false, slot: null, info: null, repo: null, check: null, note: null }
+const CLOSED: SettingsState = { isOpen: false, slot: null, info: null, repo: null, drafts: {}, check: null, note: null }
 const INITIAL: ReportState = { period: 'week', view: 'overview', session: null, own: null, slots: {}, settings: CLOSED }
 const report = atom({ plugin: 'usage-clock-display', key: 'report' } as const, INITIAL)
 // The thresholds register.tsx reads at the session start; the engine wants each module's atoms written in that module
@@ -103,6 +103,16 @@ async function runSettings($: EngineInterface, args: string[], timeoutMs = SETTI
 
 async function setSettings($: EngineInterface, change: Partial<SettingsState>): Promise<void> {
   await update($, report, state => ({ ...state, settings: { ...state.settings, ...change } }))
+}
+
+/** The text typed into the field of `key`, or none (undefined): the field shows the value of config.json again. */
+async function setDraft($: EngineInterface, key: string, text: string | undefined): Promise<void> {
+  await update($, report, state => {
+    const drafts = { ...state.settings.drafts }
+    if (text === undefined) delete drafts[key]
+    else drafts[key] = text
+    return { ...state, settings: { ...state.settings, drafts } }
+  })
 }
 
 /** Reads show --json. Only the first read of an opened /report says loading: a later one leaves the tab as it is until
@@ -453,6 +463,14 @@ export function registerReport(on: On): void {
           await setSettings($, { note: noteOf(run) })
           await loadSettings($)
         }
+        // A number typed into a field: the script checks it (range, the order of the levels) and names what is wrong.
+        // `--`: a typed -1 is a value, not an option of the script
+        const setNumber = async (key: string, typed: string) => {
+          const run = await runSettings($, ['set', '--', key, typed.trim()])
+          await setDraft($, key, undefined)
+          await setSettings($, { note: noteOf(run) })
+          await loadSettings($)
+        }
         // The active choice is marked: the desktop draws it without chrome on a plate of the accent, the others as its
         // own buttons. A Box has no radius: the round frame in the accent rounds the plate like the app's buttons, and no
         // padding and no spaces around the label keep it as high as they are (the open tab's plate, with spaces, is twice
@@ -523,6 +541,37 @@ export function registerReport(on: On): void {
           heading(id, label, false, { text: 'NOT INSTALLED', color: LOOK.muted }),
           block(id, [sentence(id, summary), <Text key={`absent-${id}`} {...quiet}>not installed: install.py</Text>]),
         ], cardWidth)
+        // The field of a limit or a level: the typed text until Enter (or Set on the desktop) hands it to the script. It
+        // gets the text without control characters: the engine draws no Input whose value holds one. The terminal frames
+        // it as the field of the repository
+        const numberField = (id: string, limit: { key: string; value: number; unit: string }) => {
+          const field = (
+            <Input key={`field-${id}`} label={limit.unit} value={settings.drafts[limit.key] ?? String(limit.value)}
+              placeholder={String(limit.value)} submitLabel={isDesktop ? 'Set' : 'set'}
+              onInput={(value: string) => setDraft($, limit.key, String(printable(value)))}
+              onSubmit={(value: string) => setNumber(limit.key, value)} />
+          )
+          return isDesktop ? field : <Box key={`frame-${id}`} borderStyle="round" paddingX={1}>{field}</Box>
+        }
+        // A brake of the spawn gate or a level of the soft stop: its name, its sentence, then its choices and its field
+        const subRow = (id: string, label: string, summary: string, children: unknown[]) => (
+          <Box key={`sub-${id}`} flexDirection="column" {...(isDesktop ? { rowGap: 'xs' as const } : { marginTop: 1 })}>
+            <Text key={`sub-label-${id}`} weight="semibold">{label}</Text>
+            {sentence(id, summary)}
+            {controls(id, children, { alignItems: 'center' })}
+          </Box>
+        )
+        const brakeRow = (brake: Brake) => {
+          const id = `brake-${brake.id}`
+          return subRow(id, brake.label, brake.summary, [
+            ...group(id, brake.choices.map(choice => choiceButton(id, brake.key, choice, brake.value, ''))),
+            ...(brake.limit === null ? [] : [numberField(id, brake.limit)]),
+          ])
+        }
+        const levelRow = (level: Level) => {
+          const id = `level-${level.key.split('.').pop() ?? ''}`
+          return subRow(id, level.label, level.summary, [numberField(id, level)])
+        }
         const partRow = (part: Part) => {
           // The status line has no switch: installed it needs no card; missing, nothing measures for the other parts,
           // and its row warns of that
@@ -547,6 +596,8 @@ export function registerReport(on: On): void {
                 ...infoInRow(part.id),
               ]),
               ...infoText(part.id, part.info, part.tab),
+              ...(part.brakes ?? []).map(brakeRow),
+              ...(part.levels ?? []).map(levelRow),
             ]),
           ], partWidth)
         }

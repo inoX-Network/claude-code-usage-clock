@@ -21,7 +21,26 @@ export type Part = {
   choices: string[]
   /** Of a gate: the mode of its hook entry, which applies while `value` is empty. */
   installed_mode?: string | null
+  /** Of the spawn gate: its brakes. Of the soft stop: its levels. Missing from an installation older than them. */
+  brakes?: Brake[]
+  levels?: Level[]
 }
+
+/** A number of config.json the tab sets in a field: a limit of a brake or a level of the soft stop. */
+export type Limit = { key: string; value: number; unit: string }
+
+export type Brake = {
+  id: string
+  label: string
+  /** The key `set` takes (`thresholds.five_hour_action`). */
+  key: string
+  value: string
+  choices: string[]
+  summary: string
+  limit: Limit | null
+}
+
+export type Level = Limit & { label: string; summary: string }
 
 export type Sync = {
   installed: boolean
