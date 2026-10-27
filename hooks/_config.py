@@ -37,6 +37,8 @@ DEFAULTS: dict = {
         'max_age_min': 15,
         'calls_without_checkpoint': 15,
         'unknown_usage_max_agents': 1,
+        'unknown_usage_action': 'deny',
+        'five_hour_action': 'deny',
         'week_action': 'warn',
         'ask_verified_in_bypass': False,
     },
@@ -110,8 +112,10 @@ _PATH_KEYS = ('usage_file', 'log_dir')
 
 # Keys with a fixed set of values, as (section, key). Any other string falls back to the default.
 _CHOICES = {
-    ('thresholds', 'week_action'): ('warn', 'ask', 'deny'),
-    ('spawn_rules', 'model_effort_action'): ('off', 'warn', 'deny'),
+    ('thresholds', 'unknown_usage_action'): ('off', 'shadow', 'warn', 'deny'),
+    ('thresholds', 'five_hour_action'): ('off', 'shadow', 'warn', 'ask', 'deny'),
+    ('thresholds', 'week_action'): ('off', 'shadow', 'warn', 'ask', 'deny'),
+    ('spawn_rules', 'model_effort_action'): ('off', 'shadow', 'warn', 'deny'),
     ('spawn_rules', 'skill_fork_missing_agent'): ('warn', 'deny'),
     ('spawn_rules', 'model_override_in_call'): ('allow', 'warn', 'deny'),
     ('modules', 'desktop_line'): ('off', 'short', 'full'),

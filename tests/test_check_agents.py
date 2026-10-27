@@ -82,6 +82,7 @@ def test_the_first_definition_of_a_name_wins_like_in_the_gate(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize('level,effect,code', [('warn', 'would start with a warning', 1),
+                                               ('shadow', 'would start, only logged (shadow)', 1),
                                                ('off', 'are not checked (rule is off)', 0)])
 def test_the_level_decides_the_wording_and_the_exit_code(tmp_path, agents, monkeypatch, level, effect, code):
     monkeypatch.setenv('CCUC_AGENT_DIRS', str(agents))

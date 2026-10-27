@@ -23,6 +23,8 @@
     "max_age_min": 15,
     "calls_without_checkpoint": 15,
     "unknown_usage_max_agents": 1,
+    "unknown_usage_action": "deny",
+    "five_hour_action": "deny",
     "week_action": "warn",
     "ask_verified_in_bypass": false
   },

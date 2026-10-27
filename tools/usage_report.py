@@ -107,11 +107,14 @@ REASON_CHARS = re.compile(r'[^\w .,…()/+%-]')
 NUMBER = re.compile(r'(?<![\w.-])\d+(?:\.\d+)?(?![\w.-])')      # a number of its own, not the 5 of `5h` or `7-day`
 QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')   # names and values a gate quotes in its reason
 REASONED = ('warn', 'ask', 'deny')      # the decisions that have a reason worth counting
-# The question of the spawn gate's ask dialog (spawn_gate.QUESTIONS): `WEEK 92 % · start x?`, `WOCHE 92 % · x starten?`
-WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % · ')
+# The question of the spawn gate's ask dialog (spawn_gate.QUESTIONS): `WEEK 92 % · start x?`, `WOCHE 92 % · x starten?`,
+# `5H 80 % · start x?`, both windows `WOCHE 92 % / 5H 80 % · x starten?`
+WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % (?:·|/) ')
+FIVE_HOUR_QUESTION = re.compile(r'5H \d+(?:\.\d+)? % · ')
 # The kind version 1.4.0 archived for that question before reason_kind knew it: `wOCHE N % ? x starten?`
 ARCHIVED_QUESTION = re.compile(r'w(?:EEK|OCHE) N % \? ')
 WEEK_KIND = '7-day window at N %'
+FIVE_HOUR_KIND = '5h window at N %'
 DAY_TEXT = re.compile(r'\d{4}-\d{2}-\d{2}')
 CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 MONTH_TEXT = re.compile(r'\d{4}-\d{2}')
@@ -360,9 +363,11 @@ def reason_kind(reason) -> str:
     """The kind of a reason from the log: the text before the first colon, without percentages and numbers (`5h window
     at 78 %` and `... at 80 %` are one kind, so are `3 agents` and `4 agents`), quoted names replaced by `…`, made
     harmless, at most REASON_LENGTH characters, starting in lower case. The question of the ask dialog has no colon and
-    names the agent: it is the kind of the other reasons of the weekly threshold."""
+    names the agent: it is the kind of the other reasons of its window (the weekly one when both ask)."""
     if isinstance(reason, str) and WEEK_QUESTION.match(reason):
         return WEEK_KIND
+    if isinstance(reason, str) and FIVE_HOUR_QUESTION.match(reason):
+        return FIVE_HOUR_KIND
     prefix = reason.split(':', 1)[0] if isinstance(reason, str) else ''
     prefix = NUMBER.sub('N', PERCENT.sub('N %', QUOTED.sub('…', prefix)))
     prefix = REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]

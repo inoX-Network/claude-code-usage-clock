@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import _config
 import _plat
 import _setup
 from conftest import HOOKS, ROOT
@@ -1675,8 +1676,41 @@ def test_a_gate_shadowed_by_modules_is_noted_whatever_the_entry_says():
     assert module.switched_off('spawn-gate', cfg, 'python3 /t/spawn_gate.py --mode=shadow') == [expected]
     assert module.switched_off('spawn-gate', cfg, 'python3 /t/spawn_gate.py --mode=enforce') == [expected]
     # A gate that modules does not touch (shadow only from its own entry) still gets no note.
-    assert module.switched_off('spawn-gate', {'modules': {'spawn_gate': ''}},
+    assert module.switched_off('spawn-gate', dict(_config.DEFAULTS, modules=dict(_config.DEFAULTS['modules'], spawn_gate='')),
                                'python3 /t/spawn_gate.py --mode=shadow') == []
+
+
+@pytest.mark.parametrize('gate', ['', 'enforce'])
+def test_a_brake_set_to_off_or_shadow_is_noted_while_the_gate_acts(gate):
+    module = load_module()
+    cfg = json.loads(json.dumps(_config.DEFAULTS))
+    cfg['modules']['spawn_gate'] = gate
+    command = 'python3 /t/spawn_gate.py --mode=enforce'
+    assert module.switched_off('spawn-gate', cfg, command) == []                 # the defaults brake
+    cfg['thresholds'].update(five_hour_action='off', week_action='shadow')
+    cfg['spawn_rules']['model_effort_action'] = 'off'
+    assert module.switched_off('spawn-gate', cfg, command) == [
+        ('NOTE', 'spawn_gate.py: the brake thresholds.five_hour_action is "off" in config.json: it lets through every '
+                 'start it would brake. Set it in the Settings tab of /report.'),
+        ('NOTE', 'spawn_gate.py: the brake thresholds.week_action is "shadow" in config.json: it only logs what it would '
+                 'brake. Set it in the Settings tab of /report.'),
+        ('NOTE', 'spawn_gate.py: the brake spawn_rules.model_effort_action is "off" in config.json: it lets through '
+                 'every start it would brake. Set it in the Settings tab of /report.')]
+
+
+def test_check_knows_the_brakes_the_settings_tab_sets():
+    import settings_cli
+    assert load_module().BRAKE_KEYS == tuple(key for _, _, key, _, _ in settings_cli.BRAKES)
+
+
+def test_the_brakes_are_not_noted_when_the_whole_gate_is_off_or_in_shadow():
+    module = load_module()
+    cfg = json.loads(json.dumps(_config.DEFAULTS))
+    cfg['thresholds']['five_hour_action'] = 'off'
+    for gate in ('off', 'shadow'):
+        cfg['modules']['spawn_gate'] = gate
+        notes = module.switched_off('spawn-gate', cfg, 'python3 /t/spawn_gate.py --mode=enforce')
+        assert len(notes) == 1 and 'brake' not in notes[0][1]
 
 
 def test_points_to_ignores_our_path_as_an_option_value():

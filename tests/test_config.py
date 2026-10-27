@@ -143,7 +143,7 @@ def test_invalid_regular_expression_falls_back(tmp_path):
     assert 'model_pattern' in log_lines(tmp_path)[0]['reason']
 
 
-@pytest.mark.parametrize('key,valid', [('model_effort_action', ['off', 'warn', 'deny']),
+@pytest.mark.parametrize('key,valid', [('model_effort_action', ['off', 'shadow', 'warn', 'deny']),
                                        ('skill_fork_missing_agent', ['warn', 'deny']),
                                        ('model_override_in_call', ['allow', 'warn', 'deny'])])
 def test_choice_keys_accept_their_values(tmp_path, key, valid):
@@ -167,14 +167,30 @@ def test_choice_keys_with_other_values_fall_back_and_log(tmp_path, key, value):
 
 
 def test_week_action_accepts_its_values_and_falls_back_on_others(tmp_path):
-    for value in ('warn', 'ask', 'deny'):
+    for value in ('off', 'shadow', 'warn', 'ask', 'deny'):
         write_config(tmp_path, {'thresholds': {'week_action': value}})
         assert _config.load()['thresholds']['week_action'] == value
     assert log_lines(tmp_path) == []
     write_config(tmp_path, {'thresholds': {'week_action': 'block', 'start_block_week': 80}})
     cfg = _config.load()
     assert cfg['thresholds']['week_action'] == 'warn' and cfg['thresholds']['start_block_week'] == 80
-    assert 'thresholds.week_action: must be one of warn|ask|deny' in log_lines(tmp_path)[0]['reason']
+    assert 'thresholds.week_action: must be one of off|shadow|warn|ask|deny' in log_lines(tmp_path)[0]['reason']
+
+
+@pytest.mark.parametrize('key,valid,default', [
+    ('five_hour_action', ('off', 'shadow', 'warn', 'ask', 'deny'), 'deny'),
+    ('unknown_usage_action', ('off', 'shadow', 'warn', 'deny'), 'deny'),
+])
+def test_the_brakes_of_the_usage_accept_their_values_and_fall_back_on_others(tmp_path, key, valid, default):
+    for value in valid:
+        write_config(tmp_path, {'thresholds': {key: value}})
+        assert _config.load()['thresholds'][key] == value
+    assert log_lines(tmp_path) == []
+    for value in ('block', 'DENY', '', 'ask' if key == 'unknown_usage_action' else 'enforce'):
+        write_config(tmp_path, {'thresholds': {key: value, 'start_block_5h': 60}})
+        cfg = _config.load()
+        assert cfg['thresholds'][key] == default and cfg['thresholds']['start_block_5h'] == 60
+    assert f'thresholds.{key}: must be one of {"|".join(valid)}' in log_lines(tmp_path)[-1]['reason']
 
 
 def test_desktop_line_accepts_off_short_full_and_falls_back_to_full(tmp_path):

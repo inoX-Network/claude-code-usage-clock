@@ -1031,8 +1031,8 @@ def test_dialog_input_puts_the_number_of_the_question_in_front_of_the_descriptio
 
 @pytest.mark.parametrize('language', ['en', 'de'])
 def test_dialog_input_takes_the_number_from_either_question(language):
-    question = spawn_gate.QUESTIONS[language].format(week=85.4, what='x')
     label = spawn_gate.WEEK_LABELS[language].format(week=85.4)
+    question = spawn_gate.QUESTIONS[language].format(labels=label, what='x')
     assert spawn_gate.dialog_input('Agent', {'description': 'd'}, question) == {'description': f'{label} · d'}
 
 
@@ -1101,6 +1101,124 @@ def test_thresholds_come_from_the_configuration():
     assert spawn_gate.decide_start(_usage.Usage(None, None, None), 3, custom)[0] == 'warn'
     action, text = spawn_gate.decide_start(_usage.Usage(None, None, None), 4, custom)
     assert action == 'deny' and 'Up to 3 agent(s) may start' in text
+
+
+# --- decide_start: each brake on its own ------------------------------------------------------------------------
+
+def test_the_defaults_are_the_brakes_of_version_1_8():
+    limits = _config.DEFAULTS['thresholds']
+    assert (limits['five_hour_action'], limits['week_action'], limits['unknown_usage_action']) == ('deny', 'warn', 'deny')
+
+
+@pytest.mark.parametrize('five_hour_action,expected', [
+    ('off', ('allow', '')),
+    ('shadow', ('warn', '5h window at 80 %: above the 5h threshold; five_hour_action shadow only logs it, deny would '
+                        'stop this start.')),
+    ('warn', ('warn', '5h window at 80 %: above the 5h threshold, start allowed (five_hour_action warn); keep blocks '
+                      'small.')),
+    ('ask', ('ask', '5H 80 % · start agent?')),
+    ('deny', ('deny', '5h window at 80 %: no new block until the window resets.')),
+])
+def test_five_hour_action_decides_above_the_5h_threshold(five_hour_action, expected):
+    limits = dict(THRESHOLDS, five_hour_action=five_hour_action)
+    assert spawn_gate.decide_start(measured(80), 1, limits, None, DAY, 'default') == expected
+    assert spawn_gate.decide_start(measured(74), 1, limits, None, DAY, 'default') == ('allow', '')
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('verified', [False, True])
+def test_a_5h_ask_needs_a_mode_that_shows_the_prompt(verified, mode):
+    limits = dict(THRESHOLDS, five_hour_action='ask', ask_verified_in_bypass=verified)
+    action, text = spawn_gate.decide_start(measured(80), 1, limits, None, DAY, mode)
+    if mode in spawn_gate.ASK_SHOWN or verified:
+        assert (action, text) == ('ask', '5H 80 % · start agent?')
+    else:
+        assert action == 'deny' and text.startswith('5h window at 80 %: the user has to approve this start')
+        assert f'permission mode "{mode or "unknown"}"' in text and 'no new block until the window resets' in text
+
+
+@pytest.mark.parametrize('language,question', [('en', 'WEEK 85 % / 5H 80 % · start worker?'),
+                                               ('de', 'WOCHE 85 % / 5H 80 % · worker starten?')])
+def test_both_windows_asking_make_one_question_with_both_numbers(language, question):
+    limits = dict(THRESHOLDS, week_action='ask', five_hour_action='ask')
+    assert spawn_gate.decide_start(measured(80, week=85), 1, limits, None, DAY, 'default', 'worker', language) == (
+        'ask', question)
+    label = question.split(' · ', 1)[0]
+    assert spawn_gate.dialog_input('Agent', {'description': 'd'}, question) == {'description': f'{label} · d'}
+
+
+def test_the_strongest_brake_wins():
+    def decide(week_action, five_hour_action):
+        limits = dict(THRESHOLDS, week_action=week_action, five_hour_action=five_hour_action)
+        return spawn_gate.decide_start(measured(80, week=85), 1, limits, None, DAY, 'default')[0]
+    assert decide('ask', 'deny') == decide('deny', 'ask') == decide('deny', 'off') == 'deny'
+    assert decide('warn', 'ask') == decide('ask', 'shadow') == 'ask'
+    assert decide('warn', 'shadow') == decide('off', 'warn') == 'warn'
+    assert decide('off', 'off') == 'allow'
+
+
+@pytest.mark.parametrize('week_action,week_ok_until,note', [
+    ('shadow', None, 'week_action shadow only logs it'), ('warn', None, '(week_action warn)'),
+    ('deny', DAY, 'start approved until 2026-01-14')])
+def test_a_5h_ask_keeps_the_note_of_the_week(week_action, week_ok_until, note):
+    limits = dict(THRESHOLDS, week_action=week_action, five_hour_action='ask')
+    action, text = spawn_gate.decide_start(measured(80, week=90), 1, limits, week_ok_until, DAY, 'default')
+    assert action == 'ask' and text.startswith('5H 80 % · start agent? ') and note in text
+
+
+def test_both_notes_reach_the_model_when_both_brakes_only_warn():
+    limits = dict(THRESHOLDS, week_action='shadow', five_hour_action='warn')
+    action, text = spawn_gate.decide_start(measured(80, week=85), 1, limits, None, DAY, 'default')
+    assert action == 'warn' and 'week_action shadow only logs it' in text and '(five_hour_action warn)' in text
+
+
+@pytest.mark.parametrize('week_action,expected', [
+    ('off', ('allow', '')),
+    ('shadow', ('warn', '7-day window at 85 %: above the weekly threshold; week_action shadow only logs it, deny '
+                        'would stop this start.')),
+])
+def test_week_action_off_and_shadow(week_action, expected):
+    limits = dict(THRESHOLDS, week_action=week_action)
+    assert spawn_gate.decide_start(measured(10, week=85), 1, limits, None, DAY, 'default') == expected
+
+
+def test_week_action_off_ignores_the_approval_too():
+    limits = dict(THRESHOLDS, week_action='off')
+    assert spawn_gate.decide_start(measured(10, week=85), 1, limits, DAY, DAY, 'default') == ('allow', '')
+
+
+@pytest.mark.parametrize('unknown_usage_action,many,one', [
+    ('off', ('warn', 'Usage unknown: start allowed (fail open), keep blocks small.'), None),
+    ('shadow', ('warn', 'Usage unknown and 3 agents in the block: unknown_usage_action shadow only logs it, deny would '
+                        'stop this start (up to 1 agent(s) while the usage is unknown).'), None),
+    ('warn', ('warn', 'Usage unknown and 3 agents in the block: start allowed (unknown_usage_action warn); take a fresh '
+                      'measurement before the next block.'), None),
+    ('deny', ('deny', 'Usage unknown and 3 agents in the block: fresh measurement first, then the block. Up to 1 '
+                      'agent(s) may start while the usage is unknown.'), None),
+])
+def test_unknown_usage_action_decides_above_the_block_size(unknown_usage_action, many, one):
+    limits = dict(THRESHOLDS, unknown_usage_action=unknown_usage_action)
+    unknown = _usage.Usage(None, None, None)
+    assert spawn_gate.decide_start(unknown, 3, limits) == many
+    assert spawn_gate.decide_start(unknown, 1, limits) == (
+        one or ('warn', 'Usage unknown: start allowed (fail open), keep blocks small.'))
+    assert spawn_gate.decide_start(unknown, None, limits)[0] == many[0]
+
+
+def test_model_effort_action_shadow_starts_and_names_the_finding(tmp_path, env):
+    usage(tmp_path, 10)
+    env = config(tmp_path, env, spawn_rules={'model_effort_action': 'shadow'})
+    out = run(agent('half-def'), env, '--mode=enforce')
+    assert is_warning(out) and '(model_effort_action shadow: logged only, deny would stop this start.)' in context(out)
+    assert gate_log(tmp_path)[-1]['decision'] == 'warn'
+
+
+def test_a_5h_ask_reaches_claude_code_as_a_permission_prompt(tmp_path, env):
+    usage(tmp_path, 80)
+    env = config(tmp_path, env, thresholds={'five_hour_action': 'ask'})
+    out = run(dict(agent('full-def'), permission_mode='default'), env, '--mode=enforce')
+    assert out['hookSpecificOutput']['permissionDecision'] == 'ask' and reason(out) == '5H 80 % · start full-def?'
+    assert out['hookSpecificOutput']['updatedInput']['description'] == '5H 80 % · x'
 
 
 def test_mode_parsing_without_hookio():

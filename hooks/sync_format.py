@@ -82,8 +82,11 @@ REASON_LENGTH = 60
 PERCENT = re.compile(r'\d+(?:\.\d+)? ?%')
 REASON_CHARS = re.compile(r'[^\w .,…()/+%-]')
 QUOTED = re.compile('"[^"]*"|\'[^\']*\'|„[^“”]*[“”]|`[^`]*`')
-WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % · ')     # the ask question names the agent: never synced
+# The ask question names what starts: never synced. As in tools/usage_report.py: the weekly window or both, the 5h one
+WEEK_QUESTION = re.compile(r'(?:WEEK|WOCHE) \d+(?:\.\d+)? % (?:·|/) ')
+FIVE_HOUR_QUESTION = re.compile(r'5H \d+(?:\.\d+)? % · ')
 WEEK_KIND = '7-day window at N %'
+FIVE_HOUR_KIND = '5h window at N %'
 
 COUNTERS = ('symlinks', 'hardlinks', 'oversized', 'irregular', 'bad_names', 'unreadable', 'unknown_version',
             'broken_lines', 'misplaced')
@@ -390,6 +393,8 @@ def gate_reason(reason: object) -> str:
         return ''
     if WEEK_QUESTION.match(reason):
         return WEEK_KIND
+    if FIVE_HOUR_QUESTION.match(reason):
+        return FIVE_HOUR_KIND
     prefix = PERCENT.sub('N %', QUOTED.sub('…', reason).split(':', 1)[0])
     return REASON_CHARS.sub('?', prefix.strip())[:REASON_LENGTH]
 

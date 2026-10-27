@@ -99,8 +99,9 @@ message: [`desktop/README.md`](../desktop/README.md#the-usage-report-report).
 
 ### The Settings tab
 
-`h` opens **Settings**, a tab of its own beside the views. It switches the parts of an installed usage-clock on and off
-and sets the sync repository, without a restart and without changing `settings.json`:
+`h` opens **Settings**, a tab of its own beside the views. It switches the parts of an installed usage-clock on and off,
+sets each brake of the spawn gate and the levels of the soft stop, and sets the sync repository, without a restart and
+without changing `settings.json`:
 
 - One row per part: its name, and below it, indented, what it does and its buttons: `on`/`off` for the usage clock and
   the context reporter, `off`/`short`/`full` for the line of the desktop app
@@ -113,6 +114,14 @@ and sets the sync repository, without a restart and without changing `settings.j
   enough; the sync and its repository span the width. The head of a card names the state in effect (`ON`, `OFF`,
   `SHADOW`, `ENFORCE`, or `NOT INSTALLED`) with `i` beside it; the choices stand in a frame that wraps inside a narrow
   card, and the active one stands on a round plate of the accent colour, as high as the others.
+- Below its own choices the spawn gate lists its four brakes ([the two gates](gates.md#the-two-gates)): the 5h window,
+  the week, usage unknown, and model and effort, each with its sentence and the choices `off`/`shadow`/`warn`/`deny`
+  (`ask` too for the two windows), and for the first three a field with its limit (percent, or the number of agents
+  for usage unknown). The soft stop lists its three levels (warn, checkpoint only, stop) as fields in percent. A number
+  is set with Enter (Set in the desktop app); the script refuses one outside 0 to 100, a fraction of an agent, and a
+  level that would break warn < checkpoint only < stop, and the tab shows why. The field then shows `config.json`
+  again. These are keys of `thresholds` and `spawn_rules.model_effort_action`; an installation older than this tab's
+  version shows the parts without them.
 - The status line has no switch (the other parts read its measurement), so the tab shows no card for it while it is
   installed; without it a warning card says that nothing measures. A part that is not installed stands grey with
   `not installed: install.py` and no button: the tab never adds or removes a hook.

@@ -5,7 +5,8 @@ Applies to spawns of the main session too (no agent_id filter) unless `apply_to_
 intended: otherwise nobody would be slowed down. The main session's other tool calls are never blocked.
 
 Model part (`model_effort_action`): `deny` fails closed, without a determinable model and effort the start is
-denied; `warn` starts and reports the same finding as a warning; `off` does not judge, it only counts agents. Every internal error,
+denied; `warn` starts and reports the same finding as a warning, `shadow` too, saying that deny would stop it; `off`
+does not judge, it only counts agents. Every internal error,
 including a failed import, also denies via deny JSON with exit 0, because a hook error with exit 1 does NOT
 block. Empty or broken input or a missing tool_name → deny, because the hook is only registered for
 Agent|Workflow|Skill.
@@ -13,12 +14,14 @@ Skill: only skills with context: fork start an agent and are checked (the usage 
 without a complete agent definition is reported, not denied (`skill_fork_missing_agent`). Inline, unknown and
 plugin skills: not responsible. An internal error in the Skill branch only warns (otherwise it would block
 every skill, including plain knowledge skills).
-Usage part fails open: at `start_block_5h` (5h) or `start_block_week` (week) no new start; with an unknown or
-stale measurement only a warning, unless the block has more than `unknown_usage_max_agents` agents. Approval
-for the week: --week-ok-until=YYYY-MM-DD (up to and including that day only a warning; it lives in the hook
-command in settings.json, where the model cannot set it if settings.json is protected). Without it
-`thresholds.week_action` decides: warn, ask (Claude Code's permission prompt, which only a human can answer;
-denied in permission modes that may skip the prompt, see ASK_SHOWN) or deny.
+Usage part fails open. Three brakes, each with its own action in `thresholds`: at `start_block_5h`
+`five_hour_action` (default deny), at `start_block_week` `week_action` (default warn), and with an unknown or stale
+measurement and more than `unknown_usage_max_agents` agents in the block `unknown_usage_action` (default deny; at or
+below that size only a warning). Each is off, shadow (the start goes through, the note says what deny would do),
+warn, ask (Claude Code's permission prompt, which only a human can answer; denied in permission modes that may skip
+the prompt, see ASK_SHOWN; not for unknown usage) or deny. The strongest decision of the brakes wins. Approval for
+the week: --week-ok-until=YYYY-MM-DD (up to and including that day only a warning; it lives in the hook command in
+settings.json, where the model cannot set it if settings.json is protected).
 In shadow mode nothing is blocked: every decision is logged, and deny, ask and warn reach the model as a
 note of what enforce would have done (_hookio.shadow_note).
 The question of an ask is the text a human reads: short, the number first, in the language of Claude Code's
@@ -37,15 +40,20 @@ EVENT = 'PreToolUse'
 # Permission modes in which Claude Code shows the prompt a hook asks for. Every other mode, and a missing one,
 # may answer the prompt without a human; there `ask` denies unless `thresholds.ask_verified_in_bypass` is set.
 ASK_SHOWN = ('default', 'acceptEdits', 'plan')
-# The number in front of every question; dialog_input puts it in front of the agent's description too
+# The numbers in front of every question, joined by ' / ' when both windows ask; dialog_input puts them in front of
+# the agent's description too
 WEEK_LABELS = {
     'en': 'WEEK {week:.0f} %',
     'de': 'WOCHE {week:.0f} %',
 }
+FIVE_HOUR_LABELS = {
+    'en': '5H {five:.0f} %',
+    'de': '5H {five:.0f} %',
+}
 # The question of the ask dialog per language; every other language gets English
 QUESTIONS = {
-    'en': WEEK_LABELS['en'] + ' · start {what}?',
-    'de': WEEK_LABELS['de'] + ' · {what} starten?',
+    'en': '{labels} · start {what}?',
+    'de': '{labels} · {what} starten?',
 }
 GERMAN = ('german', 'deutsch', 'de')
 
@@ -103,6 +111,18 @@ def _deny_without_hookio(reason: str) -> None:
                                              'permissionDecisionReason': reason}}, ensure_ascii=False))
 
 
+def _let_through(subject: str, window: str, key: str, action: str) -> str:
+    """The note of a usage brake on warn or shadow above its threshold: the start goes through."""
+    if action == 'shadow':
+        return f'{subject}: above the {window} threshold; {key} shadow only logs it, deny would stop this start.'
+    return f'{subject}: above the {window} threshold, start allowed ({key} warn); keep blocks small.'
+
+
+def _unshown(subject: str, permission_mode: str | None, then: str) -> str:
+    return (f'{subject}: the user has to approve this start, but in permission mode "{permission_mode or "unknown"}" '
+            f'the prompt may be answered without them (thresholds.ask_verified_in_bypass is false); {then}')
+
+
 def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until: date | None = None,
                  today: date | None = None, permission_mode: str | None = None, what: str = 'agent',
                  language: str = 'en') -> tuple[str, str]:
@@ -111,40 +131,58 @@ def decide_start(usage, agent_count: int | None, thresholds: dict, week_ok_until
 
     agent_count: agents in the block (Agent tool and Skill fork = 1, Workflow = counted agent() calls,
     None = could not be counted). week_ok_until: approval for the 7-day window, valid up to and including
-    that day (only a warning then). Without it `thresholds.week_action` decides above the weekly threshold:
-    warn, ask (the user confirms in Claude Code's permission prompt) or deny. The 5h block beats an ask.
+    that day (only a warning then). Each brake acts by its own key (see the module text); a deny of one beats an
+    ask of the other, and when both windows ask, one question names both numbers.
     """
     if usage.state != 'ok':
         limit = thresholds['unknown_usage_max_agents']
-        if agent_count is None or agent_count > limit:
-            agents = 'an unknown number of' if agent_count is None else str(agent_count)
-            return 'deny', (f'Usage {usage.state} and {agents} agents in the block: fresh measurement first, then the '
-                            f'block. Up to {limit} agent(s) may start while the usage is {usage.state}.')
+        action = thresholds['unknown_usage_action']
+        # off takes the brake away, not the note that the measurement is missing
+        if action != 'off' and (agent_count is None or agent_count > limit):
+            subject = (f'Usage {usage.state} and '
+                       f'{"an unknown number of" if agent_count is None else agent_count} agents in the block')
+            if action == 'shadow':
+                return 'warn', (f'{subject}: unknown_usage_action shadow only logs it, deny would stop this start (up '
+                                f'to {limit} agent(s) while the usage is {usage.state}).')
+            if action == 'warn':
+                return 'warn', (f'{subject}: start allowed (unknown_usage_action warn); take a fresh measurement '
+                                'before the next block.')
+            return 'deny', (f'{subject}: fresh measurement first, then the block. Up to {limit} agent(s) may start '
+                            f'while the usage is {usage.state}.')
         return 'warn', f'Usage {usage.state}: start allowed (fail open), keep blocks small.'
-    note = question = ''
-    if usage.week is not None and usage.week >= thresholds['start_block_week']:
+    shown = permission_mode in ASK_SHOWN or thresholds['ask_verified_in_bypass']
+    notes, labels = [], []
+    action = thresholds['week_action']
+    if usage.week is not None and usage.week >= thresholds['start_block_week'] and action != 'off':
         today = today or date.today()
         week = f'7-day window at {usage.week:.0f} %'
-        action = thresholds['week_action']
         if week_ok_until is not None and today <= week_ok_until:
-            note = f'{week}: start approved until {week_ok_until.isoformat()}.'
-        elif action == 'warn':
-            note = f'{week}: above the weekly threshold, start allowed (week_action warn); keep blocks small.'
-        elif action == 'ask' and (permission_mode in ASK_SHOWN or thresholds['ask_verified_in_bypass']):
-            question = QUESTIONS.get(language, QUESTIONS['en']).format(week=usage.week, what=what)
+            notes.append(f'{week}: start approved until {week_ok_until.isoformat()}.')
+        elif action in ('warn', 'shadow'):
+            notes.append(_let_through(week, 'weekly', 'week_action', action))
+        elif action == 'ask' and shown:
+            labels.append(WEEK_LABELS.get(language, WEEK_LABELS['en']).format(week=usage.week))
         elif action == 'ask':
-            return 'deny', (f'{week}: the user has to approve this start, but in permission mode '
-                            f'"{permission_mode or "unknown"}" the prompt may be answered without them '
-                            '(thresholds.ask_verified_in_bypass is false); no new start. Approval: '
-                            '--week-ok-until=YYYY-MM-DD on the spawn gate command in settings.json.')
+            return 'deny', _unshown(week, permission_mode, 'no new start. Approval: --week-ok-until=YYYY-MM-DD on '
+                                                           'the spawn gate command in settings.json.')
         else:
             return 'deny', (f'{week}: no new start without approval '
                             '(--week-ok-until=YYYY-MM-DD on the spawn gate command in settings.json).')
-    if usage.five_hour is not None and usage.five_hour >= thresholds['start_block_5h']:
-        return 'deny', f'5h window at {usage.five_hour:.0f} %: no new block until the window resets.'
-    if question:
-        return 'ask', question
-    return ('warn', note) if note else ('allow', '')
+    action = thresholds['five_hour_action']
+    if usage.five_hour is not None and usage.five_hour >= thresholds['start_block_5h'] and action != 'off':
+        five = f'5h window at {usage.five_hour:.0f} %'
+        if action in ('warn', 'shadow'):
+            notes.append(_let_through(five, '5h', 'five_hour_action', action))
+        elif action == 'ask' and shown:
+            labels.append(FIVE_HOUR_LABELS.get(language, FIVE_HOUR_LABELS['en']).format(five=usage.five_hour))
+        elif action == 'ask':
+            return 'deny', _unshown(five, permission_mode, 'no new block until the window resets.')
+        else:
+            return 'deny', f'{five}: no new block until the window resets.'
+    if labels:      # the note of the other window stays, after the question, as the notes of the model rule do
+        question = QUESTIONS.get(language, QUESTIONS['en']).format(labels=' / '.join(labels), what=what)
+        return 'ask', ' '.join([question] + notes)
+    return ('warn', ' '.join(notes)) if notes else ('allow', '')
 
 
 def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today: date | None = None,
@@ -184,7 +222,10 @@ def decide(hook_input: dict, cfg: dict, week_ok_until: date | None = None, today
     if not check.allowed:
         if rules.model_effort_action == 'deny':
             return 'deny', check.reason
-        check = Check(True, notes=[check.reason] + check.notes, agent_count=check.agent_count)
+        finding = check.reason
+        if rules.model_effort_action == 'shadow':
+            finding += ' (model_effort_action shadow: logged only, deny would stop this start.)'
+        check = Check(True, notes=[finding] + check.notes, agent_count=check.agent_count)
     usage = _usage.read_usage(None, now, cfg['thresholds']['max_age_min'])
     mode = hook_input.get('permission_mode')
     action, text = decide_start(usage, check.agent_count, cfg['thresholds'], week_ok_until, today,

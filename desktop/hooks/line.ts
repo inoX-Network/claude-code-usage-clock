@@ -11,8 +11,9 @@ export const CACHE_TTL_MS = 60 * 60_000   // the one-hour cache of a Claude subs
 // The gates whose teeth modules of config.json can take: key in modules (and name of the script), marker; as
 // GATE_MARKERS in hooks/statusline.py
 const GATES = [['spawn_gate', 'spawn gate'], ['soft_stop', 'soft stop']] as const
-// What the spawn gate does from startBlockWeek on, as WEEK_MARKERS in hooks/statusline.py
-const WEEK_MARKERS: Record<WeekAction, string> = {
+// What the spawn gate does from startBlockWeek on, as WEEK_MARKERS in hooks/statusline.py; none when the brake is off
+const WEEK_MARKERS: Record<Exclude<WeekAction, 'off'>, string> = {
+  shadow: '<- week gate: shadow only',
   warn: '<- week gate: agents warn',
   ask: '<- week gate: agents ask',
   deny: '<- week gate: agents blocked',
@@ -104,7 +105,7 @@ export function parts(usage: SessionUsage, cfg: LineConfig, lastAnswer: number |
     // the weekly reset only from yellow on: below that it is days away and only takes room
     const reset = cfg.showReset && number >= cfg.yellowFrom ? resetText(week.resetsAt, now, true, timeZone) : ''
     result.push({ text: `week ${number}%${reset}`, color: level(number, cfg.yellowFrom, cfg.redFrom), calm: 'success' })
-    if (cfg.weekStopMarker && number >= cfg.startBlockWeek) {
+    if (cfg.weekStopMarker && cfg.weekAction !== 'off' && number >= cfg.startBlockWeek) {
       result.push({ text: WEEK_MARKERS[cfg.weekAction], color: 'error', attached: true })
     }
   }

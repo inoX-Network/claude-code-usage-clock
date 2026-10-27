@@ -34,7 +34,15 @@ def with_reset(value: str, reset: float | None, now: datetime) -> str:
     return f'{value} (resets {format_reset(reset, now)})' if reset is not None else value
 
 
+# What the spawn gate does at or above each threshold, per five_hour_action and week_action; no note when off
+FIVE_HOUR_NOTES = {
+    'shadow': 'blocks start, the spawn gate only logs it',
+    'warn': 'blocks start with a warning',
+    'ask': "new blocks need the user's approval",
+    'deny': 'no new blocks',
+}
 WEEK_NOTES = {
+    'shadow': 'agents start, the spawn gate only logs it',
     'warn': 'agents start with a warning',
     'ask': "new agents need the user's approval",
     'deny': 'no new agents without --week-ok-until',
@@ -43,7 +51,7 @@ WEEK_NOTES = {
 
 def usage_text(usage, thresholds: dict, now: datetime) -> str:
     """The usage part. `usage` is a _usage.Usage, `thresholds` is the config section of that name: the notes
-    use start_block_5h, start_block_week and week_action. The weekly note says what the spawn gate does."""
+    use start_block_5h, start_block_week, five_hour_action and week_action: they say what the spawn gate does."""
     if usage.state == 'unknown':
         return f'Usage: unknown (no valid measurement in the usage file) — {FRESH_MEASUREMENT_HINT}.'
     five = with_reset(f'{usage.five_hour:.0f} %', usage.five_hour_reset, now)
@@ -53,10 +61,11 @@ def usage_text(usage, thresholds: dict, now: datetime) -> str:
     if usage.state == 'stale':
         line += f' — STALE, counts as unknown; {FRESH_MEASUREMENT_HINT}'
     else:
-        if usage.five_hour >= thresholds['start_block_5h']:
-            line += f' — from {thresholds["start_block_5h"]:g} % on, no new blocks'
-        if usage.week is not None and usage.week >= thresholds['start_block_week']:
-            line += f' — week at or above {thresholds["start_block_week"]:g} %: {WEEK_NOTES[thresholds["week_action"]]}'
+        five_action, week_action = thresholds['five_hour_action'], thresholds['week_action']
+        if usage.five_hour >= thresholds['start_block_5h'] and five_action in FIVE_HOUR_NOTES:
+            line += f' — from {thresholds["start_block_5h"]:g} % on, {FIVE_HOUR_NOTES[five_action]}'
+        if usage.week is not None and usage.week >= thresholds['start_block_week'] and week_action in WEEK_NOTES:
+            line += f' — week at or above {thresholds["start_block_week"]:g} %: {WEEK_NOTES[week_action]}'
     return line
 
 

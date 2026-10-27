@@ -20,7 +20,7 @@ export type LineConfig = {
   desktopLine: DesktopLine
 }
 
-export type WeekAction = 'warn' | 'ask' | 'deny'
+export type WeekAction = 'off' | 'shadow' | 'warn' | 'ask' | 'deny'
 export type DesktopLine = 'off' | 'short' | 'full'
 
 export type ReportPeriod = 'day' | 'week' | 'month' | 'year'
@@ -40,12 +40,14 @@ export type SettingsSlot =
   | { status: 'ok'; shown: Record<string, unknown> }
 
 /** The Settings tab of the pane: open or not, the part whose info is unfolded, the repository typed into the field,
- *  the answer of the last Check (Save is offered only after `private_ok` for exactly that name), and the last note. */
+ *  the answer of the last Check (Save is offered only after `private_ok` for exactly that name), the numbers typed into
+ *  the fields of the brakes and levels by key until they are set, and the last note. */
 export type SettingsState = {
   isOpen: boolean
   slot: SettingsSlot | null
   info: string | null
   repo: string | null
+  drafts: Record<string, string>
   check: { result: string; repo: string; text: string } | null
   note: string | null
 }

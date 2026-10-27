@@ -63,6 +63,8 @@ test('week_action: each choice of _config.py counts, anything else keeps warn', 
   expect(action('warn')).toBe('warn')
   expect(action('ask')).toBe('ask')
   expect(action('deny')).toBe('deny')
+  expect(action('shadow')).toBe('shadow')
+  expect(action('off')).toBe('off')
   expect(action('later')).toBe('warn')
   expect(action('ASK')).toBe('warn')
   expect(action(1)).toBe('warn')

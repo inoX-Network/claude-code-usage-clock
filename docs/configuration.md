@@ -25,15 +25,17 @@ that key and writes one line to the log.
 | `wake_watcher.from_k` | `0` | Context in thousands of tokens from which the wake-up watcher is offered and may fire; `0` switches it off. |
 | `wake_watcher.lead_min` | `10` | Longest lead before the prompt cache expires at which the watcher fires, in minutes; never more than a fifth of the cache lifetime (10 min for the 1-hour cache, 1 min for the 5-minute cache). |
 | `wake_watcher.routine_file` | `""` | Path (`~` allowed) to a file with your session-end routine; when the watcher fires, the context reporter hands it to the model with the wake-up call. Empty: off. |
-| `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate. |
+| `thresholds.start_block_5h` / `start_block_week` | `75` / `75` | Spawn gate: the thresholds of the 5h and the weekly brake. |
 | `thresholds.warn` / `checkpoint_only` / `deny` | `85` / `92` / `95` | Soft stop. |
 | `thresholds.max_age_min` | `15` | Older measurements count as stale. |
 | `thresholds.calls_without_checkpoint` | `15` | Soft stop checkpoint rhythm. |
 | `thresholds.unknown_usage_max_agents` | `1` | Block size allowed while usage is unknown. |
-| `thresholds.week_action` | `warn` | Above `start_block_week`: `warn`, `ask` (permission prompt) or `deny`. |
+| `thresholds.unknown_usage_action` | `deny` | A larger block while usage is unknown: `off`, `shadow` (starts, the note says what `deny` would do), `warn` or `deny`. |
+| `thresholds.five_hour_action` | `deny` | At or above `start_block_5h`: `off`, `shadow`, `warn`, `ask` (permission prompt) or `deny`. |
+| `thresholds.week_action` | `warn` | At or above `start_block_week`: `off`, `shadow`, `warn`, `ask` (permission prompt) or `deny`. |
 | `thresholds.ask_verified_in_bypass` | `false` | `true` lets `ask` prompt in modes such as `bypassPermissions`; set it only after you saw the prompt there. |
 | `checkpoint_dir_suffix` | `/agent-checkpoints` | What counts as a checkpoint directory. |
-| `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `deny` refuses the start, `off` keeps only the usage part. |
+| `spawn_rules.model_effort_action` | `warn` | The model rule of the spawn gate: `warn` reports, `shadow` reports that `deny` would refuse, `deny` refuses the start, `off` keeps only the usage part. |
 | `spawn_rules.model_pattern` | `sonnet\|opus\|haiku\|fable\|inherit\|claude-[a-z0-9-]+` | Which `model` values are accepted, see below. |
 | `spawn_rules.effort_values` | `["low", "medium", "high", "xhigh", "max"]` | Which `effort` values are accepted, see below. |
 | `spawn_rules.suggested_agents` | `[]` | Agents named in the message of the model rule as alternatives. Empty: a general hint. |
@@ -80,11 +82,14 @@ without a restart and without touching `settings.json`:
 - The status line has no switch: the other parts read its measurement.
 
 The Settings tab of [/report](reports.md#the-settings-tab) sets these keys and `sync.mode` through
-`settings_cli.py`, with the same check and backup as the installer. The installer sets them too: `install.py --off
+`settings_cli.py`, with the same check and backup as the installer; it also sets the brakes of the spawn gate
+(`five_hour_action`, `week_action`, `unknown_usage_action`, `model_effort_action`), their limits (`start_block_5h`,
+`start_block_week`, `unknown_usage_max_agents`) and the levels of the soft stop (`warn` < `checkpoint_only` < `deny`). The installer sets them too: `install.py --off
 spawn-gate` and `--on spawn-gate` write what the tab writes, and its assistant switches an installed part off this way
 when you answer no ([Install](install.md#install)). Like every key, `modules` is only as safe as
 your guard keeps the model from writing `config.json`, and from running the two programs that write it themselves:
-`settings_cli.py set` and `install.py --off`, `--on` or `--mode` (and `--uninstall`, `--sync-*`). A guard that checks
+`settings_cli.py set` (which also loosens a brake or a limit) and `install.py --off`, `--on` or `--mode` (and
+`--uninstall`, `--sync-*`). A guard that checks
 only paths and write commands does not see those; block them too, or make `config.json` read-only, which stops the tab
 as well ([Working with a guard hook](security.md#working-with-a-guard-hook)). While `modules` switches an installed gate
 off, or sets it to `shadow` while its entry says `--mode=enforce`, the status line shows `spawn gate off`,

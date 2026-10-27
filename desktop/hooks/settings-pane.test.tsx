@@ -43,11 +43,34 @@ function shown(values: Record<string, unknown> = {}, sync: Record<string, unknow
   }
 }
 
+/** show --json of an installation with the brakes: two brakes of the spawn gate, the soft stop installed with two
+ *  levels. The values follow what `set` stored. */
+function withBrakes(answer: ReturnType<typeof shown>, values: Record<string, unknown>) {
+  const modules = answer.modules.map(m => (m.id === 'spawn_gate' ? {
+    ...m,
+    brakes: [
+      { id: 'five_hour', label: '5h window', key: 'thresholds.five_hour_action', value: values.five_hour_action ?? 'deny',
+        choices: ['off', 'shadow', 'warn', 'ask', 'deny'], summary: 'What the 5h brake does.',
+        limit: { key: 'thresholds.start_block_5h', value: Number(values.start_block_5h ?? 75), unit: '%' } },
+      { id: 'model_effort', label: 'Model and effort', key: 'spawn_rules.model_effort_action', value: values.model_effort_action ?? 'warn',
+        choices: ['off', 'shadow', 'warn', 'deny'], summary: 'What the model brake does.', limit: null },
+    ],
+  } : m.id === 'soft_stop' ? {
+    ...m,
+    installed: true,
+    levels: [
+      { key: 'thresholds.warn', label: 'Warn', value: Number(values.warn ?? 85), unit: '%', summary: 'What warn does.' },
+      { key: 'thresholds.deny', label: 'Stop', value: Number(values.deny ?? 95), unit: '%', summary: 'What stop does.' },
+    ],
+  } : m))
+  return { ...answer, modules }
+}
+
 /** Holds every show --json from the `from`-th on: `asked` is called when one comes, it answers once `until` settles. */
 type Hold = { from: number; asked: () => void; until: Promise<void> }
 
 function world(on: On, options: { hasCli?: boolean; check?: string; save?: string; sync?: Record<string, unknown>; info?: string; hold?: Hold;
-  values?: Record<string, unknown>; isProjectOnly?: boolean } = {}) {
+  values?: Record<string, unknown>; isProjectOnly?: boolean; hasBrakes?: boolean; setError?: string } = {}) {
   const seen = { runs: [] as (readonly string[])[], values: { ...options.values } as Record<string, unknown>, asked: [] as string[], shows: 0 }
   mock.clock(on, { now: Date.parse('2026-10-18T06:00:00Z') })
   mock.env(on, { USERPROFILE: 'C:\\Users\\you' })
@@ -77,11 +100,15 @@ function world(on: On, options: { hasCli?: boolean; check?: string; save?: strin
         options.hold.asked()
         await options.hold.until
       }
-      outcome = { exitCode: 0, stdout: JSON.stringify(shown(seen.values, options.sync, options.info)), stderr: '' }
+      const answer = shown(seen.values, options.sync, options.info)
+      outcome = { exitCode: 0, stdout: JSON.stringify(options.hasBrakes === true ? withBrakes(answer, seen.values) : answer), stderr: '' }
+    } else if (e.argv[4] === 'set' && options.setError !== undefined) {
+      outcome = { exitCode: 2, stdout: JSON.stringify({ error: options.setError }), stderr: '' }
     } else if (e.argv[4] === 'set') {
-      const key = String(e.argv[5]).split('.')[1] as string
-      seen.values[key] = e.argv[6] === 'true' ? true : e.argv[6] === 'false' ? false : e.argv[6]
-      outcome = { exitCode: 0, stdout: JSON.stringify({ key: e.argv[5], value: seen.values[key], changed: true, backup: null }), stderr: '' }
+      const [full, value] = e.argv.slice(5).filter(word => word !== '--') as [string, string]
+      const key = full.split('.')[1] as string
+      seen.values[key] = value === 'true' ? true : value === 'false' ? false : value
+      outcome = { exitCode: 0, stdout: JSON.stringify({ key: full, value: seen.values[key], changed: true, backup: null }), stderr: '' }
     } else if (e.argv[4] === 'check-repo') {
       const result = options.check ?? 'private_ok'
       outcome = { exitCode: result === 'private_ok' ? 0 : 1, stdout: JSON.stringify({ result, repo: e.argv.at(-1), text: `Result ${result}.` }), stderr: '' }
@@ -405,6 +432,69 @@ for (const surface of SURFACES) {
     await opening
     expect(await exact(ui, 'loading…')).toBeUndefined()
     expect(await ui.find({ key: 'row-usage_clock' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`${surface}: the spawn gate shows each brake with its choices and its limit; a choice runs its set`, async ($, on) => {
+    const seen = world(on, { hasBrakes: true })
+    const ui = await open($, surface)
+    const row = await rowText(ui, 'spawn_gate')
+    for (const text of ['5h window', 'What the 5h brake does.', 'Model and effort', 'What the model brake does.']) {
+      expect(row).toContain(text)
+    }
+    expect(await isMarked(ui, surface, 'set-brake-five_hour-deny')).toBe(true)
+    expect(await isMarked(ui, surface, 'set-brake-five_hour-ask')).toBe(false)
+    expect((await ui.find({ key: 'field-brake-five_hour' }))?.props.value).toBe('75')
+    expect(await ui.find({ key: 'field-brake-model_effort' })).toBeUndefined()      // no limit, no field
+    await ui.press({ key: 'set-brake-five_hour-ask' })
+    expect(settingsRuns(seen).slice(1)).toEqual([[...PREFIX, 'set', 'thresholds.five_hour_action', 'ask'], [...PREFIX, 'show', '--json']])
+    expect(await isMarked(ui, surface, 'set-brake-five_hour-ask')).toBe(true)
+    await ui.press({ key: 'set-brake-model_effort-shadow' })
+    expect(settingsRuns(seen).at(-2)).toEqual([...PREFIX, 'set', 'spawn_rules.model_effort_action', 'shadow'])
+    await ui.unmount()
+  })
+
+  test(`${surface}: a number typed into a field goes to set as one word after --, then the field shows config.json`, async ($, on) => {
+    const seen = world(on, { hasBrakes: true })
+    const ui = await open($, surface)
+    await ui.input({ key: 'field-brake-five_hour', text: '8', kind: 'change' })
+    expect((await ui.find({ key: 'field-brake-five_hour' }))?.props.value).toBe('8')
+    expect(settingsRuns(seen)).toHaveLength(1)                                     // typing runs nothing
+    await ui.input({ key: 'field-brake-five_hour', text: ' 80 ' })
+    expect(settingsRuns(seen).slice(1)).toEqual([[...PREFIX, 'set', '--', 'thresholds.start_block_5h', '80'], [...PREFIX, 'show', '--json']])
+    expect((await ui.find({ key: 'field-brake-five_hour' }))?.props.value).toBe('80')
+    await ui.input({ key: 'field-level-warn', text: '-1' })
+    expect(settingsRuns(seen).at(-2)).toEqual([...PREFIX, 'set', '--', 'thresholds.warn', '-1'])
+    await ui.unmount()
+  })
+
+  test(`${surface}: the soft stop shows its levels, each a field; a refused number names why and stays`, async ($, on) => {
+    const seen = world(on, { hasBrakes: true, setError: 'thresholds.warn 96: the soft stop needs warn < checkpoint_only < deny' })
+    const ui = await open($, surface)
+    const row = await rowText(ui, 'soft_stop')
+    for (const text of ['Warn', 'What warn does.', 'Stop', 'What stop does.']) expect(row).toContain(text)
+    expect((await ui.find({ key: 'field-level-deny' }))?.props.value).toBe('95')
+    await ui.input({ key: 'field-level-warn', text: '96' })
+    expect(settingsRuns(seen).at(-2)).toEqual([...PREFIX, 'set', '--', 'thresholds.warn', '96'])
+    expect(await hasText(ui, 'thresholds.warn 96: the soft stop needs warn < checkpoint_only < deny')).toBe(true)
+    expect((await ui.find({ key: 'field-level-warn' }))?.props.value).toBe('96')    // kept, to be corrected
+    await ui.unmount()
+  })
+
+  test(`${surface}: a typed text with control characters reaches the field without them`, async ($, on) => {
+    world(on, { hasBrakes: true })
+    const ui = await open($, surface)
+    await ui.input({ key: 'field-level-warn', text: '8\u001b]52;c;SGk=\u0007', kind: 'change' })
+    expect((await ui.find({ key: 'field-level-warn' }))?.props.value).toBe('8?]52;c;SGk=?')
+    await ui.unmount()
+  })
+
+  test(`${surface}: an installation without brakes shows the parts as before`, async ($, on) => {
+    world(on)
+    const ui = await open($, surface)
+    expect(await ui.find({ key: 'set-brake-five_hour-deny' })).toBeUndefined()
+    expect(await ui.find({ key: 'field-level-warn' })).toBeUndefined()
+    expect(await rowText(ui, 'spawn_gate')).not.toContain('5h window')
     await ui.unmount()
   })
 

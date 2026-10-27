@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The one way the Settings tab of /report (desktop/hooks/pane.tsx) changes the configuration: switch a part on or off
-and set the mode of the gates and of the sync in config.json, and check and set the sync repository. It never writes
+and set the mode of the gates and of the sync in config.json, set each brake of the spawn gate and its limit and the
+levels of the soft stop, and check and set the sync repository. It never writes
 settings.json and adds or removes no hook: the parts read their switch from config.json on every run.
 
   show --json                  per part: installed (as install.py --check sees it in settings.json), its switch, the
@@ -9,6 +10,11 @@ settings.json and adds or removes no hook: the parts read their switch from conf
   set modules.<name> <value>   usage_clock and context_reporter: true|false; spawn_gate and soft_stop: off|shadow|
                                enforce, or "" for the mode of the hook entry; desktop_line: off|short|full
   set sync.mode off|shadow|on
+  set thresholds.<brake>_action, spawn_rules.model_effort_action
+                               a brake of the spawn gate: one of its choices in _config._CHOICES
+  set thresholds.<limit> N     start_block_5h, start_block_week: 0 to 100; unknown_usage_max_agents: 0 to 100, whole;
+                               warn, checkpoint_only, deny of the soft stop: 0 to 100, and warn < checkpoint_only <
+                               deny with the other two as config.json has them
   check-repo OWNER/NAME        the test of install.py --sync-repo (owner/name, not readable without logging in,
                                reachable with the login of git), writes nothing
   set-repo OWNER/NAME          check-repo, and only if the repository is private and reachable what install.py
@@ -52,6 +58,28 @@ LINE_VALUES = ('off', 'short', 'full')
 # status line
 INSTALLED_WITH = {'desktop-line': 'statusline'}
 SYNC_MODES = ('off', 'shadow', 'on')
+# The brakes of the spawn gate, shown inside its part: (id, label, key of the action, its limit and unit or None, what it
+# brakes). Their choices are those _config.py keeps (BRAKE_CHOICES)
+BRAKES = (('five_hour', '5h window', 'thresholds.five_hour_action', ('thresholds.start_block_5h', '%'),
+           'At or above this share of the five-hour window, new agents and workflows are braked.'),
+          ('week', 'Week', 'thresholds.week_action', ('thresholds.start_block_week', '%'),
+           'At or above this share of the weekly limit, new agents and workflows are braked; --week-ok-until in '
+           'settings.json still approves single days.'),
+          ('unknown_usage', 'Usage unknown', 'thresholds.unknown_usage_action', ('thresholds.unknown_usage_max_agents',
+                                                                                 'agents'),
+           'Without a fresh measurement, a block of more agents than this is braked; a smaller one starts with a '
+           'warning.'),
+          ('model_effort', 'Model and effort', 'spawn_rules.model_effort_action', None,
+           'An agent without model and effort in its definition is braked.'))
+BRAKE_CHOICES = {key: _config._CHOICES[tuple(key.split('.'))] for _, _, key, _, _ in BRAKES}
+# The levels of the soft stop, shown inside its part, lowest first: (key, label, what happens from there on)
+LEVELS = (('thresholds.warn', 'Warn', 'Agents are told to save a checkpoint soon.'),
+          ('thresholds.checkpoint_only', 'Checkpoint only', 'Agents may only write checkpoints.'),
+          ('thresholds.deny', 'Stop', 'Agents are told to finish with a partial result.'))
+PERCENT_KEYS = ('thresholds.start_block_5h', 'thresholds.start_block_week') + tuple(key for key, _, _ in LEVELS)
+AGENTS_KEY = 'thresholds.unknown_usage_max_agents'
+MAX_AGENTS = 100
+NUMBER = re.compile(r'[0-9]{1,3}(?:\.[0-9]{1,2})?')      # ASCII digits only: no sign, no exponent, no nan
 CONTROL = re.compile('[\x00-\x09\x0b-\x1f\x7f-\x9f]')
 RESULTS = {
     'private_ok': '{repo} is private and this login reaches it.',
@@ -107,6 +135,15 @@ def show(data: dict, parts: set[str], target: str, path: str) -> int:
                          'enforce' if _setup.option_value(command, 'mode') == 'enforce' else 'shadow')
         else:
             entry.update(key=f'modules.{key}', value=cfg['modules'][key], choices=list(SWITCH_VALUES))
+        if part_id == 'spawn_gate':
+            entry['brakes'] = [{'id': brake_id, 'label': brake_label, 'key': key, 'value': value_of(cfg, key),
+                                'choices': list(BRAKE_CHOICES[key]), 'summary': summary,
+                                'limit': None if limit is None else {'key': limit[0], 'value': value_of(cfg, limit[0]),
+                                                                     'unit': limit[1]}}
+                               for brake_id, brake_label, key, limit, summary in BRAKES]
+        elif part_id == 'soft_stop':
+            entry['levels'] = [{'key': key, 'label': level_label, 'value': value_of(cfg, key), 'unit': '%',
+                                'summary': summary} for key, level_label, summary in LEVELS]
         modules.append(entry)
     try:
         state = _sync_core.read_state(os.path.join(_setup.log_dir_of(cfg), _sync_core.SYNC_DIR))
@@ -119,9 +156,41 @@ def show(data: dict, parts: set[str], target: str, path: str) -> int:
     return answer({'modules': modules, 'sync': sync, 'problems': problems})
 
 
+def value_of(cfg: dict, key: str):
+    section, name = key.split('.')
+    return cfg[section][name]
+
+
+def number(key: str, value: str, path: str) -> int | float:
+    """The number `value` for `key` as config.json stores it (a whole one as int), or a UsageError."""
+    if not NUMBER.fullmatch(value):
+        raise _setup.UsageError(f'{key} {value!r}: a number such as 75 or 62.5 (digits, at most two decimals).')
+    stored = float(value)
+    stored = int(stored) if stored.is_integer() else stored
+    if key == AGENTS_KEY:
+        if not isinstance(stored, int) or stored > MAX_AGENTS:
+            raise _setup.UsageError(f'{key} {value!r}: a whole number of agents from 0 to {MAX_AGENTS}.')
+        return stored
+    if stored > 100:
+        raise _setup.UsageError(f'{key} {value!r}: a percentage from 0 to 100.')
+    if key in (level for level, _, _ in LEVELS):
+        cfg = _config.load(log_problems=False, path=path)
+        levels = [stored if level == key else value_of(cfg, level) for level, _, _ in LEVELS]
+        if not levels[0] < levels[1] < levels[2]:
+            raise _setup.UsageError(f'{key} {value!r}: the soft stop needs warn < checkpoint_only < deny; with this '
+                                    f'value they would be {" / ".join(f"{level:g}" for level in levels)}.')
+    return stored
+
+
 def set_key(key: str, value: str, parts: set[str], path: str) -> int:
     name = key.split('.', 1)[1] if '.' in key else ''
-    if key == 'sync.mode' and value in SYNC_MODES:
+    if key in BRAKE_CHOICES and value in BRAKE_CHOICES[key]:
+        section, component, stored = key.split('.')[0], 'spawn-gate', value
+    elif key in PERCENT_KEYS + (AGENTS_KEY,):
+        section, stored = 'thresholds', None      # the number is checked once the gate is known to be installed
+        component = 'spawn-gate' if key in ('thresholds.start_block_5h', 'thresholds.start_block_week', AGENTS_KEY) \
+            else 'soft-stop'
+    elif key == 'sync.mode' and value in SYNC_MODES:
         section, component, stored = 'sync', 'sync', value
     elif key in ('modules.usage_clock', 'modules.context_reporter') and value in SWITCH_VALUES:
         section, component, stored = 'modules', name.replace('_', '-'), value == 'true'
@@ -132,12 +201,17 @@ def set_key(key: str, value: str, parts: set[str], path: str) -> int:
     else:
         raise _setup.UsageError(f'{key} {value!r}: the tab sets modules.usage_clock and modules.context_reporter to '
                                 'true|false, modules.spawn_gate and modules.soft_stop to off|shadow|enforce or "", '
-                                'modules.desktop_line to off|short|full, and sync.mode to off|shadow|on.')
+                                'modules.desktop_line to off|short|full, sync.mode to off|shadow|on, a brake of the '
+                                'spawn gate to one of its choices, and the limits and levels to a number.')
     if component not in parts:
         raise not_installed(component)
+    if stored is None:
+        stored = number(key, value, path)
     if key == 'sync.mode' and value != 'off':      # off pushes nothing, wherever the log folder is
         _setup.sync_log_dir(_config.load(log_problems=False, path=path))
     current = _setup.read_config(path).get(section, {})
+    if not isinstance(current, dict):      # read_config checks only the sections the installer writes
+        raise _setup.UsageError(f'{path}: "{section}" must be a JSON object, so its keys cannot be set; nothing changed.')
     changed = name not in current or current[name] != stored
     backup = _setup.write_keys(path, {section: {name: stored}}, True) if changed else None
     return answer({'key': key, 'value': stored, 'changed': changed, 'backup': backup})

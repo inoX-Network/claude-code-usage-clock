@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULTS } from './config'
+import { DEFAULTS, type WeekAction } from './config'
 import { GATE_MARKER_CASES } from './gate-markers-fixture'
 import { CACHE_TTL_MS, gateMarkers, parts, resetText, rounded } from './line'
 
@@ -60,11 +60,13 @@ test('the weekly reset and the gate marker only from their thresholds on', () =>
 })
 
 test('the gate marker says what the spawn gate does (week_action)', () => {
-  const marker = (weekAction: 'warn' | 'ask' | 'deny') => parts(usage, { ...DEFAULTS, weekAction }, null, NOW, ZONE)
+  const marker = (weekAction: WeekAction) => parts(usage, { ...DEFAULTS, weekAction }, null, NOW, ZONE)
     .find(p => p.attached === true)
   expect(marker('warn')).toEqual({ text: '<- week gate: agents warn', color: 'error', attached: true })
   expect(marker('ask')).toEqual({ text: '<- week gate: agents ask', color: 'error', attached: true })
   expect(marker('deny')).toEqual({ text: '<- week gate: agents blocked', color: 'error', attached: true })
+  expect(marker('shadow')).toEqual({ text: '<- week gate: shadow only', color: 'error', attached: true })
+  expect(marker('off')).toBeUndefined()
 })
 
 test('the context before the first answer, and without a usable window', () => {

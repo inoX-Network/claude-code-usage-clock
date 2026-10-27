@@ -4,9 +4,14 @@
 
 ## The two gates
 
-**Spawn gate** (Agent, Workflow and forked Skill starts, in the main session and in subagents):
+**Spawn gate** (Agent, Workflow and forked Skill starts, in the main session and in subagents). It has four brakes,
+and each has its own setting in `config.json` (or in the Settings tab of `/report`): `off` (the brake does nothing),
+`shadow` (the start goes through and the model is told that `deny` would have stopped it, so you see what the brake
+would do before you rely on it), `warn`, `ask` (the 5h and the weekly brake) or `deny`. The defaults are the
+behaviour of earlier versions. When several brakes act, the strongest wins: a deny beats an ask, an ask a warning.
 
-- 5h usage at or above `start_block_5h` (75 %): no new block until the window resets.
+- 5h usage at or above `start_block_5h` (75 %): `thresholds.five_hour_action` decides; `deny` (default): no new
+  block until the window resets.
 - Weekly usage at or above `start_block_week` (75 %): `thresholds.week_action` decides, unless `--week-ok-until`
   covers today (then it only warns). `warn` (default) starts with a warning, `deny` refuses, and `ask` shows
   Claude Code's permission prompt, so you confirm each start yourself; only a person can answer it, the model
@@ -17,15 +22,19 @@
   the started agent keeps that description. "Yes, and don't ask again" in the prompt does not switch the gate off:
   the next start asks again (tested 18 Oct 2026). Reasons and notes for the model stay English. In permission modes that may skip the prompt (`bypassPermissions`, `dontAsk`, `auto`, or
   no mode in the hook input) `ask` refuses instead, until you have seen the prompt appear in your setup and set
-  `thresholds.ask_verified_in_bypass: true`.
-- Unknown or stale usage: a single agent may start (with a warning), a larger block may not.
+  `thresholds.ask_verified_in_bypass: true`. The same holds for `five_hour_action: ask` (`5H 80 % · start
+  arbeiter-bauen?`); when both windows ask, one question names both numbers (`WEEK 85 % / 5H 80 % · start
+  arbeiter-bauen?`).
+- Unknown or stale usage: a single agent may start (with a warning). A larger block (more than
+  `unknown_usage_max_agents`) is what `thresholds.unknown_usage_action` says; `deny` (default) refuses it.
 - Model rule: every agent should have `model:` and `effort:` in its definition's frontmatter. Built-in types
   without a definition file, such as `general-purpose`, never do; define your own agents instead, or list types
   in `spawn_rules.exceptions`. In workflow scripts each `agent(...)` call needs literal `model` and `effort`
   options, or an `agentType` with a complete definition; `cond ? 'a' : 'b'` with two literals is fine,
   anything the gate cannot check statically counts as a finding.
 - `spawn_rules.model_effort_action` decides what a finding does: `warn` (default) starts the agent and tells the
-  model what is missing, `deny` refuses the start, `off` skips the model rule and keeps only the usage part.
+  model what is missing, `shadow` starts it too and adds that `deny` would refuse it, `deny` refuses the start,
+  `off` skips the model rule and keeps only the usage part.
   The level covers the whole model rule: with `warn`, `skill_fork_missing_agent` and `model_override_in_call`
   set to `deny` also only warn.
   [`docs/agents.md`](agents.md) explains how to give your agents a model and an effort.

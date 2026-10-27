@@ -10,10 +10,13 @@ With every prompt:
 Usage: 5h 40 % (resets 14:00) · week 61 % (resets Mon 19 Jan 09:00) · measured 0 min ago · Now: Wed 14 Jan 2026 10:05
 ```
 
-At or above `start_block_5h` the line says so (`— from 75 % on, no new blocks`). At or above `start_block_week` it
+At or above `start_block_5h` the line says what the spawn gate does, by `thresholds.five_hour_action`:
+`— from 75 % on, no new blocks` (`deny`), `…, new blocks need the user's approval` (`ask`), `…, blocks start with a
+warning` (`warn`) or `…, blocks start, the spawn gate only logs it` (`shadow`). At or above `start_block_week` it
 adds a weekly note that follows `thresholds.week_action`: `week at or above 75 %: agents start with a warning`
-(`warn`), `…: new agents need the user's approval` (`ask`) or `…: no new agents without --week-ok-until` (`deny`).
-Both notes can stand together. With a missing or old measurement it says `unknown` or `STALE` and
+(`warn`), `…: new agents need the user's approval` (`ask`), `…: no new agents without --week-ok-until` (`deny`) or
+`…: agents start, the spawn gate only logs it` (`shadow`). A brake set to `off` gets no note. Both notes can stand
+together. With a missing or old measurement it says `unknown` or `STALE` and
 asks to start larger blocks only after a fresh measurement. Without a weekly value it shows `week ?`, and a
 measurement stamped slightly ahead of your clock shows `measured in the future`. The texts are English; the
 model relays them to you in your language.
@@ -107,8 +110,8 @@ spawn gate now starts no new agent blocks until the window resets at 22:40.
 
 - `5h` and `week` come from `rate_limits` (yellow from 50 %, red from 75 %); at the weekly threshold
   (`start_block_week`) a marker names what the spawn gate now does, by `thresholds.week_action`:
-  `<- week gate: agents warn`, `<- week gate: agents ask` or `<- week gate: agents blocked`. The weekly limit itself
-  is still ahead then.
+  `<- week gate: agents warn`, `<- week gate: agents ask`, `<- week gate: agents blocked` or
+  `<- week gate: shadow only`, none when it is `off`. The weekly limit itself is still ahead then.
 - `spawn gate off` or `soft stop off` (red, after the week) says that `modules` in `config.json` switched an installed
   gate off; `spawn gate shadow` or `soft stop shadow` that it sets the gate to shadow while its hook entry says
   `--mode=enforce`, so the gate blocks nothing. A gate in shadow from its own entry gets no marker

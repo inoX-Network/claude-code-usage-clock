@@ -1,5 +1,6 @@
 """sync_format.py: the layout and line formats of the sync repository, the writer's allowlist, the suspicious reader,
 compacting old request months, and the sync keys of the configuration."""
+import importlib.util
 import json
 import os
 import re
@@ -247,6 +248,8 @@ def test_an_unknown_label_mode_is_refused():
     ('agent "a:b" missing: details', 'agent … missing'),
     ('WEEK 92 % · start stripe-meister?', '7-day window at N %'),
     ('WOCHE 92 % · stripe-meister starten?', '7-day window at N %'),
+    ('5H 80 % · start workflow kunde-xyz-migration?', '5h window at N %'),
+    ('WOCHE 92 % / 5H 80 % · kunde-xyz starten?', '7-day window at N %'),
     ('odd <chars> & more', 'odd ?chars? ? more'),
     ('x' * 100, 'x' * 60),
     (None, ''),
@@ -254,6 +257,24 @@ def test_an_unknown_label_mode_is_refused():
 def test_the_gate_reason_is_the_text_before_the_first_colon_without_values(reason, kind):
     assert sf.gate_reason(reason) == kind
     assert sf.REASON.fullmatch(kind)
+
+
+@pytest.mark.parametrize('language', ['en', 'de'])
+@pytest.mark.parametrize('labels', [('WEEK_LABELS', 'week'), ('FIVE_HOUR_LABELS', 'five'), None])
+def test_no_question_of_the_spawn_gate_reaches_the_sync_with_what_it_starts(language, labels):
+    # Every question spawn_gate can ask, for one window or for both: the name of the start never leaves the machine,
+    # and the sync gives the kind the local report gives
+    import spawn_gate
+    spec = importlib.util.spec_from_file_location('usage_report_for_sync', os.path.join(ROOT, 'tools', 'usage_report.py'))
+    usage_report = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(usage_report)
+    if labels is None:
+        text = ' / '.join([spawn_gate.WEEK_LABELS[language].format(week=85), spawn_gate.FIVE_HOUR_LABELS[language].format(five=80)])
+    else:
+        text = getattr(spawn_gate, labels[0])[language].format(**{labels[1]: 85})
+    question = spawn_gate.QUESTIONS[language].format(labels=text, what='secret-start')
+    assert 'secret' not in sf.gate_reason(question)
+    assert sf.gate_reason(question) == usage_report.reason_kind(question)
 
 
 def test_a_gate_line_from_the_local_log_takes_only_time_gate_decision_mode_and_the_short_reason():

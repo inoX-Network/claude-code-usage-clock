@@ -6,6 +6,7 @@ explains why, how to add them, and what to do with built-in agent types. The lev
 | `spawn_rules.model_effort_action` | Effect of a finding |
 |---|---|
 | `warn` (default) | The agent starts; the model is told what is missing. |
+| `shadow` | As `warn`, and the model is told that `deny` would refuse the start. |
 | `deny` | The start is refused. |
 | `off` | The model rule is skipped; only the usage part of the gate applies. |
 
