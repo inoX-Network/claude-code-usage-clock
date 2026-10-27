@@ -789,11 +789,16 @@ def _find_entry(data: dict, event: str, path: str) -> tuple[dict, dict] | None:
 
 # What a part switched off in modules lets through, by component
 LETS_THROUGH = {'spawn-gate': 'every start', 'soft-stop': 'every call'}
+# The brakes of the spawn gate, as `section.key`, and what one on off or shadow does: the status line does not mark them
+BRAKE_KEYS = ('thresholds.five_hour_action', 'thresholds.week_action', 'thresholds.unknown_usage_action',
+              'spawn_rules.model_effort_action')
+LOOSE_BRAKE = {'off': 'it lets through every start it would brake', 'shadow': 'it only logs what it would brake'}
 
 
 def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
     """A NOTE for an installed part that modules of config.json switches off, or sets to shadow -- whatever the
-    entry's own --mode says, as the status line marks it; a gate in shadow only from its own --mode entry gets none."""
+    entry's own --mode says, as the status line marks it; a gate in shadow only from its own --mode entry gets none.
+    While the spawn gate acts, one NOTE per brake of it that config.json sets to off or shadow."""
     if component not in SWITCHES:      # the sync has its mode in sync.mode
         return []
     key, script = component.replace('-', '_'), SCRIPTS[component]
@@ -807,7 +812,11 @@ def switched_off(component: str, cfg: dict, command) -> list[tuple[str, str]]:
     if value == 'shadow':
         return [('NOTE', f'{script}: runs in shadow mode from config.json (modules.{key} "shadow"): it blocks '
                          'nothing.')]
-    return []
+    if component != 'spawn-gate':
+        return []
+    brakes = [(brake, cfg[brake.split('.')[0]][brake.split('.')[1]]) for brake in BRAKE_KEYS]
+    return [('NOTE', f'{script}: the brake {brake} is "{action}" in config.json: {LOOSE_BRAKE[action]}. Set it in the '
+                     'Settings tab of /report.') for brake, action in brakes if action in LOOSE_BRAKE]
 
 
 def check_entries(data: dict, args: argparse.Namespace, target: str, cfg: dict) -> list[tuple[str, str]]:
