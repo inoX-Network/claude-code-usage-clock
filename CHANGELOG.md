@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), ver
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-10-27 — each brake on its own
+
 ### Added
 
 - Each brake of the spawn gate on its own: `thresholds.five_hour_action` (`off`, `shadow`, `warn`, `ask`, `deny`;
@@ -245,7 +247,8 @@ The installer, the Settings tab and `modules` (part B of the security review aft
 
 ## [1.0.0] — 2026-10-13 — first release
 
-[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/inoX-Network/claude-code-usage-clock/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.9.0
 [1.8.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.8.0
 [1.7.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.7.0
 [1.6.0]: https://github.com/inoX-Network/claude-code-usage-clock/releases/tag/v1.6.0
